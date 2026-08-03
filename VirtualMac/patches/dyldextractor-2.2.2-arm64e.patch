@@ -1,0 +1,108 @@
+--- a/DyldExtractor/converter/objc_fixer.py
++++ b/DyldExtractor/converter/objc_fixer.py
+@@ -426,6 +426,10 @@
+ 		self._ivarListCache: Dict[int, int] = {}
+ 		self._protocolListCache: Dict[int, int] = {}
+ 		self._protocolCache: Dict[int, int] = {}
++		# {mangledName: localProtocolAddr} for protocols THIS image defines (__objc_protolist).
++		# Built lazily; used to redirect cross-image cache-uniqued protocol refs to the local
++		# protocol of the same name (see _processProtocol).
++		self._localProtocolByName: Dict[bytes, int] = None
+ 		self._propertyListCache: Dict[int, int] = {}
+ 		self._methodListCache: Dict[int, int] = {}
+ 		self._stringCache: Dict[int, int] = {}
+@@ -465,9 +469,10 @@
+ 		self._usesObjcRoRelativeNames = False
+ 		self._optMethodNamesAddr = None
+ 
+-		# Get __objc_scoffs, __objc_classlist
++		# Get __objc_scoffs, __objc_classlist, __objc_opt_ro
+ 		objcScoffs = None
+ 		objcClasslist = None
++		objcOptRo = None
+ 		for seg in self._libobjcImage.segmentsI:
+ 			for sect in seg.sectsI:
+ 				if sect.sectname == b"__objc_scoffs":
+@@ -476,10 +481,25 @@
+ 				elif sect.sectname == b"__objc_classlist":
+ 					objcClasslist = sect
+ 					pass
++				elif sect.sectname == b"__objc_opt_ro":
++					objcOptRo = sect
++					pass
+ 				pass
+ 
+-			if objcScoffs and objcClasslist:
+-				break
++		# Modern (macOS 13 / iOS 16+) caches have no __objc_scoffs; the relative method
++		# selector base is objc_opt_t.relativeMethodSelectorBaseAddressOffset (int64 @ +40
++		# from the start of __objc_opt_ro: version,flags,8*int32 offsets, then the int64).
++		# See dyld include/objc-shared-cache.h.
++		if objcScoffs is None and objcOptRo is not None:
++			optOff, ctx = self._dyldCtx.convertAddr(objcOptRo.addr)
++			rmsbao = ctx.readFormat("<q", optOff + 40)[0]
++			if rmsbao != 0:
++				# base is a plain cache vmaddr (the __OBJC_RO selector region is a non-sliding
++				# mapping, so slideAddress() would return None here -- use the addr directly).
++				self._optMethodNamesAddr = objcOptRo.addr + rmsbao
++				self._usesObjcRoRelativeNames = True
++				self._logger.info(f"relative method selector base (objc_opt) = {hex(self._optMethodNamesAddr)}")  # noqa
++				return
+ 			pass
+ 
+ 		if objcScoffs is None:
+@@ -1051,10 +1071,53 @@
+ 		self._protocolListCache[protoListAddr] = newProtoListAddr
+ 		return newProtoListAddr
+ 
++	def _readProtocolName(self, protoAddr: int) -> bytes:
++		"""mangledName cstring of a protocol_t at protoAddr (any image), or None."""
++		try:
++			protoDef = self._slider.slideStruct(protoAddr, objc_protocol_t)
++			if not protoDef.name:
++				return None
++			off, ctx = self._dyldCtx.convertAddr(protoDef.name)
++			return bytes(ctx.getBytes(off, 256)).split(b"\x00")[0]
++		except Exception:
++			return None
++
++	def _buildLocalProtocolMap(self) -> Dict[bytes, int]:
++		"""{mangledName: addr} for every protocol THIS image defines (__objc_protolist)."""
++		m = {}
++		for segment in self._machoCtx.segmentsI:
++			for sect in segment.sectsI:
++				if sect.sectname != b"__objc_protolist":
++					continue
++				for ptrAddr in range(sect.addr, sect.addr + sect.size, 8):
++					pa = self._slider.slideAddress(ptrAddr)
++					if pa and self._machoCtx.containsAddr(pa):
++						name = self._readProtocolName(pa)
++						if name:
++							m[name] = pa
++		return m
++
+ 	def _processProtocol(self, protoAddr: int) -> int:
+ 		if protoAddr in self._protocolCache:
+ 			return self._protocolCache[protoAddr]
+ 
++		# A protocol reference (protoref, class baseProtocol, protocol's incorporated protocol,
++		# category protocol) that the cache redirected to libobjc's canonical (cross-image)
++		# protocol would otherwise be copied into the synthetic __EXTRA_OBJC segment below. But
++		# __EXTRA_OBJC addresses don't survive the downstream compact relayout (vz/uncache.py) ->
++		# garbage protocol/mangledName pointers at runtime (objc getProtocol/_mapStrHash SIGSEGV
++		# in conformsToProtocol). If this image DEFINES a protocol of the same name, redirect to
++		# that single local protocol_t instead (no duplicate, no fragile __EXTRA_OBJC copy).
++		if not self._machoCtx.containsAddr(protoAddr):
++			if self._localProtocolByName is None:
++				self._localProtocolByName = self._buildLocalProtocolMap()
++			name = self._readProtocolName(protoAddr)
++			localAddr = self._localProtocolByName.get(name) if name else None
++			if localAddr is not None:
++				self._protocolCache[protoAddr] = localAddr   # pre-cache: break ref cycles
++				self._processProtocol(localAddr)             # process the local copy in-place
++				return localAddr
++
+ 		protoDef = self._slider.slideStruct(protoAddr, objc_protocol_t)
+ 
+ 		# protocol isa's should be 0
+

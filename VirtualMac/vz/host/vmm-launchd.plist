@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Register the iOS-ported VZ VMM as a launchd MachServices daemon under a custom
+	     name (launchd special-cases the real com.apple.Virtualization.VirtualMachine label
+	     as a user/foreground Application service). The interpose in the vmnet-stub dependency
+	     replaces xpc_main with a mach-service listener on org.jb.vmmservice and skips
+	     sandbox_init. The host maps xpc_connection_create("com.apple.Virtualization.
+	     VirtualMachine") -> this service.
+
+	     Loading (the only path that lands it in the system domain so a root host can reach
+	     the MachService): place this in /var/jb/Library/LaunchDaemons/ and `ldrestart`
+	     (userspace reboot). Dopamine's launchdhook hooks xpc_dictionary_get_value in launchd
+	     and injects /var/jb/{basebin,Library}/LaunchDaemons into launchd's "LaunchDaemons"
+	     dict + "Paths" scan, so they load in launchd's system context at (userspace) boot.
+	     Runtime `launchctl bootstrap system` from ssh instead lands in user/501 -> EX_CONFIG.
+	     UserName=root + ProgramArguments (array) match Dopamine's own working daemon plists
+	     (com.opa334.Dopamine.idownloadd); a system daemon without UserName fell to user/501. -->
+	<key>Label</key>
+	<string>org.jb.vmmservice</string>
+	<!-- Mirror com.openssh.sshd (the one Library/LaunchDaemons daemon that IS in the system
+	     domain): POSIXSpawnType/ProcessType Interactive + SessionCreate + ExecuteAllowed. Also
+	     install in /var/jb/basebin/LaunchDaemons (where idownloadd, also system-domain, lives). -->
+	<key>POSIXSpawnType</key>
+	<string>Interactive</string>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>Program</key>
+	<string>/var/root/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/var/root/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine</string>
+	</array>
+	<key>UserName</key>
+	<string>root</string>
+	<key>MachServices</key>
+	<dict>
+		<key>org.jb.vmmservice</key>
+		<true/>
+	</dict>
+	<key>SessionCreate</key>
+	<true/>
+	<key>ExecuteAllowed</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/tmp/vmm.err</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/vmm.out</string>
+</dict>
+</plist>

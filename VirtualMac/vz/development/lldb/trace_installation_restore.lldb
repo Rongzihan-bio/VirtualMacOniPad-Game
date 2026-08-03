@@ -1,0 +1,25 @@
+# File-address breakpoints for the exact Ventura 22D68 Installation helper
+# and MobileDevice 1857 packaged by build-ipad-installation.sh.  Every
+# breakpoint auto-continues so the VZ ten-second DFU watchdog remains viable.
+settings set stop-disassembly-count 0
+
+# Installation receives the VMM's USB controller location ID and registers
+# its MobileDevice notification callback.
+breakpoint set -s com.apple.Virtualization.Installation -a 0x100004324 -N vz_location_set -G true -C 'register read x0 x1'
+
+# MobileDevice is loaded after LLDB attaches.  A pending symbol breakpoint
+# arms the exact file-address sites as soon as any deviceWithService variant
+# first runs; setting unloaded-module file addresses directly is not deferred
+# by the iPad LLDB build.
+breakpoint set -s MobileDevice -n deviceWithService -K false -N md_arm -G true -C 'breakpoint set -s MobileDevice -a 0x255af0 -N md_dfu_object -G true -C "register read x0 x20 x21"' -C 'breakpoint set -s MobileDevice -a 0x255b08 -N md_dfu_callback -G true -C "register read x0 x20 x21 x22"' -C 'breakpoint set -s MobileDevice -a 0xc6cd0 -N md_trackable_location -G true -C "register read x0 x19"' -C 'breakpoint set -s MobileDevice -a 0xc6cdc -N md_trackable_ecid -G true -C "register read x0 x19"' -C 'breakpoint set -s MobileDevice -a 0xc7c24 -N md_trackable_result -G true -C "register read x0 x20 x21"' -C 'breakpoint set -s MobileDevice -a 0xb6730 -N md_restore_worker -G true -C "register read x0" -C "memory read -fx -c 5 \`\$x0\`"'
+breakpoint set -s MobileDevice -n usbDFU_servicesAdded -K false -N md_usb_dfu_added -G true -C 'register read x0 x1'
+breakpoint set -s MobileDevice -n taDFU_AppleKIS_servicesAdded -K false -N md_kis_added -G true -C 'register read x0 x1'
+breakpoint set -s MobileDevice -n tadfu_discovery_callback -K false -N md_tad_callback -G true -C 'register read x0'
+
+# MobileDevice calls the Installation callback, which dispatches the final
+# restore-start worker onto the Installer queue.
+breakpoint set -s com.apple.Virtualization.Installation -a 0x1000045f8 -N vz_device_callback -G true -C 'register read x0 x1 x2 x3'
+breakpoint set -s com.apple.Virtualization.Installation -a 0x1000046b4 -N vz_device_worker -G true -C 'register read x0' -C 'memory read -fx -c 3 `$x0`'
+
+# The watchdog firing means no matching-location callback reached the worker.
+breakpoint set -s com.apple.Virtualization.Installation -a 0x10000347c -N vz_install_timeout -G true -C 'register read x0'

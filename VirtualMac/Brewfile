@@ -1,0 +1,11 @@
+tap "hudochenkov/sshpass"
+
+brew "aria2"
+brew "dpkg"
+brew "gnu-tar"
+brew "go"
+brew "ldid"
+brew "libimobiledevice"
+brew "python"
+brew "rsync"
+brew "hudochenkov/sshpass/sshpass"

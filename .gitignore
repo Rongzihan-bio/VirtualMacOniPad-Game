@@ -1,0 +1,24 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+build/
+artifacts/
+DerivedData/
+
+# Apple restore/runtime artifacts and VM state never belong in Git.
+*.ipsw
+*.deb
+*.dmg
+*.img
+*.raw
+*.qcow2
+*.utm
+*.xip
+VM.bundle/
+
+# Generated Apple binaries, signatures, diagnostics, and local manifests.
+payload/
+logs/
+*.dSYM/
+*.ips

@@ -1,0 +1,11 @@
+settings set auto-confirm true
+settings set target.process.stop-on-sharedlibrary-events false
+target create /var/jb/usr/local/bin/vmnet-probe
+breakpoint set --name xpc_connection_send_message_with_reply_sync
+run
+register read x0 x1 x2 x19 x20 x21 x22 fp lr sp pc
+memory read --format x --size 8 --count 8 $x0
+memory read --format x --size 8 --count 16 $x1
+disassemble --name NETRBXPCSetupAndSend
+bt
+quit

@@ -1,0 +1,56 @@
+#!/bin/bash
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
+need_command scp
+need_command sshpass
+ensure_ipad_usb
+
+if [[ -n "${VZ_IPAD_DEB:-}" ]]; then
+    DEB="$VZ_IPAD_DEB"
+else
+    DEB="$(find "$VZ_BUILD_ROOT/release" -maxdepth 1 -type f \
+        -name 'VirtualMac_*.deb' \
+        -print0 | xargs -0 ls -1t 2>/dev/null | head -1)"
+fi
+[[ -n "$DEB" && -f "$DEB" ]] ||
+    die "standalone package not found; run scripts/build-ipad-deb.sh first"
+
+REMOTE_DEB="/tmp/$(basename "$DEB")"
+echo "copying standalone package to iPad: $DEB"
+sshpass -p "$VZ_IPAD_PASSWORD" scp \
+    "${IPAD_SCP_ARGS[@]}" "$DEB" "$IPAD_TARGET:$REMOTE_DEB"
+
+# Package preinst owns VM termination.  Do not invoke the UI stop action here:
+# it asks macOS to shut down and can leave an unattended guest confirmation
+# sheet in front of the install.
+set +e
+install_output="$(ipad_ssh "dpkg -i '$REMOTE_DEB' 2>&1" 2>&1)"
+install_status=$?
+set -e
+printf '%s\n' "$install_output"
+((install_status == 0)) || die "dpkg installation failed"
+
+# Maintainer scripts never respring. Sileo consumes finish:restart and offers
+# the user its Restart SpringBoard button; direct dpkg installs remain online.
+status="$(ipad_ssh "dpkg-query -W -f='\${db:Status-Status}' \
+    com.mac.virtual 2>/dev/null || true")"
+[[ "$status" == installed ]] ||
+    die "package did not reach installed state (status: ${status:-missing})"
+
+ipad_ssh "
+set -eu
+test -x /var/jb/Applications/VirtualMac.app/VirtualMac
+test -u /var/root/VirtualMac/install/install-launcher
+test -d /var/mobile/Media/VirtualMac
+test -f /var/jb/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib
+launchctl print user/501/vzi.apple.bootpd >/dev/null
+launchctl print user/501/com.apple.NetworkSharing >/dev/null
+/var/jb/usr/bin/uicache -l | grep -F 'com.mac.virtual' >/dev/null
+rm -f '$REMOTE_DEB'
+"
+
+echo "standalone package installed and registered on iPad"

@@ -1,0 +1,17 @@
+#!/var/jb/bin/sh
+
+set -eu
+export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+
+killall VirtualMac 2>/dev/null || true
+killall com.apple.Virtualization.VirtualMachine 2>/dev/null || true
+killall com.apple.Virtualization.Installation 2>/dev/null || true
+for domain in system user/501; do
+    /var/jb/usr/bin/launchctl bootout "$domain/vzi.apple.bootpd" \
+        2>/dev/null || true
+    /var/jb/usr/bin/launchctl bootout "$domain/com.apple.NetworkSharing" \
+        2>/dev/null || true
+done
+/var/jb/usr/bin/uicache -u /var/jb/Applications/VirtualMac.app \
+    2>/dev/null || true
+exit 0

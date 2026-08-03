@@ -1,0 +1,13 @@
+settings set auto-confirm true
+settings set target.process.stop-on-sharedlibrary-events false
+target create /var/jb/usr/local/bin/vmnet-probe
+breakpoint set --name NETRBXPCCreate
+run
+breakpoint set --address '$pc+112'
+continue
+register read x0 x8 x9 x19 x20 x21 fp lr sp pc
+image lookup --address $x8
+image lookup --address $x9
+memory read --format x --size 8 --count 8 $x0
+disassemble --frame
+quit

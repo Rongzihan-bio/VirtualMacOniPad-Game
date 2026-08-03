@@ -1,0 +1,5 @@
+settings set target.inline-breakpoint-strategy always
+breakpoint set -n IOEthernetControllerCreate
+breakpoint set -n IOServiceOpen
+breakpoint list
+continue

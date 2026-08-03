@@ -1,0 +1,7 @@
+capstone==4.0.2
+dyldextractor==2.2.2
+progressbar2==4.5.0
+python-utils==3.9.1
+setuptools==80.10.2
+typing_extensions==4.15.0
+

@@ -1,0 +1,59 @@
+#!/var/jb/bin/sh
+
+set -eu
+export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+
+runtime=/var/root/VirtualMac
+app=/var/jb/Applications/VirtualMac.app
+library=/var/mobile/Media/VirtualMac
+support=$library
+launchctl=/var/jb/usr/bin/launchctl
+
+chmod 755 "$app/VirtualMac" "$app/VZHostCompat.dylib"
+chmod 755 \
+    "$runtime/payload/VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine" \
+    "$runtime/payload/Installation.xpc/Contents/MacOS/com.apple.Virtualization.Installation" \
+    "$runtime/payload/Installation.xpc/Contents/Frameworks/InstallationCompat.dylib" \
+    "$runtime/payload/Installation.xpc/Contents/Frameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd" \
+    "$runtime/install/VZHostCompat.dylib" \
+    "$runtime/install/install-macos" \
+    "$runtime/install/start-install.sh"
+chown root:wheel "$runtime/install/install-launcher"
+chmod 4755 "$runtime/install/install-launcher"
+
+mkdir -p "$library" "$support/Restore Images" "$support/Installations"
+chown mobile:mobile "$library" "$support" \
+    "$support/Restore Images" "$support/Installations"
+chmod 755 "$library" "$support" \
+    "$support/Restore Images" "$support/Installations"
+
+mkdir -p /var/db
+touch /var/db/dhcpd_leases
+chown root:wheel /var/db/dhcpd_leases
+chmod 644 /var/db/dhcpd_leases
+
+while IFS="$(printf '\t')" read -r hash file; do
+    test -n "$hash"
+    test -f "$file"
+    jbctl trustcache add "$hash"
+done </var/jb/usr/share/VirtualMac/trustcache.txt
+
+for domain in system user/501; do
+    "$launchctl" bootout "$domain/com.apple.bootpd" 2>/dev/null || true
+    "$launchctl" bootout "$domain/vzi.apple.bootpd" 2>/dev/null || true
+    "$launchctl" bootout "$domain/com.apple.NetworkSharing" 2>/dev/null || true
+done
+"$launchctl" enable user/501/vzi.apple.bootpd
+"$launchctl" bootstrap user/501 \
+    /var/jb/Library/LaunchDaemons/com.apple.bootpd.plist
+"$launchctl" bootstrap user/501 \
+    /var/jb/Library/LaunchDaemons/com.apple.NetworkSharing.plist
+"$launchctl" kickstart -k user/501/com.apple.NetworkSharing
+
+/var/jb/usr/bin/uicache -p "$app"
+
+# Let Sileo offer its Restart SpringBoard completion button. Never restart the
+# user's session from a package maintainer script.
+echo "finish:restart"
+
+exit 0

@@ -1,0 +1,6 @@
+settings set target.inline-breakpoint-strategy always
+breakpoint set -a 0x10001cd48 -s InternetSharing -i 1
+continue
+register read x0 x1
+memory read --format c --size 1 --count 96 $x1
+thread backtrace

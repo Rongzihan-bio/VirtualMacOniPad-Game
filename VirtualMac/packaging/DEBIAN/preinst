@@ -1,0 +1,17 @@
+#!/var/jb/bin/sh
+
+set -eu
+export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+
+killall VirtualMac 2>/dev/null || true
+killall com.apple.Virtualization.VirtualMachine 2>/dev/null || true
+killall com.apple.Virtualization.Installation 2>/dev/null || true
+killall install-macos 2>/dev/null || true
+
+rm -f /tmp/vmm.stderr.log /tmp/restore-vmm.stderr.log
+rm -f /tmp/vmm_ep.txt.* /tmp/installation_ep.txt.*
+
+if test -d /var/jb/Applications/VirtualMac.rootless-backup; then
+    rm -rf /var/jb/Applications/VirtualMac.rootless-backup
+fi
+exit 0

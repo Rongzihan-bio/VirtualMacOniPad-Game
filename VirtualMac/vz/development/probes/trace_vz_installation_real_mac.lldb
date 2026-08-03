@@ -1,0 +1,30 @@
+settings set auto-confirm true
+settings set target.inline-breakpoint-strategy always
+process attach --name com.apple.Virtualization.Installation --waitfor
+command script import ./trace_vz_installation_lldb.py
+
+breakpoint set --name dlsym
+breakpoint command add -F trace_vz_installation_lldb.dlsym 1
+
+breakpoint set --name AMRestorableDeviceRegisterForNotifications
+breakpoint command add -F trace_vz_installation_lldb.register_notifications 2
+
+breakpoint set --name AMRestorableDeviceGetLocationID
+breakpoint command add -F trace_vz_installation_lldb.get_location 3
+
+breakpoint set --name AMRestorableDeviceCopyDefaultRestoreOptions
+breakpoint command add -F trace_vz_installation_lldb.default_restore_options 4
+
+breakpoint set --name AMRestorableDeviceRestoreWithError
+breakpoint command add -F trace_vz_installation_lldb.restore 5
+
+breakpoint set --name IOServiceGetMatchingServices
+breakpoint command add -F trace_vz_installation_lldb.matching_services 6
+
+breakpoint set --name IOServiceOpen
+breakpoint command add -F trace_vz_installation_lldb.service_open 7
+
+breakpoint set --name posix_spawn
+breakpoint command add -F trace_vz_installation_lldb.spawn 8
+
+continue

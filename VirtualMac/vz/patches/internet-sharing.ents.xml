@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>platform-application</key>
+    <true/>
+    <key>jb.pmap_cs.custom_trust</key>
+    <string>PMAP_CS_IN_STATIC_TRUST_CACHE</string>
+    <key>com.apple.private.security.no-container</key>
+    <true/>
+    <key>com.apple.private.security.no-sandbox</key>
+    <true/>
+    <key>com.apple.SystemConfiguration.SCDynamicStore-write-access</key>
+    <true/>
+    <key>com.apple.SystemConfiguration.SCPreferences-write-access</key>
+    <array>
+        <string>com.apple.vmnet.plist</string>
+    </array>
+    <key>com.apple.pf.allow</key>
+    <true/>
+    <key>com.apple.networking.ethernet.user-access</key>
+    <true/>
+    <key>com.apple.security.exception.iokit-user-client-class</key>
+    <array>
+        <string>IOUserEthernetResourceUserClient</string>
+    </array>
+    <key>com.apple.discoveryd.dnsproxy</key>
+    <true/>
+    <key>com.apple.mDNSResponder.dnsproxy</key>
+    <true/>
+</dict>
+</plist>

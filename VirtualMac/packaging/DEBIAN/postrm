@@ -1,0 +1,11 @@
+#!/var/jb/bin/sh
+
+set -eu
+export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+
+if test "${1:-}" = remove || test "${1:-}" = purge; then
+    # VM bundles deliberately remain in /var/mobile/Media/VirtualMac.
+    /var/jb/usr/bin/uicache -a 2>/dev/null || true
+    echo "finish:restart"
+fi
+exit 0

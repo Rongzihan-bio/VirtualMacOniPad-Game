@@ -1,0 +1,28 @@
+#import <Foundation/Foundation.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+FOUNDATION_EXPORT NSString * const VZSettingsDidChangeNotification;
+FOUNDATION_EXPORT NSString * const VZLibraryLayoutKey;
+FOUNDATION_EXPORT NSString * const VZAutoBootVMPathKey;
+FOUNDATION_EXPORT NSString * const VZAutoBootVMIdentifierKey;
+FOUNDATION_EXPORT NSString * const VZKeyboardShortcutCaptureKey;
+FOUNDATION_EXPORT NSString * const VZSystemGestureSuppressionKey;
+FOUNDATION_EXPORT NSString * const VZMultitaskingGestureSuppressionKey;
+FOUNDATION_EXPORT NSString * const VZHomeIndicatorSuppressionKey;
+FOUNDATION_EXPORT NSString * const VZShowStatusLabelKey;
+FOUNDATION_EXPORT NSString * const VZAutoDeleteRestoreImageKey;
+FOUNDATION_EXPORT NSString * const VZHUDVisibilityKey;
+FOUNDATION_EXPORT NSString * const VZHUDCornerKey;
+FOUNDATION_EXPORT NSString * const VZDisplayScalingKey;
+
+@interface VZAppSettings : NSObject
++ (instancetype)sharedSettings;
+- (BOOL)boolForKey:(NSString *)key;
+- (nullable NSString *)stringForKey:(NSString *)key;
+- (void)setBool:(BOOL)value forKey:(NSString *)key;
+- (void)setString:(nullable NSString *)value forKey:(NSString *)key;
+- (NSDictionary *)dictionaryRepresentation;
+@end
+
+NS_ASSUME_NONNULL_END
