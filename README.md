@@ -8,7 +8,7 @@ Virtual Mac on iPad is a community project and is not affiliated with Dopamine, 
 
 ## Installation
 
-1. [Jailbreak an iPad Pro (M1, M2) or iPad Air (M1) running iPadOS 16 up to 16.3.1](https://ios.cfw.guide/installing-dopamine/). If jailbreak fails, switch to a different exploit in Dopamine settings.
+1. [Jailbreak an iPad Pro (M1, M2) or iPad Air (M1) running iPadOS 16 up to 16.3.1](https://ios.cfw.guide/installing-dopamine-trollstore/). Choose "TrollInstallerX (16.0..." on the page to view the appropriate instructions. If jailbreak fails, switch to a different exploit in Dopamine settings.
 2. Add the [https://nfzerox.github.io/cydia/](https://nfzerox.github.io/cydia/) repository in Sileo, then search and install Virtual Mac.
 
 ## Frequently Asked Questions
@@ -19,9 +19,11 @@ Virtual Mac on iPad requires an iPad Pro (M1, M2) or iPad Air (M1) running iPadO
 
 ### Which versions of macOS does this support?
 
-Virtual Mac on iPad is compatible with macOS 12 Monterey up to macOS 27 Golden Gate. macOS 13 Ventura up to macOS 15 Sequoia are the recommended versions to install. Because signing into iCloud or Apple Account is not supported, choose Set Up Later. Support for macOS 26 Tahoe and macOS 27 Golden Gate is experimental, and you may encounter visual or performance issues.
+Virtual Mac on iPad is compatible with macOS 12 Monterey up to macOS 27 Golden Gate. macOS 13 Ventura up to macOS 15 Sequoia are the recommended versions to install. Because signing into iCloud or Apple Account is not supported, choose Set Up Later when asked. Support for macOS 26 Tahoe and macOS 27 Golden Gate is experimental, and you may encounter visual or performance issues.
 
-### Do I Need a Magic Keyboard?
+To use Xcode in Virtual Mac on iPad, download [Xcode 26.3](https://developer.apple.com/services-account/download?path=/Developer_Tools/Xcode_26.3/Xcode_26.3_Apple_silicon.xip) for macOS 15 Sequoia, [Xcode 16.2](https://developer.apple.com/services-account/download?path=/Developer_Tools/Xcode_16.2/Xcode_16.2.xip) for macOS 14 Sonoma, [Xcode 15.2](https://developer.apple.com/services-account/download?path=/Developer_Tools/Xcode_15.2/Xcode_15.2.xip) for macOS 13 Ventura, and [Xcode 14.2](https://developer.apple.com/services-account/download?path=/Developer_Tools/Xcode_14.2/Xcode_14.2.xip) for macOS 12 Monterey.
+
+### Do I need a Magic Keyboard?
 
 Magic Keyboard is not required, but is recommended for the best experience. If you don't have a Magic Keyboard, you can use the touchscreen and virtual keyboard instead:
 
