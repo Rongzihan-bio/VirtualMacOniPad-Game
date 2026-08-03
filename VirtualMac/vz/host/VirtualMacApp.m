@@ -2718,7 +2718,7 @@ static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
     NSUInteger cpuCount = [options[@"CPUCount"] unsignedIntegerValue];
     cpuCount = MAX((NSUInteger)2, MIN(cpuCount, hostCPUCount));
     uint64_t memoryLimit = NSProcessInfo.processInfo.physicalMemory >=
-        (12ULL << 30) ? (8ULL << 30) : (4ULL << 30);
+        (12ULL << 30) ? (8ULL << 30) : (6ULL << 30);
     uint64_t memorySize = [options[@"MemorySize"] unsignedLongLongValue];
     memorySize = MAX((2ULL << 30), MIN(memorySize, memoryLimit));
     ((void(*)(id, SEL, NSUInteger))objc_msgSend)(
