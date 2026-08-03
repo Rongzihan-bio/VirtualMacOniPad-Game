@@ -46,6 +46,10 @@ Virtual Mac on iPad uses hardware CPU virtualization and supports graphics accel
 
 [Open a GitHub issue](https://github.com/nfzerox/VirtualMacOniPad/issues) when you encounter a crash, bug, or other problem. Include clear reproduction steps, a screenshot or screen recording, and the corresponding crash log from Settings > Privacy & Security > Analytics & Improvements > Analytics Data.
 
+If installation fails in Virtual Mac on iPad with errors such as "launcher cannot become root: Operation not permitted", Virtual Mac may be conflicting with other tweaks installed on your iPad. If you have Choicy, allowlist tweaks for the Virtual Mac app. If problems remain, remove other tweaks one at a time to narrow down the conflict.
+
+To save time when troubleshooting, open Virtual Mac's in app settings, and turn off Delete IPSW After Installation so it doesn't redownload the IPSW each time you install macOS. As a last resort, open Dopamine > Settings > Remove Jailbreak, then jailbreak again and reinstall Virtual Mac on iPad.
+
 If you have access to Codex or Claude Code, you can also point it to this repository and ask it to diagnose and fix the issue. If you find a solution, please update the issue or open a pull request. Contributions are welcome!
 
 ## Technical Overview
