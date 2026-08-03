@@ -66,7 +66,7 @@ NSString *VZInstallationsPath(void)
 static uint64_t VZDeviceMemoryLimit(void)
 {
     uint64_t physical = NSProcessInfo.processInfo.physicalMemory;
-    return physical >= GiB(12) ? GiB(8) : GiB(4);
+    return physical >= GiB(12) ? GiB(8) : GiB(6);
 }
 
 static uint64_t VZDefaultStorageSize(void)
