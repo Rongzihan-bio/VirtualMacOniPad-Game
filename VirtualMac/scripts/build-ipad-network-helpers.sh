@@ -61,7 +61,7 @@ for name in bootpd rtadvd; do
     codesign --force --sign - --entitlements "$ENTS" \
         --generate-entitlement-der "$OUT/$name"
     codesign --verify --strict "$OUT/$name"
-    rm "$OUT/$name.macos"
+    rm -f "$OUT/$name.macos"
 done
 
 "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$COMPAT_PATCH" "$BOOTPD"

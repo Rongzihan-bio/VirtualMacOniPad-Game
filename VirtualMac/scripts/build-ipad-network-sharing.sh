@@ -65,7 +65,7 @@ install_name_tool \
 codesign --force --sign - --entitlements "$ENTS" \
     --generate-entitlement-der "$BIN"
 ldid -S "$AUTH_COMPAT"
-rm "$BIN.macos"
+rm -f "$BIN.macos"
 
 cp "$SOURCE_PLIST" "$PLIST"
 plutil -remove ProgramArguments "$PLIST"

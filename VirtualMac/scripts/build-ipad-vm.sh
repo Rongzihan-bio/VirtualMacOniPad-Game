@@ -164,7 +164,7 @@ xcrun --sdk iphoneos clang \
 
 "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" \
     "$VZ_REPO_ROOT/vz/stamp_ios.py" "$VMM_BIN" "$VMM_BIN.ios" 16.0
-mv "$VMM_BIN.ios" "$VMM_BIN"
+mv -f "$VMM_BIN.ios" "$VMM_BIN"
 
 install_name_tool \
     -change \
