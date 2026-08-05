@@ -11,6 +11,8 @@ Virtual Mac on iPad is a community project and is not affiliated with Dopamine, 
 1. [Jailbreak an iPad Pro (M1, M2) or iPad Air (M1) running iPadOS 16 up to 16.3.1](https://ios.cfw.guide/installing-dopamine-trollstore/). Choose "TrollInstallerX (16.0..." on the page to view the appropriate instructions. If jailbreak fails, switch to a different exploit in Dopamine settings.
 2. Add the [https://nfzerox.github.io/cydia/](https://nfzerox.github.io/cydia/) repository in Sileo, then search and install Virtual Mac.
 
+Ran into a problem? [Check the troubleshooting section](https://github.com/nfzerox/VirtualMacOniPad#what-if-i-encounter-crashes-bugs-or-other-issues).
+
 ## Frequently Asked Questions
 
 ### Which iPad and iPadOS versions does this require?
@@ -44,9 +46,16 @@ Virtual Mac on iPad uses hardware CPU virtualization and supports graphics accel
 
 ### What if I encounter crashes, bugs, or other issues?
 
-[Open a GitHub issue](https://github.com/nfzerox/VirtualMacOniPad/issues) when you encounter a crash, bug, or other problem. Include clear reproduction steps, a screenshot or screen recording, and the corresponding crash log from Settings > Privacy & Security > Analytics & Improvements > Analytics Data.
+First, try these fixes for common issues:
+- If you see "[install-launcher failed: Permission denied](https://github.com/nfzerox/VirtualMacOniPad/issues/10)", open Filza and [follow this screenshot](VirtualMac/screenshots/troubleshooting/troubleshooting-permission.png), changing access permissions of `/var/root` to "Read, Execute" for "Others".
+- If you see "[Unexpected device state 'DFU' expected 'RestoreOS' (Probably forced into DFU mode externally)](https://github.com/nfzerox/VirtualMacOniPad/issues/11)", open Sileo > Packages, search for usbmuxd and [temporarily uninstall it](VirtualMac/screenshots/troubleshooting/troubleshooting-usbmuxd.png).
+- If you see "launcher cannot become root: Operation not permitted" or "Internal Virtualization error. The virtual machine failed to start", and have Choicy installed, open Settings > Choicy > Applications > Virtual Mac, and turn off "Disable Tweak Injection". You can also uninstall Choicy.
+- On some versions of iPadOS, Virtual Mac may crash [if you have a non-English keyboard](https://github.com/nfzerox/VirtualMacOniPad/issues/6). If Virtual Mac crashes when using the keyboard, temporarily remove non-English keyboards from Settings > General > Keyboard.
+- Virtual Mac may conflict with certain other tweaks. If problems remain, remove other tweaks one at a time to narrow down the conflict.
 
-To save time when troubleshooting, open Virtual Mac's in app settings, and turn off Delete IPSW After Installation so it doesn't redownload the IPSW each time you install macOS. If installation fails in Virtual Mac on iPad with errors such as "launcher cannot become root: Operation not permitted", Virtual Mac may be conflicting with other tweaks installed on your iPad. If you have Choicy, allowlist tweaks for the Virtual Mac app. If problems remain, remove other tweaks one at a time to narrow down the conflict.
+[Open a GitHub issue](https://github.com/nfzerox/VirtualMacOniPad/issues?q=is%3Aissue) when you encounter a crash, bug, or other problem. Include clear reproduction steps, a screenshot or screen recording, and the corresponding crash log from Settings > Privacy & Security > Analytics & Improvements > Analytics Data.
+
+To save time when troubleshooting, open Virtual Mac's in app settings, and turn off Delete IPSW After Installation so it doesn't redownload the IPSW each time you install macOS.
 
 If you have access to Codex or Claude Code, install `openssh` and `lldb` in Sileo, then connect your iPad to a computer. Point the coding agent to this repository, then ask it to diagnose live and fix the issue. Because many issues can be setup specific, this is usually the easiest way to fix issues. If you find a solution, please update the issue or open a pull request. Contributions are welcome!
 
