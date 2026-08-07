@@ -7,6 +7,7 @@
 #import "VZAppSettings.h"
 #import "VZProgressViewController.h"
 #include <dlfcn.h>
+#include <string.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <mach-o/loader.h>
@@ -42,6 +43,12 @@ static uint64_t gPointerEventCount;
 static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
+static BOOL gGlobeDown;
+// Globe+<key> translations currently in flight, keyed by the source HID usage
+// (< 0x100). The value is the target HID usage to send on release, so a key
+// lifted after the globe itself is released still produces the correct key-up
+// and the guest never sees a stuck navigation key.
+static uint8_t gGlobeTranslatedUsage[256];
 static uint64_t gLastHealthFrameCount;
 static uint64_t gLastHealthInteractionCount;
 static NSUInteger gFrameStallIntervals;
@@ -685,6 +692,33 @@ static void sendMacKey(NSInteger keyCode, BOOL pressed) {
                (unsigned long long)count, (long)keyCode, pressed);
 }
 
+// While the globe key is held it acts as an Fn-style modifier. These chords
+// translate to a single macOS navigation key injected into the guest, mirroring
+// a MacBook's Fn+arrow / Fn+Delete behavior. Return maps to the keypad Enter
+// (used by macOS installers and full-disk dialogs that only accept it).
+static BOOL VZGlobeTranslationFor(UIKeyboardHIDUsage usage,
+                                  UIKeyboardHIDUsage *target)
+{
+    static const struct {
+        UIKeyboardHIDUsage from;
+        UIKeyboardHIDUsage to;
+    } kGlobeChords[] = {
+        {0x52, 0x4b},  // Up          -> PageUp
+        {0x51, 0x4e},  // Down        -> PageDown
+        {0x50, 0x4a},  // Left        -> Home
+        {0x4f, 0x4d},  // Right       -> End
+        {0x2a, 0x4c},  // Backspace   -> Forward Delete
+        {0x28, 0x58},  // Return      -> Keypad Enter
+    };
+    for (size_t i = 0; i < sizeof(kGlobeChords) / sizeof(kGlobeChords[0]); i++) {
+        if (kGlobeChords[i].from == usage) {
+            *target = kGlobeChords[i].to;
+            return YES;
+        }
+    }
+    return NO;
+}
+
 static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
     // When no guest keyboard is active, UIKit owns hardware key events (for
     // example numeric input in the VM configuration alert). Treating a press
@@ -693,10 +727,34 @@ static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
         return NO;
     BOOL handled = NO;
     for (UIPress *press in presses) {
-        if (press.key) {
-            sendKey(press.key.keyCode, pressed);
-            handled = YES;
+        if (!press.key)
+            continue;
+        UIKeyboardHIDUsage usage = press.key.keyCode;
+        UIKeyboardHIDUsage target;
+        if (VZGlobeTranslationFor(usage, &target)) {
+            if (pressed) {
+                if (gGlobeDown) {
+                    // Record the pairing so the matching key-up still sends the
+                    // translated target even if the globe is lifted first.
+                    gGlobeTranslatedUsage[usage] = target;
+                    printf("[VirtualMac] globe chord HID=0x%lx -> 0x%lx\n",
+                           (unsigned long)usage, (unsigned long)target);
+                    sendKey(target, YES);
+                    handled = YES;
+                    continue;
+                }
+            } else {
+                uint8_t mapped = gGlobeTranslatedUsage[usage];
+                if (mapped) {
+                    gGlobeTranslatedUsage[usage] = 0;
+                    sendKey((UIKeyboardHIDUsage)mapped, NO);
+                    handled = YES;
+                    continue;
+                }
+            }
         }
+        sendKey(usage, pressed);
+        handled = YES;
     }
     return handled;
 }
@@ -719,6 +777,7 @@ static void shellShortcutNotification(CFNotificationCenterRef center,
     else if ([notification containsString:@"command-grave"])
         usage = (UIKeyboardHIDUsage)0x35;
     else if ([notification containsString:@"globe"]) {
+        gGlobeDown = pressed;
         printf("[VirtualMac] SpringBoard globe relay pressed=%d\n", pressed);
         sendMacKey(63, pressed);  // kVK_Fn
         return;
@@ -2100,6 +2159,8 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     gVirtualMachine = nil;
     gVirtualMachineDelegate = nil;
     gKeyboard = nil;
+    gGlobeDown = NO;
+    memset(gGlobeTranslatedUsage, 0, sizeof(gGlobeTranslatedUsage));
     gPointingDevice = nil;
     gTouchButtons = 0;
     gHardwareMouseButtons = 0;
