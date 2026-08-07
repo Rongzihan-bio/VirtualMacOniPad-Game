@@ -668,6 +668,23 @@ static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed) {
                (long)keyCode, pressed);
 }
 
+// Send a guest key by its macOS virtual key code directly. Used for the globe
+// key, which maps to the Fn key (kVK_Fn = 63) rather than a HID usage.
+static void sendMacKey(NSInteger keyCode, BOOL pressed) {
+    if (!gKeyboard)
+        return;
+    id event = ((id(*)(id, SEL, NSInteger, unsigned short))objc_msgSend)(
+        m0(CLS("_VZKeyEvent"), "alloc"), S("initWithType:keyCode:"),
+        pressed ? 0 : 1, (unsigned short)keyCode);
+    ((void(*)(id, SEL, id))objc_msgSend)(
+        gKeyboard, S("sendKeyEvents:"), @[event]);
+    [event release];
+    uint64_t count = __sync_add_and_fetch(&gKeyEventCount, 1);
+    if (count <= 12)
+        printf("[VirtualMac] input key=%llu mac=%ld pressed=%d\n",
+               (unsigned long long)count, (long)keyCode, pressed);
+}
+
 static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
     // When no guest keyboard is active, UIKit owns hardware key events (for
     // example numeric input in the VM configuration alert). Treating a press
@@ -701,6 +718,11 @@ static void shellShortcutNotification(CFNotificationCenterRef center,
         usage = (UIKeyboardHIDUsage)0x2b;
     else if ([notification containsString:@"command-grave"])
         usage = (UIKeyboardHIDUsage)0x35;
+    else if ([notification containsString:@"globe"]) {
+        printf("[VirtualMac] SpringBoard globe relay pressed=%d\n", pressed);
+        sendMacKey(63, pressed);  // kVK_Fn
+        return;
+    }
     if (usage) {
         printf("[VirtualMac] SpringBoard shortcut relay usage=0x%lx pressed=%d\n",
                (unsigned long)usage, pressed);
@@ -712,7 +734,7 @@ static void installShellShortcutRelay(void) {
     CFNotificationCenterRef center =
         CFNotificationCenterGetDarwinNotifyCenter();
     for (NSString *shortcut in @[@"command-space", @"command-tab",
-                                  @"command-grave"]) {
+                                  @"command-grave", @"globe"]) {
         for (NSString *state in @[@"down", @"up"]) {
             NSString *name = [NSString stringWithFormat:
                 @"com.mac.virtual.%@.%@", shortcut, state];

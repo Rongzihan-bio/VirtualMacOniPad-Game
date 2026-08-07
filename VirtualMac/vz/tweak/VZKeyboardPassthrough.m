@@ -10,6 +10,7 @@
 static IMP gOriginalKeyCommands;
 static IMP gOriginalApplicationKeyCommands;
 static IMP gOriginalHandleKeyHIDEvent;
+static IMP gOriginalHandleKeyUIEvent;
 static IMP gOriginalShouldEnableSystemGesture;
 static IMP gOriginalShouldEnableSystemGesturePrivate;
 static IMP gOriginalFluidGestureShouldBegin;
@@ -181,6 +182,34 @@ static void VZPostCommandShortcut(int64_t usage, BOOL pressed)
                 : "relayed consumed Command shortcut up to Virtual Mac");
 }
 
+static void VZPostShortcut(const char *name, BOOL pressed)
+{
+    NSString *notification = [NSString stringWithFormat:
+        @"com.mac.virtual.%s.%@", name, pressed ? @"down" : @"up"];
+    CFNotificationCenterPostNotification(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        (CFStringRef)notification, NULL, NULL, YES);
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer),
+             "relayed %s %s to Virtual Mac", name, pressed ? "down" : "up");
+    Log(buffer);
+}
+
+static BOOL VZIsGlobeUsage(int64_t usagePage, int64_t usage)
+{
+    // The globe/Fn key is an Apple vendor usage (AppleVendorTopCase page
+    // 0xFF01 / 0xFF00 / 0xFF, usage 0x03). iPadOS may map it to a different
+    // page. Be permissive: any non-keyboard page with usage 0x03 is almost
+    // certainly the globe key. Also check Consumer page (0x0C) keyboard-layout
+    // keys; 0x29D is what iPadOS keyboards actually send for the 🌐 key,
+    // confirmed on-device.
+    if (usage == 0x03 && usagePage != 0x07)
+        return YES;
+    if (usagePage == 0x0c)
+        return usage == 0x22d || usage == 0x18a || usage == 0x29d;
+    return NO;
+}
+
 static void VZHandleKeyHIDEvent(id self, SEL selector, CFTypeRef event)
 {
     static VZIOHIDEventGetIntegerValue getIntegerValue;
@@ -197,6 +226,13 @@ static void VZHandleKeyHIDEvent(id self, SEL selector, CFTypeRef event)
         BOOL pressed = getIntegerValue(event, VZHIDKeyboardDownField) != 0;
         if (usagePage == 0x07 && (usage == 0xe3 || usage == 0xe7)) {
             gCommandIsDown = pressed;
+        } else if (VZIsGlobeUsage(usagePage, usage)) {
+            // The globe/Fn key is a system key (input-source switching) that
+            // iPadOS would otherwise consume. Relay it so the VM app can map
+            // it to Fn, and swallow it so it never reaches the system's
+            // input-method switcher.
+            VZPostShortcut("globe", pressed);
+            return;
         } else if (usagePage == 0x07 &&
                    (usage == 0x2c || usage == 0x2b || usage == 0x35)) {
             uint64_t bit = 1ULL << (usage & 63);
@@ -215,6 +251,43 @@ static void VZHandleKeyHIDEvent(id self, SEL selector, CFTypeRef event)
     }
 
     ((void (*)(id, SEL, CFTypeRef))gOriginalHandleKeyHIDEvent)(
+        self, selector, event);
+}
+
+// The globe key also reaches UIKit's event layer, where iPadOS presents the
+// input-method switcher. handleKeyHIDEvent: swallowing the raw HID event is
+// not enough — the switcher still pops. Swallow the globe here too so the
+// guest receives only the Darwin relay (Fn), never the system popup.
+static void VZHandleKeyUIEvent(id self, SEL selector, id event)
+{
+    if (VZSharedApplicationIsTarget() &&
+        VZSettingEnabled(@"KeyboardShortcutCapture")) {
+        SEL hidEventSel = sel_registerName("_hidEvent");
+        id hidEvent = nil;
+        if ([event respondsToSelector:hidEventSel])
+            hidEvent = ((id (*)(id, SEL))objc_msgSend)(event, hidEventSel);
+        if (hidEvent) {
+            static VZIOHIDEventGetIntegerValue getIntegerValue;
+            if (!getIntegerValue)
+                getIntegerValue = (VZIOHIDEventGetIntegerValue)dlsym(
+                    RTLD_DEFAULT, "IOHIDEventGetIntegerValue");
+            if (getIntegerValue) {
+                int64_t usagePage = getIntegerValue(
+                    (CFTypeRef)hidEvent, VZHIDKeyboardUsagePageField);
+                int64_t usage = getIntegerValue(
+                    (CFTypeRef)hidEvent, VZHIDKeyboardUsageField);
+                if (VZIsGlobeUsage(usagePage, usage)) {
+                    static unsigned char logged;
+                    if (!logged) {
+                        Log("swallowed globe in _handleKeyUIEvent:");
+                        logged = 1;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    ((void (*)(id, SEL, id))gOriginalHandleKeyUIEvent)(
         self, selector, event);
 }
 
@@ -327,5 +400,17 @@ static void VZInstallKeyboardPassthrough(void)
         gOriginalFluidGestureShouldReceiveTouch = method_setImplementation(
             fluidTouchMethod, (IMP)VZFluidGestureShouldReceiveTouch);
     Log("installed active-VM fluid multitasking-gesture suppression");
+
+    // Swallow the globe key at the UIKit event layer to suppress the
+    // input-method switcher popup that handleKeyHIDEvent: can't stop.
+    Method keyUIEventMethod = class_getInstanceMethod(
+        application, sel_registerName("_handleKeyUIEvent:"));
+    if (keyUIEventMethod) {
+        gOriginalHandleKeyUIEvent = method_setImplementation(
+            keyUIEventMethod, (IMP)VZHandleKeyUIEvent);
+        Log("installed _handleKeyUIEvent: globe input-method suppression");
+    } else {
+        Log("UIApplication _handleKeyUIEvent: unavailable");
+    }
 
 }
