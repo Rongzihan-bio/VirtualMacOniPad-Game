@@ -678,23 +678,6 @@ static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed) {
                (long)keyCode, pressed);
 }
 
-// Send a guest key by its macOS virtual key code directly. Used for the globe
-// key, which maps to the Fn key (kVK_Fn = 63) rather than a HID usage.
-static void sendMacKey(NSInteger keyCode, BOOL pressed) {
-    if (!gKeyboard)
-        return;
-    id event = ((id(*)(id, SEL, NSInteger, unsigned short))objc_msgSend)(
-        m0(CLS("_VZKeyEvent"), "alloc"), S("initWithType:keyCode:"),
-        pressed ? 0 : 1, (unsigned short)keyCode);
-    ((void(*)(id, SEL, id))objc_msgSend)(
-        gKeyboard, S("sendKeyEvents:"), @[event]);
-    [event release];
-    uint64_t count = __sync_add_and_fetch(&gKeyEventCount, 1);
-    if (count <= 12)
-        printf("[VirtualMac] input key=%llu mac=%ld pressed=%d\n",
-               (unsigned long long)count, (long)keyCode, pressed);
-}
-
 // While the globe key is held it acts as an Fn-style modifier. These chords
 // translate to a single macOS navigation key injected into the guest, mirroring
 // a MacBook's Fn+arrow / Fn+Delete behavior. Return maps to the keypad Enter
@@ -738,7 +721,7 @@ static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
         // which can arrive late or after the globe is already released — so
         // gGlobeDown is set in the same delivery order as the chorded key and
         // the translation below always sees it in time. The key is swallowed;
-        // the guest gets Fn via the Darwin relay instead.
+        // chords are injected from the translation below instead.
         if (usage == 0x29d || usage == 0x22d || usage == 0x18a) {
             gGlobeDown = pressed;
             printf("[VirtualMac] globe press tracked pressed=%d\n", pressed);
@@ -747,25 +730,28 @@ static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
         }
         UIKeyboardHIDUsage target;
         if (VZGlobeTranslationFor(usage, &target)) {
-            if (pressed) {
-                if (gGlobeDown) {
-                    // Record the pairing so the matching key-up still sends the
-                    // translated target even if the globe is lifted first.
-                    gGlobeTranslatedUsage[usage] = target;
-                    printf("[VirtualMac] globe chord HID=0x%lx -> 0x%lx\n",
-                           (unsigned long)usage, (unsigned long)target);
-                    sendKey(target, YES);
-                    handled = YES;
-                    continue;
-                }
-            } else {
-                uint8_t mapped = gGlobeTranslatedUsage[usage];
-                if (mapped) {
+            if (gGlobeDown)
+                printf("[VirtualMac] chord-source HID=0x%lx pressed=%d\n",
+                       (unsigned long)usage, pressed);
+            uint8_t mapped = gGlobeTranslatedUsage[usage];
+            if (mapped) {
+                // A chord for this key is active. Keep routing every event —
+                // auto-repeat and the release, even after the globe is lifted
+                // — to the translated target, so the guest never sees the raw
+                // key mid-chord or a stuck key. Cleared on the first release.
+                sendKey((UIKeyboardHIDUsage)mapped, pressed);
+                if (!pressed)
                     gGlobeTranslatedUsage[usage] = 0;
-                    sendKey((UIKeyboardHIDUsage)mapped, NO);
-                    handled = YES;
-                    continue;
-                }
+                handled = YES;
+                continue;
+            }
+            if (pressed && gGlobeDown) {
+                gGlobeTranslatedUsage[usage] = target;
+                printf("[VirtualMac] globe chord HID=0x%lx -> 0x%lx\n",
+                       (unsigned long)usage, (unsigned long)target);
+                sendKey(target, YES);
+                handled = YES;
+                continue;
             }
         }
         sendKey(usage, pressed);
@@ -792,10 +778,11 @@ static void shellShortcutNotification(CFNotificationCenterRef center,
     else if ([notification containsString:@"command-grave"])
         usage = (UIKeyboardHIDUsage)0x35;
     else if ([notification containsString:@"globe"]) {
-        // gGlobeDown is tracked from the raw press in sendPresses; this relay
-        // only injects Fn into the guest.
+        // gGlobeDown is tracked from the raw press in sendPresses, and no Fn is
+        // injected: macOS drops arrow/return keycodes while Fn is held (it
+        // expects the keyboard firmware to have translated them), which would
+        // defeat the chords below.
         printf("[VirtualMac] SpringBoard globe relay pressed=%d\n", pressed);
-        sendMacKey(63, pressed);  // kVK_Fn
         return;
     }
     if (usage) {
