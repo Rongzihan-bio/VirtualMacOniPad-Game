@@ -43,6 +43,9 @@ static uint64_t gPointerEventCount;
 static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
+// Globe-held state, tracked from the globe key's own UIKit press (Consumer
+// usage 0x29D) in sendPresses. Same delivery path as the chorded key, so it is
+// always set in physical order.
 static BOOL gGlobeDown;
 // Globe+<key> translations currently in flight, keyed by the source HID usage
 // (< 0x100). The value is the target HID usage to send on release, so a key
@@ -730,6 +733,18 @@ static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
         if (!press.key)
             continue;
         UIKeyboardHIDUsage usage = press.key.keyCode;
+        // The globe/Fn key reaches the app's press path as a Consumer-page
+        // usage (0x29D on-device). Track it here — not from the Darwin relay,
+        // which can arrive late or after the globe is already released — so
+        // gGlobeDown is set in the same delivery order as the chorded key and
+        // the translation below always sees it in time. The key is swallowed;
+        // the guest gets Fn via the Darwin relay instead.
+        if (usage == 0x29d || usage == 0x22d || usage == 0x18a) {
+            gGlobeDown = pressed;
+            printf("[VirtualMac] globe press tracked pressed=%d\n", pressed);
+            handled = YES;
+            continue;
+        }
         UIKeyboardHIDUsage target;
         if (VZGlobeTranslationFor(usage, &target)) {
             if (pressed) {
@@ -777,7 +792,8 @@ static void shellShortcutNotification(CFNotificationCenterRef center,
     else if ([notification containsString:@"command-grave"])
         usage = (UIKeyboardHIDUsage)0x35;
     else if ([notification containsString:@"globe"]) {
-        gGlobeDown = pressed;
+        // gGlobeDown is tracked from the raw press in sendPresses; this relay
+        // only injects Fn into the guest.
         printf("[VirtualMac] SpringBoard globe relay pressed=%d\n", pressed);
         sendMacKey(63, pressed);  // kVK_Fn
         return;
