@@ -7,7 +7,6 @@
 #import "VZAppSettings.h"
 #import "VZProgressViewController.h"
 #include <dlfcn.h>
-#include <string.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <mach-o/loader.h>
@@ -43,15 +42,12 @@ static uint64_t gPointerEventCount;
 static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
-// Globe-held state, tracked from the globe key's own UIKit press (Consumer
-// usage 0x29D) in sendPresses. Same delivery path as the chorded key, so it is
-// always set in physical order.
+// Globe-held state, tracked from the Darwin relay (the tweak reports the
+// globe's raw HID press, which is reliable and prompt). The tweak translates
+// globe+<key> chords at the HID layer and relays the translated key; this flag
+// only lets the app drop raw chord keys that also reach its press path, so the
+// guest never sees both the raw key and the translated key.
 static BOOL gGlobeDown;
-// Globe+<key> translations currently in flight, keyed by the source HID usage
-// (< 0x100). The value is the target HID usage to send on release, so a key
-// lifted after the globe itself is released still produces the correct key-up
-// and the guest never sees a stuck navigation key.
-static uint8_t gGlobeTranslatedUsage[256];
 static uint64_t gLastHealthFrameCount;
 static uint64_t gLastHealthInteractionCount;
 static NSUInteger gFrameStallIntervals;
@@ -678,31 +674,17 @@ static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed) {
                (long)keyCode, pressed);
 }
 
-// While the globe key is held it acts as an Fn-style modifier. These chords
-// translate to a single macOS navigation key injected into the guest, mirroring
-// a MacBook's Fn+arrow / Fn+Delete behavior. Return maps to the keypad Enter
-// (used by macOS installers and full-disk dialogs that only accept it).
-static BOOL VZGlobeTranslationFor(UIKeyboardHIDUsage usage,
-                                  UIKeyboardHIDUsage *target)
+// The tweak translates globe+<key> chords at the HID layer (lines mirror a
+// MacBook's Fn+arrow / Fn+Delete) and relays the translated key. When a raw
+// chord key still reaches the app's press path — the globe does, so others may
+// — drop it while the globe is held so the guest never gets the raw key on top
+// of the translated one. Deliberately NOT a translation: iPadOS's input-method
+// switcher eats globe+arrow before the app ever sees it, so the tweak must own
+// the translation.
+static BOOL VZIsGlobeChordSource(UIKeyboardHIDUsage usage)
 {
-    static const struct {
-        UIKeyboardHIDUsage from;
-        UIKeyboardHIDUsage to;
-    } kGlobeChords[] = {
-        {0x52, 0x4b},  // Up          -> PageUp
-        {0x51, 0x4e},  // Down        -> PageDown
-        {0x50, 0x4a},  // Left        -> Home
-        {0x4f, 0x4d},  // Right       -> End
-        {0x2a, 0x4c},  // Backspace   -> Forward Delete
-        {0x28, 0x58},  // Return      -> Keypad Enter
-    };
-    for (size_t i = 0; i < sizeof(kGlobeChords) / sizeof(kGlobeChords[0]); i++) {
-        if (kGlobeChords[i].from == usage) {
-            *target = kGlobeChords[i].to;
-            return YES;
-        }
-    }
-    return NO;
+    return usage == 0x52 || usage == 0x51 || usage == 0x50 ||
+        usage == 0x4f || usage == 0x2a || usage == 0x28;
 }
 
 static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
@@ -717,42 +699,16 @@ static BOOL sendPresses(NSSet<UIPress *> *presses, BOOL pressed) {
             continue;
         UIKeyboardHIDUsage usage = press.key.keyCode;
         // The globe/Fn key reaches the app's press path as a Consumer-page
-        // usage (0x29D on-device). Track it here — not from the Darwin relay,
-        // which can arrive late or after the globe is already released — so
-        // gGlobeDown is set in the same delivery order as the chorded key and
-        // the translation below always sees it in time. The key is swallowed;
-        // chords are injected from the translation below instead.
+        // usage (0x29D on-device). The tweak already swallows it system-wide;
+        // swallow the app's own copy too so it never reaches the guest.
         if (usage == 0x29d || usage == 0x22d || usage == 0x18a) {
-            gGlobeDown = pressed;
-            printf("[VirtualMac] globe press tracked pressed=%d\n", pressed);
             handled = YES;
             continue;
         }
-        UIKeyboardHIDUsage target;
-        if (VZGlobeTranslationFor(usage, &target)) {
-            if (gGlobeDown)
-                printf("[VirtualMac] chord-source HID=0x%lx pressed=%d\n",
-                       (unsigned long)usage, pressed);
-            uint8_t mapped = gGlobeTranslatedUsage[usage];
-            if (mapped) {
-                // A chord for this key is active. Keep routing every event —
-                // auto-repeat and the release, even after the globe is lifted
-                // — to the translated target, so the guest never sees the raw
-                // key mid-chord or a stuck key. Cleared on the first release.
-                sendKey((UIKeyboardHIDUsage)mapped, pressed);
-                if (!pressed)
-                    gGlobeTranslatedUsage[usage] = 0;
-                handled = YES;
-                continue;
-            }
-            if (pressed && gGlobeDown) {
-                gGlobeTranslatedUsage[usage] = target;
-                printf("[VirtualMac] globe chord HID=0x%lx -> 0x%lx\n",
-                       (unsigned long)usage, (unsigned long)target);
-                sendKey(target, YES);
-                handled = YES;
-                continue;
-            }
+        if (gGlobeDown && VZIsGlobeChordSource(usage)) {
+            // Tweak relays the translated key; drop the raw chord key.
+            handled = YES;
+            continue;
         }
         sendKey(usage, pressed);
         handled = YES;
@@ -778,13 +734,24 @@ static void shellShortcutNotification(CFNotificationCenterRef center,
     else if ([notification containsString:@"command-grave"])
         usage = (UIKeyboardHIDUsage)0x35;
     else if ([notification containsString:@"globe"]) {
-        // gGlobeDown is tracked from the raw press in sendPresses, and no Fn is
-        // injected: macOS drops arrow/return keycodes while Fn is held (it
-        // expects the keyboard firmware to have translated them), which would
-        // defeat the chords below.
+        // The tweak tracks held state from raw HID; the app mirrors it here so
+        // sendPresses can drop raw chord keys while the globe is held. Nothing
+        // is injected for the globe itself.
+        gGlobeDown = pressed;
         printf("[VirtualMac] SpringBoard globe relay pressed=%d\n", pressed);
         return;
-    }
+    } else if ([notification containsString:@"pageup"])
+        usage = (UIKeyboardHIDUsage)0x4b;
+    else if ([notification containsString:@"pagedown"])
+        usage = (UIKeyboardHIDUsage)0x4e;
+    else if ([notification containsString:@"home"])
+        usage = (UIKeyboardHIDUsage)0x4a;
+    else if ([notification containsString:@"end"])
+        usage = (UIKeyboardHIDUsage)0x4d;
+    else if ([notification containsString:@"forward-delete"])
+        usage = (UIKeyboardHIDUsage)0x4c;
+    else if ([notification containsString:@"keypad-enter"])
+        usage = (UIKeyboardHIDUsage)0x58;
     if (usage) {
         printf("[VirtualMac] SpringBoard shortcut relay usage=0x%lx pressed=%d\n",
                (unsigned long)usage, pressed);
@@ -796,7 +763,9 @@ static void installShellShortcutRelay(void) {
     CFNotificationCenterRef center =
         CFNotificationCenterGetDarwinNotifyCenter();
     for (NSString *shortcut in @[@"command-space", @"command-tab",
-                                  @"command-grave", @"globe"]) {
+                                  @"command-grave", @"globe",
+                                  @"pageup", @"pagedown", @"home", @"end",
+                                  @"forward-delete", @"keypad-enter"]) {
         for (NSString *state in @[@"down", @"up"]) {
             NSString *name = [NSString stringWithFormat:
                 @"com.mac.virtual.%@.%@", shortcut, state];
@@ -2163,7 +2132,6 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     gVirtualMachineDelegate = nil;
     gKeyboard = nil;
     gGlobeDown = NO;
-    memset(gGlobeTranslatedUsage, 0, sizeof(gGlobeTranslatedUsage));
     gPointingDevice = nil;
     gTouchButtons = 0;
     gHardwareMouseButtons = 0;

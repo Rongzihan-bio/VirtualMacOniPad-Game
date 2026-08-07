@@ -16,6 +16,13 @@ static IMP gOriginalShouldEnableSystemGesturePrivate;
 static IMP gOriginalFluidGestureShouldBegin;
 static IMP gOriginalFluidGestureShouldReceiveTouch;
 static BOOL gCommandIsDown;
+static BOOL gGlobeIsDown;
+// Globe+<key> chords in flight, keyed by the source HID usage (< 0x100). A
+// nonzero value is the translated target HID usage. Recorded on the chord
+// down so the release and any repeats keep routing to the target even after
+// the globe itself is released first — otherwise the guest would get the
+// translated key-down and then the raw key-up and end up with a stuck key.
+static uint8_t gGlobeChordTargets[256];
 static uint64_t gRelayingShortcutUsages;
 static const char *gTargetBundleID = "com.mac.virtual";
 static const char *gOpenAfterRespring =
@@ -210,6 +217,42 @@ static BOOL VZIsGlobeUsage(int64_t usagePage, int64_t usage)
     return NO;
 }
 
+// globe+<key> chords translate to a single macOS navigation key, mirroring a
+// MacBook's Fn+arrow / Fn+Delete. Done at the HID layer because iPadOS's
+// input-method switcher consumes globe+arrow before it ever reaches the VM
+// app's press path (confirmed on-device: backspace chords arrive, arrow keys
+// never do).
+static BOOL VZGlobeTranslateUsage(int64_t usage, int64_t *target)
+{
+    static const struct { int64_t from; int64_t to; } kGlobeChords[] = {
+        {0x52, 0x4b},  // Up          -> PageUp
+        {0x51, 0x4e},  // Down        -> PageDown
+        {0x50, 0x4a},  // Left        -> Home
+        {0x4f, 0x4d},  // Right       -> End
+        {0x2a, 0x4c},  // Backspace   -> Forward Delete
+        {0x28, 0x58},  // Return      -> Keypad Enter
+    };
+    for (size_t i = 0; i < sizeof(kGlobeChords) / sizeof(kGlobeChords[0]); i++) {
+        if (kGlobeChords[i].from == usage) {
+            *target = kGlobeChords[i].to;
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static void VZPostNavShortcut(int64_t target, BOOL pressed)
+{
+    const char *name = target == 0x4b ? "pageup"
+        : target == 0x4e ? "pagedown"
+        : target == 0x4a ? "home"
+        : target == 0x4d ? "end"
+        : target == 0x4c ? "forward-delete"
+        : target == 0x58 ? "keypad-enter"
+        : "unknown";
+    VZPostShortcut(name, pressed);
+}
+
 static void VZHandleKeyHIDEvent(id self, SEL selector, CFTypeRef event)
 {
     static VZIOHIDEventGetIntegerValue getIntegerValue;
@@ -224,15 +267,32 @@ static void VZHandleKeyHIDEvent(id self, SEL selector, CFTypeRef event)
             event, VZHIDKeyboardUsagePageField);
         int64_t usage = getIntegerValue(event, VZHIDKeyboardUsageField);
         BOOL pressed = getIntegerValue(event, VZHIDKeyboardDownField) != 0;
+        int64_t target;
         if (usagePage == 0x07 && (usage == 0xe3 || usage == 0xe7)) {
             gCommandIsDown = pressed;
         } else if (VZIsGlobeUsage(usagePage, usage)) {
             // The globe/Fn key is a system key (input-source switching) that
-            // iPadOS would otherwise consume. Relay it so the VM app can map
-            // it to Fn, and swallow it so it never reaches the system's
-            // input-method switcher.
+            // iPadOS would otherwise consume. Track held state so the chord
+            // branch below can translate, relay it (the app uses it to swallow
+            // raw chord keys that slip through), and swallow it so it never
+            // reaches the system's input-method switcher.
+            gGlobeIsDown = pressed;
             VZPostShortcut("globe", pressed);
             return;
+        } else if (usagePage == 0x07 &&
+                   VZGlobeTranslateUsage(usage, &target)) {
+            uint8_t source = (uint8_t)usage;
+            if (gGlobeIsDown || gGlobeChordTargets[source]) {
+                // Translate globe+<key> to the single macOS navigation key and
+                // relay it. Swallow the raw key so neither iPadOS's
+                // input-method switcher nor the guest sees it. Record-driven:
+                // once a chord is down, every repeat and the release route to
+                // the target until the first release, even if the globe was
+                // released first.
+                gGlobeChordTargets[source] = pressed ? (uint8_t)target : 0;
+                VZPostNavShortcut(target, pressed);
+                return;
+            }
         } else if (usagePage == 0x07 &&
                    (usage == 0x2c || usage == 0x2b || usage == 0x35)) {
             uint64_t bit = 1ULL << (usage & 63);
@@ -257,7 +317,7 @@ static void VZHandleKeyHIDEvent(id self, SEL selector, CFTypeRef event)
 // The globe key also reaches UIKit's event layer, where iPadOS presents the
 // input-method switcher. handleKeyHIDEvent: swallowing the raw HID event is
 // not enough — the switcher still pops. Swallow the globe here too so the
-// guest receives only the Darwin relay (Fn), never the system popup.
+// guest never sees the system popup.
 static void VZHandleKeyUIEvent(id self, SEL selector, id event)
 {
     if (VZSharedApplicationIsTarget() &&
