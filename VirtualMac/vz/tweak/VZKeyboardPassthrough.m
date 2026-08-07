@@ -16,6 +16,7 @@ static IMP gOriginalShouldEnableSystemGesturePrivate;
 static IMP gOriginalFluidGestureShouldBegin;
 static IMP gOriginalFluidGestureShouldReceiveTouch;
 static BOOL gCommandIsDown;
+static BOOL gSpringBoardReady;
 static BOOL gGlobeIsDown;
 // Globe+<key> chords in flight, keyed by the source HID usage (< 0x100). A
 // nonzero value is the translated target HID usage. Recorded on the chord
@@ -75,6 +76,22 @@ static void Log(const char *message)
 
 static BOOL VirtualMacIsFrontmost(id springBoard)
 {
+    // _accessibilityFrontMostApplication builds SpringBoard's app-switcher
+    // controller tree behind +[SBMainSwitcherControllerCoordinator
+    // sharedInstance]. Calling it from a swizzled gesture hook while
+    // SpringBoard is still bootstrapping re-entrantly forces
+    // SBApplicationController to construct before its restriction data source
+    // exists; SBApplicationRestrictionController then asserts and the
+    // exception escaping dispatch_once aborts SpringBoard (SIGABRT). Keep the
+    // lookup disabled until SpringBoard reports a finished launch.
+    if (!gSpringBoardReady) {
+        static unsigned char logged;
+        if (!logged) {
+            Log("deferred frontmost check; SpringBoard still bootstrapping");
+            logged = 1;
+        }
+        return NO;
+    }
     SEL frontSelector = sel_registerName("_accessibilityFrontMostApplication");
     if (![springBoard respondsToSelector:frontSelector])
         return NO;
@@ -390,10 +407,37 @@ static void VZScheduleOneShotOpen(void)
     });
 }
 
+// Arm the frontmost check only after SpringBoard finishes its initial launch
+// (UIKit posts UIApplicationDidFinishLaunchingNotification at the end of
+// _finishLaunching, after the controller tree the check depends on is built).
+// Resolve the notification name at runtime so the tweak keeps compiling with
+// just Foundation linked. Fail-safe: if it never fires, the frontmost lookup
+// stays off and the tweak degrades to no suppression rather than crashing.
+static void VZObserveSpringBoardFinishedLaunching(void)
+{
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *symbol = dlsym(RTLD_DEFAULT,
+            "UIApplicationDidFinishLaunchingNotification");
+        if (!symbol)
+            return;
+        NSString *name = *(NSString **)symbol;
+        // MRC: retain the block-observer token or the current autorelease
+        // pool drains it and the observation silently goes away.
+        static id readyObserver = nil;
+        readyObserver = [[[NSNotificationCenter defaultCenter]
+            addObserverForName:name object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *note) {
+                gSpringBoardReady = YES;
+            }] retain];
+    });
+}
+
 __attribute__((constructor))
 static void VZInstallKeyboardPassthrough(void)
 {
     VZReloadSettings();
+    VZObserveSpringBoardFinishedLaunching();
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetDarwinNotifyCenter(), NULL,
         VZSettingsChanged, CFSTR("com.mac.virtual.settings-changed"),
