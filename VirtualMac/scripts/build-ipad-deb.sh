@@ -50,6 +50,7 @@ mkdir -p \
     "$STAGE/var/jb/Library/LaunchDaemons" \
     "$STAGE/var/jb/basebin/LaunchDaemons" \
     "$STAGE/var/jb/Library/MobileSubstrate/DynamicLibraries" \
+    "$STAGE/var/jb/usr/lib/TweakInject" \
     "$STAGE/var/jb/usr/lib" \
     "$STAGE/var/jb/usr/libexec" \
     "$STAGE/var/jb/usr/sbin" \
@@ -99,7 +100,10 @@ install -m 755 "$VZ_BUILD_ROOT/ipad-tweak/VZKeyboardPassthrough.dylib" \
     "$STAGE/var/jb/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib"
 install -m 644 "$VZ_BUILD_ROOT/ipad-tweak/VZKeyboardPassthrough.plist" \
     "$STAGE/var/jb/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.plist"
-
+install -m 755 "$VZ_BUILD_ROOT/ipad-tweak/VZKeyboardPassthrough.dylib" \
+    "$STAGE/var/jb/usr/lib/TweakInject/VZKeyboardPassthrough.dylib"
+install -m 644 "$VZ_BUILD_ROOT/ipad-tweak/VZKeyboardPassthrough.plist" \
+    "$STAGE/var/jb/usr/lib/TweakInject/VZKeyboardPassthrough.plist"
 # Never package host filesystem metadata. Component builders also remove it
 # before signing, but this catches metadata from every independently built
 # app, XPC, framework, and packaging input.
