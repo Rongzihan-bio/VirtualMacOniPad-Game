@@ -34,7 +34,7 @@ Magic Keyboard is not required, but is recommended for the best experience. If y
 - To make scrolling easier, go to System Settings > Appearance > Show Scroll Bars and set it to Always.
 - To access the virtual keyboard, tap the keyboard icon. If the virtual keyboard gets in the way, press and hold the bottom-right icon to switch to Floating mode.
 - If the HUD gets in the way, move it to a different corner or hide it from the More menu. To show it again, press and hold the Virtual Mac icon on the iPad Home Screen, then tap Show Virtual Mac Controls.
-- To automatically start up your virtual Mac, enable System Settings > Users & Groups > Automatically log in, and set System Settings > Lock Screen to Never. Then in Virtual Mac's in app Settings, change Start on Launch from Show Library to the name of your virtual Mac. To show library again, press and hold the Virtual Mac icon on the iPad Home Screen, then tap Show Library.
+- To automatically start up your virtual Mac, enable System Settings > Users & Groups > Automatically log in, and set System Settings > Lock Screen to Never. Then in Virtual Mac's in-app Settings, change Start on Launch from Show Library to the name of your virtual Mac. To show library again, press and hold the Virtual Mac icon on the iPad Home Screen, then tap Show Library.
 
 ### Is it possible to support additional versions of iPadOS?
 
