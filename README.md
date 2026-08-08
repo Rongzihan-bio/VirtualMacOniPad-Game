@@ -57,7 +57,7 @@ First, try these fixes for common issues:
 
 To save time when troubleshooting, open Virtual Mac's in app settings, and turn off Delete IPSW After Installation so it doesn't redownload the IPSW each time you install macOS.
 
-If you have access to Codex or Claude Code, install `openssh` and `lldb` in Sileo, then connect your iPad to a computer. Point the coding agent to this repository, then ask it to diagnose live and fix the issue. Because many issues can be setup specific, this is usually the easiest way to fix issues. If you find a solution, please update the issue or open a pull request. Contributions are welcome!
+If you have access to Codex or Claude Code, install `openssh` and `lldb` in Sileo, then connect your iPad to a computer. Point the coding agent to this repository, then ask it to diagnose live and fix the issue. Because many issues can be setup-specific, this is usually the easiest way to fix issues. If you find a solution, please update the issue or open a pull request. Contributions are welcome!
 
 As a last resort, open Dopamine > Settings > Remove Jailbreak, then jailbreak again and reinstall Virtual Mac on iPad. If this still doesn't work, back up all data, open Dopamine > Settings > Remove Jailbreak, and erase your iPad in Settings > General > Transfer or Reset iPad > Erase All Content and Settings to start fresh.
 
