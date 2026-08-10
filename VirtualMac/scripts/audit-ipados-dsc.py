@@ -51,6 +51,8 @@ class SharedCache:
         self.tbd_root = work_path / "tbd"
         self.tbd_root.mkdir(parents=True, exist_ok=True)
         self.parsed_tbds: dict[Path, tuple[set[str], list[str]]] = {}
+        self.parsed_macho_symbols: dict[str, set[str]] = {}
+        self.parsed_macho_reexports: dict[str, list[str]] = {}
 
         listing = command_output(
             IPSW_TOOL, "dyld", "info", "-l", "--no-color", str(cache_path)
@@ -129,23 +131,91 @@ class SharedCache:
 
         tbd = self.ensure_tbd(install_name)
         if tbd is None:
-            return False
+            # Some older shared caches contain Objective-C relative method
+            # metadata that the current ipsw TBD generator cannot traverse.
+            # Its Mach-O symbol command still reads the image's export/symbol
+            # tables correctly. Use that as an exact fallback instead of
+            # reporting foundational classes such as NSString as absent.
+            actual_name = self.actual_install_name(install_name)
+            if actual_name is None:
+                return False
+            if actual_name not in self.parsed_macho_symbols:
+                listing = command_output(
+                    IPSW_TOOL, "dyld", "macho", "--no-color", "--symbols",
+                    str(self.path), actual_name,
+                )
+                exported: set[str] = set()
+                for line in listing.splitlines():
+                    if not re.match(r"^0x[0-9A-Fa-f]+:", line) or not re.search(
+                        r"\bexternal\b", line
+                    ):
+                        continue
+                    match = re.search(r"\t(\S+)\s*$", line)
+                    if match:
+                        exported.add(match.group(1))
+                self.parsed_macho_symbols[actual_name] = exported
+                loads = command_output(
+                    IPSW_TOOL, "dyld", "macho", "--no-color", "--loads",
+                    str(self.path), actual_name,
+                )
+                self.parsed_macho_reexports[actual_name] = re.findall(
+                    r"LC_REEXPORT_DYLIB\s+(/\S+)", loads
+                )
+            if symbol in self.parsed_macho_symbols[actual_name]:
+                return True
+            return any(
+                self.exports_symbol(item, symbol, visited)
+                for item in self.parsed_macho_reexports[actual_name]
+            )
         exports, reexports = self.parse_tbd(tbd)
         if symbol in exports:
             return True
         return any(self.exports_symbol(item, symbol, visited) for item in reexports)
 
 
-def find_machos(roots: list[Path]) -> list[Path]:
+def find_machos(roots: list[Path], host_major: int) -> list[Path]:
     binaries: list[Path] = []
     for root in roots:
         if not root.is_dir():
             continue
         for directory, _, filenames in os.walk(root, followlinks=False):
+            compatibility_match = re.search(
+                r"(?:^|/)Compatibility/iPadOS(\d+)(?:Authenticated)?(?:/|$)",
+                directory,
+            )
+            if (
+                compatibility_match
+                and int(compatibility_match.group(1)) != host_major
+            ):
+                continue
             for filename in filenames:
                 candidate = Path(directory) / filename
+                # The universal package uses this restamped Ventura helper
+                # only on rootless iPadOS 15/16. Taurine/iPadOS 14 instead
+                # packages its matching native implementation under the
+                # private /var/root/VirtualMac/rootful runtime.
+                if (
+                    host_major == 14
+                    and candidate.name == "bootpd"
+                    and candidate.parent.name == "ipad-network-helpers"
+                ):
+                    continue
                 # Build-only macOS inputs; their restamped siblings are audited.
                 if candidate.name.endswith(".macos"):
+                    continue
+                # Multi-version payloads retain one image per host ABI.
+                # Audit only the image postinst selects for this host, and
+                # skip the build-time unsuffixed copy when that exact sibling
+                # exists.
+                variant_match = re.search(
+                    r"\.ipados(\d+)(?:-auth)?$", candidate.name
+                )
+                if variant_match and int(variant_match.group(1)) != host_major:
+                    continue
+                if not variant_match and (
+                    candidate.parent
+                    / (candidate.name + f".ipados{host_major}")
+                ).is_file():
                     continue
                 if candidate.is_symlink():
                     continue
@@ -179,13 +249,17 @@ def imports(binary: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--host-major", type=int, choices=(14, 15, 16), default=15,
+        help="select the payload variants installed on this iPadOS major",
+    )
     parser.add_argument("cache", type=Path)
     parser.add_argument("work", type=Path)
     parser.add_argument("roots", nargs="+", type=Path)
     args = parser.parse_args()
 
     cache = SharedCache(args.cache, args.work)
-    binaries = find_machos(args.roots)
+    binaries = find_machos(args.roots, args.host_major)
     if not binaries:
         raise RuntimeError("no Mach-O files found for shared-cache audit")
 
@@ -257,7 +331,7 @@ def main() -> int:
         return 1
 
     print(
-        "oldest-host ABI verified: "
+        f"iPadOS {args.host_major} host ABI verified: "
         f"{len(binaries)} Mach-O files, {audited_imports} system imports; "
         f"{weak_missing_dependencies} absent weak dylibs and "
         f"{weak_missing_imports} absent weak imports tolerated"

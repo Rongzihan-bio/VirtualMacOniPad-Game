@@ -34,7 +34,9 @@ chown mobile:mobile '$REQUEST'
 chmod 600 '$REQUEST'
 killall VirtualMac 2>/dev/null || true
 sleep 1
-/var/jb/usr/bin/uiopen --bundleid com.mac.virtual
+uiopen_path=/var/jb/usr/bin/uiopen
+test -x "\$uiopen_path" || uiopen_path=/usr/bin/uiopen
+"\$uiopen_path" --bundleid com.mac.virtual
 "
 
 for _ in {1..20}; do

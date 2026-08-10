@@ -2,15 +2,22 @@
 #import <GameController/GameController.h>
 #import <UIKit/UIKit.h>
 #import <AVFAudio/AVFAudio.h>
+#import <CoreImage/CoreImage.h>
+#import <Metal/Metal.h>
 #import "NSViewShim.h"
 #import "VZVMLibraryViewController.h"
 #import "VZAppSettings.h"
+#import "VZDiagnostics.h"
+#import "VZFailureDetailsViewController.h"
 #import "VZProgressViewController.h"
+#import "VZLocalization.h"
+#import "VZSupport.h"
 #include <dlfcn.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <mach-o/loader.h>
 #include <errno.h>
+#include <pthread.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -29,6 +36,10 @@ static CALayer *gDisplayLayer;
 static UIImageView *gCursorView;
 static UILabel *gStatusLabel;
 static UIView *gHUDView;
+static UIPanGestureRecognizer *gTouchScrollRecognizer;
+static UIPinchGestureRecognizer *gPinchRecognizer;
+static UIRotationGestureRecognizer *gRotationRecognizer;
+static UITapGestureRecognizer *gSmartMagnifyRecognizer;
 static BOOL gSoftwareKeyboardRequested;
 static BOOL gHUDHiddenForBoot;
 static BOOL gHUDForcedVisibleForBoot;
@@ -42,6 +53,7 @@ static uint64_t gPointerEventCount;
 static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
+static BOOL gDebugLogging;
 // Globe-held state, tracked from the Darwin relay (the tweak reports the
 // globe's raw HID press, which is reliable and prompt). The tweak translates
 // globe+<key> chords at the HID layer and relays the translated key; this flag
@@ -75,6 +87,7 @@ static CGPoint gCursorHotspot;
 static CFTimeInterval gLastPredictedCursorTime;
 static void (*gHostVMStarted)(void);
 static SEL S(const char *name);
+static void setObj(id object, const char *selector, id value);
 static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed);
 static void sendPointer(CGPoint point, CGRect bounds, NSUInteger pressedButtons);
 static void setStatus(NSString *status);
@@ -83,6 +96,54 @@ static void logFramebufferState(id view, id framebuffer, const char *phase);
 static void startVirtualMachine(UIView *container, id delegate,
                                 NSString *bundlePath,
                                 NSDictionary *options);
+
+static NSString *VZInstallationFailureExplanation(NSString *failure)
+{
+    if ([failure containsString:@"Unexpected device state 'DFU'"] ||
+        [failure containsString:@"Code=4014"] ||
+        [failure containsString:@"error: 4014"]) {
+        return VZL(@"Another usbmuxd service took control of the virtual DFU device before it entered RestoreOS. Uninstall usbmuxd from Sileo and try again.");
+    }
+    if ([failure containsString:@"AMRestorePerformRestoreModeRestoreWithError failed with error: 100"] ||
+        [failure containsString:@"error: 100"]) {
+        return VZL(@"Verify your iPad has sufficient free storage and try again.");
+    }
+    return VZL(@"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings.");
+}
+
+// On iPadOS 16.2, CoreUI's candidate bar artwork asks CoreImage for its legacy 
+// EAGL backend. Platform/unsandboxed apps receive a null GL entry point and 
+// crash in CI::GLContext before Virtual Mac code runs. CoreUI only requires 
+// an ordinary CIContext here, so use the supported Metal backend.
+static id VZCoreUISharedMetalContext(id object, SEL selector) {
+    (void)object; (void)selector;
+    static CIContext *context;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        context = [[CIContext contextWithMTLDevice:device] retain];
+    });
+    return context;
+}
+
+static void installIPadOS162KeyboardRenderingFix(void) {
+    if (![UIDevice.currentDevice.systemVersion hasPrefix:@"16.2"])
+        return;
+    if (![VZAppSettings.sharedSettings
+            boolForKey:VZIPadOS162KeyboardWorkaroundKey])
+        return;
+    dlopen("/System/Library/PrivateFrameworks/CoreUI.framework/CoreUI",
+           RTLD_LAZY | RTLD_LOCAL);
+    Class shapeEffects = objc_getClass("CUIShapeEffectStack");
+    Method method = class_getClassMethod(shapeEffects,
+        sel_registerName("sharedCIContext"));
+    if (!method)
+        return;
+    class_replaceMethod(object_getClass(shapeEffects),
+        method_getName(method), (IMP)VZCoreUISharedMetalContext,
+        method_getTypeEncoding(method));
+    printf("[VirtualMac] installed iPadOS 16.2 Metal keyboard-rendering fix\n");
+}
 
 static NSUInteger activePointerButtons(void) {
     return gHardwareMouseButtons | gTouchButtons;
@@ -124,18 +185,20 @@ static void startHealthMonitor(void) {
             &gPointerButtonEventCount, __ATOMIC_RELAXED) +
             __atomic_load_n(&gScrollEventCount, __ATOMIC_RELAXED) +
             __atomic_load_n(&gKeyEventCount, __ATOMIC_RELAXED);
-        printf("[VirtualMac] health state=%ld frames=%llu cursors=%llu "
-               "pointer=%llu scroll=%llu keys=%llu\n",
-               (long)state,
-               (unsigned long long)frames,
-               (unsigned long long)__atomic_load_n(
-                   &gCursorUpdateCount, __ATOMIC_RELAXED),
-               (unsigned long long)__atomic_load_n(
-                   &gPointerEventCount, __ATOMIC_RELAXED),
-               (unsigned long long)__atomic_load_n(
-                   &gScrollEventCount, __ATOMIC_RELAXED),
-               (unsigned long long)__atomic_load_n(
-                   &gKeyEventCount, __ATOMIC_RELAXED));
+        if (gDebugLogging) {
+            printf("[VirtualMac] health state=%ld frames=%llu cursors=%llu "
+                   "pointer=%llu scroll=%llu keys=%llu\n",
+                   (long)state,
+                   (unsigned long long)frames,
+                   (unsigned long long)__atomic_load_n(
+                       &gCursorUpdateCount, __ATOMIC_RELAXED),
+                   (unsigned long long)__atomic_load_n(
+                       &gPointerEventCount, __ATOMIC_RELAXED),
+                   (unsigned long long)__atomic_load_n(
+                       &gScrollEventCount, __ATOMIC_RELAXED),
+                   (unsigned long long)__atomic_load_n(
+                       &gKeyEventCount, __ATOMIC_RELAXED));
+        }
         if (state == 1 && frames != 0 && frames == gLastHealthFrameCount &&
             interactions != gLastHealthInteractionCount) {
             gFrameStallIntervals++;
@@ -245,8 +308,9 @@ static void sendMagnification(double magnification, NSUInteger phase) {
     ((void(*)(id, SEL, id))objc_msgSend)(
         gPointingDevice, S("sendMagnifyEvents:"), @[event]);
     [event release];
-    printf("[VirtualMac] input magnify delta=%.4f phase=0x%lx\n",
-           magnification, (unsigned long)phase);
+    if (gDebugLogging)
+        printf("[VirtualMac] input magnify delta=%.4f phase=0x%lx\n",
+               magnification, (unsigned long)phase);
 }
 
 static void sendRotation(double rotation, NSUInteger phase) {
@@ -260,8 +324,9 @@ static void sendRotation(double rotation, NSUInteger phase) {
     ((void(*)(id, SEL, id))objc_msgSend)(
         gPointingDevice, S("sendRotationEvents:"), @[event]);
     [event release];
-    printf("[VirtualMac] input rotate delta=%.4f phase=0x%lx\n",
-           rotation, (unsigned long)phase);
+    if (gDebugLogging)
+        printf("[VirtualMac] input rotate delta=%.4f phase=0x%lx\n",
+               rotation, (unsigned long)phase);
 }
 
 static void sendSmartMagnification(void) {
@@ -273,7 +338,8 @@ static void sendSmartMagnification(void) {
     ((void(*)(id, SEL, id))objc_msgSend)(
         gPointingDevice, S("sendSmartMagnifyEvents:"), @[event]);
     [event release];
-    printf("[VirtualMac] input smart magnify\n");
+    if (gDebugLogging)
+        printf("[VirtualMac] input smart magnify\n");
 }
 
 static void sendMouseDelta(float deltaX, float deltaY) {
@@ -320,7 +386,7 @@ static void sendScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
         gPointingDevice, S("sendScrollWheelEvents:"), @[event]);
     [event release];
     uint64_t count = __sync_add_and_fetch(&gScrollEventCount, 1);
-    if (count <= 12 || phase != 4)
+    if (count <= 12 || (gDebugLogging && phase != 4))
         printf("[VirtualMac] input scroll=%llu raw=%.3f,%.3f "
                "accelerated=%.3f,%.3f inverted=%d device=%lu "
                "phase=0x%lx\n",
@@ -364,6 +430,37 @@ static void installGCMouse(void) {
         (void)value;
         sendMouseButton(4, pressed);
     };
+}
+
+static void recoverNetworkingAfterResume(void)
+{
+    if (!gVirtualMachine || ![VZAppSettings.sharedSettings
+            boolForKey:VZNetworkResumeRecoveryKey])
+        return;
+    NSInteger hostMajor =
+        NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
+    const char *launchctl = hostMajor == 14
+        ? "/usr/bin/launchctl"
+        : (access("/var/jb/usr/bin/launchctl", X_OK) == 0
+            ? "/var/jb/usr/bin/launchctl" : "/var/jb/bin/launchctl");
+    if (access(launchctl, X_OK) != 0)
+        return;
+    const char *labels[] = {
+        hostMajor <= 15 ? "system/com.apple.NetworkSharing"
+                        : "user/501/com.apple.NetworkSharing",
+        hostMajor <= 15 ? "system/vzi.apple.bootpd"
+                        : "user/501/vzi.apple.bootpd",
+        NULL};
+    for (NSUInteger index = 0; labels[index]; index++) {
+        const char *label = labels[index];
+        char *arguments[] = {(char *)launchctl, "kickstart",
+                             (char *)label, NULL};
+        pid_t process = 0;
+        int result = posix_spawn(&process, launchctl, NULL, NULL,
+                                 arguments, environ);
+        printf("[VirtualMac] network resume kickstart label=%s result=%d pid=%d\n",
+               label, result, process);
+    }
 }
 
 static void scheduleInputSelfTest(void) {
@@ -819,6 +916,20 @@ static void sendSoftwareKey(UIKeyboardHIDUsage usage, BOOL shifted);
     UIInputView *_vzAccessoryView;
     UIStackView *_vzAccessoryStack;
     NSMutableSet<NSNumber *> *_vzHeldSoftwareModifiers;
+    CGPoint _vzDirectTouchStart;
+    CGPoint _vzLastDirectTap;
+    NSTimeInterval _vzLastDirectTapTime;
+    BOOL _vzDirectTouchActive;
+    BOOL _vzDirectTouchDragging;
+    NSMutableDictionary<NSValue *, NSValue *> *_vzDirectTouchOrigins;
+    NSMutableDictionary<NSValue *, NSValue *> *_vzDirectTouchPositions;
+    NSMutableSet<NSValue *> *_vzActiveDirectTouchKeys;
+    NSTimeInterval _vzDirectGestureStartTime;
+    CGFloat _vzDirectGestureMaximumMovement;
+    NSUInteger _vzDirectGestureGeneration;
+    BOOL _vzTwoFingerCandidate;
+    BOOL _vzLongPressConsumed;
+    BOOL _vzDirectPrimaryPressed;
 }
 @end
 
@@ -854,6 +965,7 @@ static void sendSoftwareKey(UIKeyboardHIDUsage usage, BOOL shifted);
     stack.spacing = 6;
     NSArray *keys = @[
         @[@"esc", @0x29, @NO],
+        @[@"tab", @0x2b, @NO],
         @[@"⇧", @0xe1, @YES], @[@"⌃", @0xe0, @YES],
         @[@"⌥", @0xe2, @YES], @[@"⌘", @0xe3, @YES],
         @[@"←", @0x50, @NO], @[@"↓", @0x51, @NO],
@@ -875,10 +987,11 @@ static void sendSoftwareKey(UIKeyboardHIDUsage usage, BOOL shifted);
             weight:UIFontWeightSemibold];
         button.tag = [key[1] integerValue];
         button.accessibilityHint = [key[2] boolValue]
-            ? @"Double-tap to hold or release this modifier" : nil;
+            ? VZL(@"Double-tap to hold or release this modifier") : nil;
         [button addTarget:self action:@selector(accessoryKeyPressed:)
             forControlEvents:UIControlEventTouchUpInside];
         button.layer.cornerRadius = 7;
+        button.layer.cornerCurve = kCACornerCurveContinuous;
         button.layer.borderWidth = 0.5;
         button.layer.borderColor = UIColor.separatorColor.CGColor;
         button.backgroundColor = UIColor.secondarySystemBackgroundColor;
@@ -1030,6 +1143,9 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     [_vzAccessoryView release];
     [_vzAccessoryStack release];
     [_vzHeldSoftwareModifiers release];
+    [_vzDirectTouchOrigins release];
+    [_vzDirectTouchPositions release];
+    [_vzActiveDirectTouchKeys release];
     [super dealloc];
 }
 
@@ -1143,6 +1259,37 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
                     phase);
 }
 
+- (void)handleTouchScroll:(UIPanGestureRecognizer *)recognizer
+{
+    NSUInteger phase = 0;
+    CGPoint delta = CGPointZero;
+    switch (recognizer.state) {
+    case UIGestureRecognizerStateBegan:
+        phase = 1;
+        break;
+    case UIGestureRecognizerStateChanged:
+        phase = 4;
+        delta = [recognizer translationInView:self];
+        [recognizer setTranslation:CGPointZero inView:self];
+        break;
+    case UIGestureRecognizerStateEnded:
+        phase = 8;
+        break;
+    case UIGestureRecognizerStateCancelled:
+    case UIGestureRecognizerStateFailed:
+        phase = 16;
+        break;
+    default:
+        return;
+    }
+    // A direct two-finger pan follows the content under the fingers (natural
+    // scrolling), while captured hardware-wheel deltas describe wheel
+    // rotation. Rotate and invert the UIKit translation before entering the
+    // shared VZ event mapping. This intentionally affects direct touch only.
+    CGVector raw = CGVectorMake(-delta.y, delta.x);
+    sendScrollWheel(raw, raw, YES, 1, phase);
+}
+
 - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
                        regionForRequest:(UIPointerRegionRequest *)request
                           defaultRegion:(UIPointerRegion *)defaultRegion
@@ -1163,10 +1310,285 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     return [UIPointerStyle hiddenPointerStyle];
 }
 
+- (BOOL)usesDeferredDirectTouchClicks
+{
+    VZAppSettings *settings = VZAppSettings.sharedSettings;
+    return [settings boolForKey:VZTouchTwoFingerRightClickKey] ||
+        [settings boolForKey:VZTouchLongPressRightClickKey];
+}
+
+- (NSValue *)directTouchKey:(UITouch *)touch
+{
+    return [NSValue valueWithNonretainedObject:touch];
+}
+
+- (void)ensureDirectTouchTracking
+{
+    if (!_vzDirectTouchOrigins)
+        _vzDirectTouchOrigins = [[NSMutableDictionary alloc] init];
+    if (!_vzDirectTouchPositions)
+        _vzDirectTouchPositions = [[NSMutableDictionary alloc] init];
+    if (!_vzActiveDirectTouchKeys)
+        _vzActiveDirectTouchKeys = [[NSMutableSet alloc] init];
+}
+
+- (CGPoint)directTouchMidpoint
+{
+    if (!_vzDirectTouchPositions.count)
+        return _vzDirectTouchStart;
+    CGFloat x = 0;
+    CGFloat y = 0;
+    for (NSValue *value in _vzDirectTouchPositions.allValues) {
+        CGPoint point = value.CGPointValue;
+        x += point.x;
+        y += point.y;
+    }
+    return CGPointMake(x / _vzDirectTouchPositions.count,
+                       y / _vzDirectTouchPositions.count);
+}
+
+- (void)emitDirectClickAtPoint:(CGPoint)point button:(NSUInteger)button
+{
+    // Move first, matching the native indirect-pointer path. The down/up pair
+    // is emitted together only after the direct-touch gesture is known, so a
+    // two-finger tap never leaks a primary click into the guest.
+    gTouchButtons = 0;
+    sendPointer(point, self.bounds, activePointerButtons());
+    gTouchButtons = button;
+    sendPointer(point, self.bounds, activePointerButtons());
+    gTouchButtons = 0;
+    sendPointer(point, self.bounds, activePointerButtons());
+}
+
+- (void)resetDeferredDirectTouch
+{
+    _vzDirectGestureGeneration++;
+    _vzDirectTouchActive = NO;
+    _vzDirectTouchDragging = NO;
+    _vzTwoFingerCandidate = NO;
+    _vzLongPressConsumed = NO;
+    _vzDirectPrimaryPressed = NO;
+    _vzDirectGestureMaximumMovement = 0;
+    [_vzDirectTouchOrigins removeAllObjects];
+    [_vzDirectTouchPositions removeAllObjects];
+    [_vzActiveDirectTouchKeys removeAllObjects];
+}
+
+- (void)beginDeferredDirectTouches:(NSSet<UITouch *> *)touches
+                         withEvent:(UIEvent *)event
+{
+    (void)event;
+    [self ensureDirectTouchTracking];
+    for (UITouch *touch in touches) {
+        if (touch.type != UITouchTypeDirect)
+            continue;
+        NSValue *key = [self directTouchKey:touch];
+        CGPoint point = [touch locationInView:self];
+        if (!_vzDirectTouchOrigins[key])
+            _vzDirectTouchOrigins[key] = [NSValue valueWithCGPoint:point];
+        _vzDirectTouchPositions[key] = [NSValue valueWithCGPoint:point];
+        [_vzActiveDirectTouchKeys addObject:key];
+        if (!_vzDirectTouchActive) {
+            _vzDirectTouchActive = YES;
+            _vzDirectTouchDragging = NO;
+            _vzTwoFingerCandidate = NO;
+            _vzLongPressConsumed = NO;
+            // Preserve the original fast-path double-tap semantics: decide
+            // the accommodated guest coordinate at touch-down, before the
+            // guest observes any pointer movement.  Applying it at touch-up
+            // made the pointer visit the second physical coordinate between
+            // clicks, which defeats AppKit's double-click hit testing.
+            BOOL accommodate = [VZAppSettings.sharedSettings
+                boolForKey:VZTouchDoubleTapAccommodationKey];
+            if (accommodate &&
+                touch.timestamp - _vzLastDirectTapTime <= 0.20) {
+                CGFloat dx = point.x - _vzLastDirectTap.x;
+                CGFloat dy = point.y - _vzLastDirectTap.y;
+                if (hypot(dx, dy) <= 30.0)
+                    point = _vzLastDirectTap;
+            }
+            _vzDirectTouchStart = point;
+            _vzDirectGestureStartTime = touch.timestamp;
+            _vzDirectGestureMaximumMovement = 0;
+            _vzDirectGestureGeneration++;
+        }
+    }
+
+    NSUInteger count = _vzActiveDirectTouchKeys.count;
+    if (count == 2) {
+        if (_vzDirectPrimaryPressed) {
+            gTouchButtons = 0;
+            sendPointer(_vzDirectTouchStart, self.bounds,
+                        activePointerButtons());
+            _vzDirectPrimaryPressed = NO;
+        }
+        _vzTwoFingerCandidate = YES;
+        // Invalidate a pending one-finger long press as soon as the second
+        // finger arrives. Two-finger scrolling remains owned by its pan
+        // recognizer and cancels this candidate after actual movement.
+        _vzDirectGestureGeneration++;
+    } else if (count > 2) {
+        _vzTwoFingerCandidate = NO;
+        _vzDirectGestureGeneration++;
+    }
+
+    CGPoint point = count > 1 ? [self directTouchMidpoint]
+                              : _vzDirectTouchStart;
+    gTouchButtons = 0;
+    sendPointer(point, self.bounds, activePointerButtons());
+
+    if (count == 1 && [VZAppSettings.sharedSettings
+            boolForKey:VZTouchLongPressRightClickKey]) {
+        NSUInteger generation = _vzDirectGestureGeneration;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+            (int64_t)(0.55 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!_vzDirectTouchActive || _vzDirectTouchDragging ||
+                _vzTwoFingerCandidate || _vzLongPressConsumed ||
+                _vzActiveDirectTouchKeys.count != 1 ||
+                generation != _vzDirectGestureGeneration)
+                return;
+            _vzLongPressConsumed = YES;
+            [self emitDirectClickAtPoint:[self directTouchMidpoint] button:2];
+        });
+    } else if (count == 1) {
+        // Waiting until touch-up made every tap feel laggy and changed drag
+        // timing.  Keep only a very short arbitration window for a second
+        // finger, then restore the normal touch-down press while the finger
+        // is still held.
+        NSUInteger generation = _vzDirectGestureGeneration;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+            (int64_t)(0.03 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!_vzDirectTouchActive || _vzDirectTouchDragging ||
+                _vzTwoFingerCandidate || _vzLongPressConsumed ||
+                _vzActiveDirectTouchKeys.count != 1 ||
+                generation != _vzDirectGestureGeneration)
+                return;
+            _vzDirectPrimaryPressed = YES;
+            gTouchButtons = 1;
+            sendPointer(_vzDirectTouchStart, self.bounds,
+                        activePointerButtons());
+        });
+    }
+}
+
+- (void)moveDeferredDirectTouches:(NSSet<UITouch *> *)touches
+                         withEvent:(UIEvent *)event
+{
+    (void)event;
+    for (UITouch *touch in touches) {
+        if (touch.type != UITouchTypeDirect)
+            continue;
+        NSValue *key = [self directTouchKey:touch];
+        CGPoint point = [touch locationInView:self];
+        _vzDirectTouchPositions[key] = [NSValue valueWithCGPoint:point];
+        CGPoint origin = [_vzDirectTouchOrigins[key] CGPointValue];
+        _vzDirectGestureMaximumMovement = MAX(
+            _vzDirectGestureMaximumMovement,
+            hypot(point.x - origin.x, point.y - origin.y));
+    }
+
+    if (_vzActiveDirectTouchKeys.count != 1) {
+        if (_vzActiveDirectTouchKeys.count > 2)
+            _vzTwoFingerCandidate = NO;
+        return;
+    }
+    if (_vzLongPressConsumed)
+        return;
+
+    CGPoint point = [self directTouchMidpoint];
+    if (!_vzDirectTouchDragging) {
+        CGFloat dx = point.x - _vzDirectTouchStart.x;
+        CGFloat dy = point.y - _vzDirectTouchStart.y;
+        if (hypot(dx, dy) <= 8.0)
+            return;
+        _vzDirectTouchDragging = YES;
+        _vzTwoFingerCandidate = NO;
+        _vzDirectGestureGeneration++;
+        if (!_vzDirectPrimaryPressed) {
+            _vzDirectPrimaryPressed = YES;
+            gTouchButtons = 1;
+            sendPointer(_vzDirectTouchStart, self.bounds,
+                        activePointerButtons());
+        }
+    }
+    gTouchButtons = 1;
+    sendPointer(point, self.bounds, activePointerButtons());
+}
+
+- (void)endDeferredDirectTouches:(NSSet<UITouch *> *)touches
+                        withEvent:(UIEvent *)event
+{
+    CGPoint finalPoint = [self directTouchMidpoint];
+    NSTimeInterval endTime = _vzDirectGestureStartTime;
+    for (UITouch *touch in touches) {
+        if (touch.type != UITouchTypeDirect)
+            continue;
+        NSValue *key = [self directTouchKey:touch];
+        CGPoint point = [touch locationInView:self];
+        _vzDirectTouchPositions[key] = [NSValue valueWithCGPoint:point];
+        CGPoint origin = [_vzDirectTouchOrigins[key] CGPointValue];
+        _vzDirectGestureMaximumMovement = MAX(
+            _vzDirectGestureMaximumMovement,
+            hypot(point.x - origin.x, point.y - origin.y));
+        [_vzActiveDirectTouchKeys removeObject:key];
+        endTime = MAX(endTime, touch.timestamp);
+    }
+    finalPoint = [self directTouchMidpoint];
+    if (_vzActiveDirectTouchKeys.count)
+        return;
+
+    NSTimeInterval duration = endTime - _vzDirectGestureStartTime;
+    if (_vzLongPressConsumed) {
+        // The long-press click has already completed.
+    } else if (_vzTwoFingerCandidate &&
+               _vzDirectTouchOrigins.count == 2 &&
+               duration <= 0.35 &&
+               _vzDirectGestureMaximumMovement <= 10.0) {
+        [self emitDirectClickAtPoint:finalPoint button:2];
+    } else if (_vzDirectTouchOrigins.count == 1 &&
+               !_vzDirectTouchDragging) {
+        // A tap lands where it began, not wherever the finger happened to
+        // drift before lifting. This matches the pre-381c140 path and keeps
+        // small targets accurate.
+        finalPoint = _vzDirectTouchStart;
+        if (_vzDirectPrimaryPressed) {
+            gTouchButtons = 0;
+            sendPointer(finalPoint, self.bounds, activePointerButtons());
+        } else {
+            [self emitDirectClickAtPoint:finalPoint button:1];
+        }
+        _vzLastDirectTap = _vzDirectTouchStart;
+        _vzLastDirectTapTime = endTime;
+    } else if (_vzDirectTouchDragging) {
+        gTouchButtons = 0;
+        sendPointer(finalPoint, self.bounds, activePointerButtons());
+        _vzLastDirectTapTime = 0;
+    }
+    (void)event;
+    [self resetDeferredDirectTouch];
+}
+
+- (void)cancelDeferredDirectTouches:(NSSet<UITouch *> *)touches
+                           withEvent:(UIEvent *)event
+{
+    (void)event;
+    CGPoint point = [self directTouchMidpoint];
+    for (UITouch *touch in touches)
+        if (touch.type == UITouchTypeDirect)
+            point = [touch locationInView:self];
+    gTouchButtons = 0;
+    sendPointer(point, self.bounds, activePointerButtons());
+    [self resetDeferredDirectTouch];
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches
            withEvent:(UIEvent *)event
 {
     UITouch *touch = [touches anyObject];
+    if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
+        [self beginDeferredDirectTouches:touches withEvent:event];
+        return;
+    }
     if (touch) {
         // Hardware trackpad clicks reach a UIKit view as indirect-pointer
         // touches even when GameController exposes no GCMouse. Preserve
@@ -1179,8 +1601,30 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         // the indirect UITouch continues to report every live drag position.
         // Treat it as authoritative or the guest only sees the final point.
         CGPoint point = [touch locationInView:self];
-        sendPointer(point, self.bounds,
-                    activePointerButtons());
+        if (touch.type == UITouchTypeDirect) {
+            NSTimeInterval now = touch.timestamp;
+            BOOL accommodate = [VZAppSettings.sharedSettings
+                boolForKey:VZTouchDoubleTapAccommodationKey];
+            if (accommodate) {
+                CGFloat dx = point.x - _vzLastDirectTap.x;
+                CGFloat dy = point.y - _vzLastDirectTap.y;
+                // Only coalesce a deliberate, quick double-tap. A broad
+                // interval makes two ordinary taps on nearby controls land
+                // on the first control instead.
+                if (now - _vzLastDirectTapTime <= 0.20 &&
+                    hypot(dx, dy) <= 30.0)
+                    point = _vzLastDirectTap;
+                _vzDirectTouchStart = point;
+                _vzDirectTouchActive = YES;
+                _vzDirectTouchDragging = NO;
+            }
+        }
+        // Match the working hardware-trackpad path: establish the guest
+        // pointer location before pressing. Modern AppKit menu tracking needs
+        // this hover/move transition before a direct tap on a menu item.
+        if (touch.type == UITouchTypeDirect)
+            sendPointer(point, self.bounds, gHardwareMouseButtons);
+        sendPointer(point, self.bounds, activePointerButtons());
         printf("[VirtualMac] touch began type=%ld buttons=0x%lx\n",
                (long)touch.type, (unsigned long)gTouchButtons);
     }
@@ -1190,11 +1634,26 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
            withEvent:(UIEvent *)event
 {
     UITouch *touch = [touches anyObject];
+    if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
+        [self moveDeferredDirectTouches:touches withEvent:event];
+        return;
+    }
     if (touch) {
         NSUInteger eventButtons = (NSUInteger)event.buttonMask & 0x7U;
         if (eventButtons)
             gTouchButtons = eventButtons;
         CGPoint point = [touch locationInView:self];
+        if (touch.type == UITouchTypeDirect && _vzDirectTouchActive &&
+            !_vzDirectTouchDragging) {
+            CGFloat dx = point.x - _vzDirectTouchStart.x;
+            CGFloat dy = point.y - _vzDirectTouchStart.y;
+            // Ignore finger jitter during an ordinary click. Modern AppKit
+            // menus interpret tiny held movement as a drag-and-dismiss. An
+            // intentional drag becomes live immediately outside tap slop.
+            if (hypot(dx, dy) <= 8.0)
+                return;
+            _vzDirectTouchDragging = YES;
+        }
         sendPointer(point, self.bounds,
                     activePointerButtons());
     }
@@ -1204,10 +1663,25 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
            withEvent:(UIEvent *)event
 {
     UITouch *touch = [touches anyObject];
+    if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
+        [self endDeferredDirectTouches:touches withEvent:event];
+        return;
+    }
     if (touch) {
         (void)event;
         gTouchButtons = 0;
         CGPoint point = [touch locationInView:self];
+        if (touch.type == UITouchTypeDirect && _vzDirectTouchActive) {
+            if (!_vzDirectTouchDragging) {
+                point = _vzDirectTouchStart;
+                _vzLastDirectTap = point;
+                _vzLastDirectTapTime = touch.timestamp;
+            } else {
+                _vzLastDirectTapTime = 0;
+            }
+            _vzDirectTouchActive = NO;
+            _vzDirectTouchDragging = NO;
+        }
         sendPointer(point, self.bounds,
                     activePointerButtons());
     }
@@ -1216,6 +1690,11 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches
                withEvent:(UIEvent *)event
 {
+    UITouch *touch = [touches anyObject];
+    if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
+        [self cancelDeferredDirectTouches:touches withEvent:event];
+        return;
+    }
     [self touchesEnded:touches withEvent:event];
 }
 
@@ -1241,19 +1720,40 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 
 @end
 
-@interface VZHUDView : UIVisualEffectView
+@interface VZHUDView : UIView
 - (instancetype)initWithTarget:(id)target;
+- (void)setContentOpacity:(CGFloat)opacity;
 @end
 
 @implementation VZHUDView
+
+- (void)setContentOpacity:(CGFloat)opacity
+{
+    opacity = MAX(0.0, MIN(1.0, opacity));
+    // Keep the container and buttons at alpha 1 so UIKit continues hit
+    // testing them when the user chooses zero visual opacity. Only the cheap
+    // solid background and symbol tint become transparent; no effect view or
+    // offscreen pass is introduced.
+    self.alpha = 1.0;
+    self.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.86 * opacity];
+    UIStackView *stack = (UIStackView *)[self viewWithTag:1701];
+    for (UIButton *button in stack.arrangedSubviews)
+        button.tintColor = [UIColor.whiteColor colorWithAlphaComponent:opacity];
+}
+
 - (instancetype)initWithTarget:(id)target
 {
-    if ((self = [super initWithEffect:[UIBlurEffect effectWithStyle:
-            UIBlurEffectStyleSystemUltraThinMaterialDark]])) {
+    if ((self = [super initWithFrame:CGRectZero])) {
+        // A small, solid translucent layer is considerably cheaper than a
+        // UIVisualEffectView: no backdrop capture, blur, or offscreen effect
+        // pass is introduced above the continuously updating PVG surface.
+        self.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.86];
         self.layer.cornerRadius = 18;
+        self.layer.cornerCurve = kCACornerCurveContinuous;
         self.clipsToBounds = YES;
         self.translatesAutoresizingMaskIntoConstraints = NO;
         UIStackView *stack = [[[UIStackView alloc] init] autorelease];
+        stack.tag = 1701;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         stack.axis = UILayoutConstraintAxisHorizontal;
         stack.spacing = 2;
@@ -1269,7 +1769,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
                 button.menu = ((id(*)(id, SEL))objc_msgSend)(
                     target, NSSelectorFromString(@"hudMenu"));
                 button.showsMenuAsPrimaryAction = YES;
-                button.accessibilityLabel = @"Virtual Mac Controls";
+                button.accessibilityLabel = VZL(@"Virtual Mac Controls");
             } else {
                 [button addTarget:target action:NSSelectorFromString(item[@"selector"])
                     forControlEvents:UIControlEventTouchUpInside];
@@ -1278,12 +1778,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
             [button.heightAnchor constraintEqualToConstant:46].active = YES;
             [stack addArrangedSubview:button];
         }
-        [self.contentView addSubview:stack];
+        [self addSubview:stack];
         [NSLayoutConstraint activateConstraints:@[
-            [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
-            [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4],
-            [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:4],
-            [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4],
+            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:4],
+            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-4],
+            [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:4],
+            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-4],
         ]];
     }
     return self;
@@ -1358,6 +1858,17 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     [self updateHUDPosition];
     [self updateHUDVisibility];
     updateDisplayGeometry();
+    if (gTouchScrollRecognizer) {
+        BOOL enabled = [VZAppSettings.sharedSettings
+            boolForKey:VZTouchTwoFingerScrollingKey];
+        gTouchScrollRecognizer.enabled = enabled;
+        NSArray *allowed = enabled ? @[@(UITouchTypeIndirectPointer)]
+                                   : @[@(UITouchTypeDirect),
+                                       @(UITouchTypeIndirectPointer)];
+        gPinchRecognizer.allowedTouchTypes = allowed;
+        gRotationRecognizer.allowedTouchTypes = allowed;
+        gSmartMagnifyRecognizer.allowedTouchTypes = allowed;
+    }
 }
 
 - (void)updateHUDPosition
@@ -1391,6 +1902,9 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         (gHUDHiddenForBoot || [choice isEqualToString:@"hidden"]));
     if (!gHUDForcedVisibleForBoot && [choice isEqualToString:@"automatic"])
         hidden = hidden || (GCKeyboard.coalescedKeyboard != nil && GCMouse.current != nil);
+    CGFloat opacity = [[VZAppSettings.sharedSettings
+        stringForKey:VZHUDOpacityKey] doubleValue];
+    [(VZHUDView *)gHUDView setContentOpacity:opacity];
     gHUDView.hidden = hidden;
 }
 
@@ -1409,25 +1923,36 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 
 - (UIMenu *)hudMenu
 {
-    UIAction *library = [UIAction actionWithTitle:@"Show Library"
+    UIAction *library = [UIAction actionWithTitle:VZL(@"Show Library")
         image:[UIImage systemImageNamed:@"square.grid.2x2"] identifier:nil
         handler:^(UIAction *action) { (void)action; [self presentVMLibrary]; }];
-    UIAction *shutdown = [UIAction actionWithTitle:@"Force Shut Down"
+    UIAction *shutdown = [UIAction actionWithTitle:VZL(@"Force Shut Down")
         image:[UIImage systemImageNamed:@"power"] identifier:nil
         handler:^(UIAction *action) { (void)action; [self confirmForceShutdown]; }];
     shutdown.attributes = UIMenuElementAttributesDestructive;
-    UIAction *hide = [UIAction actionWithTitle:@"Hide for This Boot"
+    UIAction *hide = [UIAction actionWithTitle:VZL(@"Hide for This Boot")
         image:[UIImage systemImageNamed:@"eye.slash"] identifier:nil
         handler:^(UIAction *action) { (void)action;
         gHUDHiddenForBoot = YES;
         [self updateHUDVisibility];
+        NSString *noticeKey = @"HUDHideRecoveryNoticeShown";
+        if (![VZAppSettings.sharedSettings boolForKey:noticeKey]) {
+            [VZAppSettings.sharedSettings setBool:YES forKey:noticeKey];
+            UIAlertController *notice = [UIAlertController
+                alertControllerWithTitle:VZL(@"Controls Hidden")
+                message:VZL(@"To show the controls again during this boot, touch and hold the Virtual Mac icon on the Home Screen, then choose Show Virtual Mac Controls.")
+                preferredStyle:UIAlertControllerStyleAlert];
+            [notice addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+                style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:notice animated:YES completion:nil];
+        }
     }];
     NSMutableArray *placements = [NSMutableArray array];
     NSString *current = [VZAppSettings.sharedSettings stringForKey:VZHUDCornerKey]
         ?: @"top-right";
     for (NSArray *placement in @[
-        @[@"Top Left", @"top-left"], @[@"Top Right", @"top-right"],
-        @[@"Bottom Left", @"bottom-left"], @[@"Bottom Right", @"bottom-right"],
+        @[VZL(@"Top Left"), @"top-left"], @[VZL(@"Top Right"), @"top-right"],
+        @[VZL(@"Bottom Left"), @"bottom-left"], @[VZL(@"Bottom Right"), @"bottom-right"],
     ]) {
         UIAction *move = [UIAction actionWithTitle:placement[0] image:nil
             identifier:nil handler:^(UIAction *action) {
@@ -1440,7 +1965,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
             ? UIMenuElementStateOn : UIMenuElementStateOff;
         [placements addObject:move];
     }
-    UIMenu *moveMenu = [UIMenu menuWithTitle:@"Move Controls" children:placements];
+    UIMenu *moveMenu = [UIMenu menuWithTitle:VZL(@"Move Controls") children:placements];
     return [UIMenu menuWithTitle:@""
         children:@[library, shutdown, hide, moveMenu]];
 }
@@ -1450,12 +1975,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     if (!gVirtualMachine)
         return;
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Force Shut Down Virtual Mac?"
-        message:@"Unsaved changes in macOS may be lost."
+        alertControllerWithTitle:VZL(@"Force Shut Down Virtual Mac?")
+        message:VZL(@"Unsaved changes in macOS may be lost.")
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Force Shut Down"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Force Shut Down")
         style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
         forceStopVirtualMachine();
@@ -1554,7 +2079,7 @@ static NSString *VZInstallationConsoleText(NSString *installLogPath)
             [console appendString:@"\n\n"];
         [console appendFormat:@"── %@ ──\n%@", source[0], tail];
     }
-    return console.length ? console : @"Waiting for restore output…";
+    return console.length ? console : VZL(@"Waiting for installation output…");
 }
 
 static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
@@ -1673,33 +2198,35 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         if (interrupted.count) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
             400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:
-                interrupted.count == 1 ? @"Incomplete Installation" : @"Incomplete Installations"
-                message:@"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it."
+                interrupted.count == 1 ? VZL(@"Incomplete Installation") : VZL(@"Incomplete Installations")
+                message:VZL(@"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it.")
                 preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Keep" style:UIAlertActionStyleCancel handler:nil]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"View Details" style:UIAlertActionStyleDefault
+            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Done")
+                style:UIAlertActionStyleCancel handler:nil]];
+            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"View Details") style:UIAlertActionStyleDefault
                 handler:^(UIAlertAction *action) {
                     (void)action;
                     NSMutableString *details = [NSMutableString string];
                     for (NSDictionary *item in interrupted) {
                         NSDictionary *record = item[@"record"];
-                        [details appendFormat:@"%@\nState: %@\n%@\n\n",
+                        [details appendFormat:VZL(@"%@\nState: %@\n%@\n\n"),
                             record[@"Name"] ?: [item[@"path"] lastPathComponent],
-                            record[@"State"] ?: @"Unknown", item[@"path"]];
+                            record[@"State"] ?: VZL(@"Unknown"), item[@"path"]];
                     }
-                    UIAlertController *info = [UIAlertController alertControllerWithTitle:@"Installation Details"
-                        message:details preferredStyle:UIAlertControllerStyleAlert];
-                    [info addAction:[UIAlertAction actionWithTitle:@"Keep Files" style:UIAlertActionStyleCancel handler:nil]];
-                    [info addAction:[UIAlertAction actionWithTitle:@"Delete All"
-                        style:UIAlertActionStyleDestructive handler:^(UIAlertAction *innerAction) {
-                        (void)innerAction;
-                        NSMutableArray *paths = [NSMutableArray array];
-                        for (NSDictionary *item in interrupted) [paths addObject:item[@"path"]];
-                        VZRemovePaths(paths);
-                    }]];
-                    [self presentViewController:info animated:YES completion:nil];
+                    VZFailureDetailsViewController *controller =
+                        [[[VZFailureDetailsViewController alloc]
+                            initWithTitle:VZL(@"Installation Details")
+                                   details:details] autorelease];
+                    UINavigationController *navigation =
+                        [[[UINavigationController alloc]
+                            initWithRootViewController:controller] autorelease];
+                    navigation.modalPresentationStyle =
+                        UIModalPresentationPageSheet;
+                    navigation.preferredContentSize = CGSizeMake(640, 620);
+                    [self presentViewController:navigation animated:YES
+                        completion:nil];
                 }]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Delete All" style:UIAlertActionStyleDestructive
+            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Delete All") style:UIAlertActionStyleDestructive
                 handler:^(UIAlertAction *action) {
                     (void)action;
                     NSMutableArray *paths = [NSMutableArray array];
@@ -1782,11 +2309,12 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     [url stopAccessingSecurityScopedResource];
     if (!persistentURL) {
         UIAlertController *failure = [UIAlertController
-            alertControllerWithTitle:@"Could Not Prepare Restore Image"
+            alertControllerWithTitle:VZL(@"Could Not Prepare Restore Image")
                              message:imageError.localizedDescription
                       preferredStyle:UIAlertControllerStyleAlert];
-        [failure addAction:[UIAlertAction actionWithTitle:@"OK"
+        [failure addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
             style:UIAlertActionStyleDefault handler:nil]];
+        VZAddFailureSupportActions(failure);
         [self presentViewController:failure animated:YES completion:nil];
         return;
     }
@@ -1805,11 +2333,12 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         withIntermediateDirectories:YES attributes:nil error:nil];
     if ([NSFileManager.defaultManager fileExistsAtPath:bundlePath]) {
         UIAlertController *exists = [UIAlertController
-            alertControllerWithTitle:@"Name Already Used"
-                             message:@"Delete or rename the existing virtual Mac first."
+            alertControllerWithTitle:VZL(@"Name Already Used")
+                             message:VZL(@"Delete or rename the existing Virtual Mac first.")
                       preferredStyle:UIAlertControllerStyleAlert];
-        [exists addAction:[UIAlertAction actionWithTitle:@"OK"
+        [exists addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
             style:UIAlertActionStyleDefault handler:nil]];
+        VZAddFailureSupportActions(exists);
         [self presentViewController:exists animated:YES completion:nil];
         return;
     }
@@ -1850,12 +2379,13 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
             @"Failure": [NSString stringWithFormat:@"Could not start installer: %s", strerror(result)]
         });
         UIAlertController *failure = [UIAlertController
-            alertControllerWithTitle:@"Could Not Start Installer"
+            alertControllerWithTitle:VZL(@"Could Not Start Installer")
                              message:[NSString stringWithFormat:
-                                @"install-launcher failed: %s", strerror(result)]
+                                VZL(@"The installer could not be started: %s"), strerror(result)]
                       preferredStyle:UIAlertControllerStyleAlert];
-        [failure addAction:[UIAlertAction actionWithTitle:@"OK"
+        [failure addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
             style:UIAlertActionStyleDefault handler:nil]];
+        VZAddFailureSupportActions(failure);
         [self presentViewController:failure animated:YES completion:nil];
         return;
     }
@@ -1899,20 +2429,20 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     self.installationStagingPath = stagingPath;
     self.installationOptions = options;
     self.installationController = [[[VZProgressViewController alloc]
-        initWithTitle:@"Installing macOS"] autorelease];
-    self.installationController.statusText = @"Preparing restore…";
+        initWithTitle:VZL(@"Installing macOS")] autorelease];
+    self.installationController.statusText = VZL(@"Preparing installation…");
     self.installationController.detailText =
-        @"Progress may pause for several minutes while the virtual Mac starts the Restore Environment. The iPad will remain awake.";
-    self.installationController.consoleText = @"Waiting for restore output…";
+        VZL(@"Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake.");
+    self.installationController.consoleText = VZL(@"Waiting for installation output…");
     self.installationController.indeterminate = YES;
     self.installationController.cancellationHandler = ^{
         UIAlertController *confirmation = [UIAlertController
-            alertControllerWithTitle:@"Cancel Installation?"
-                             message:@"The incomplete virtual Mac and its installation files will be deleted."
+            alertControllerWithTitle:VZL(@"Cancel Installation?")
+                             message:VZL(@"The incomplete Virtual Mac and its installation files will be deleted.")
                       preferredStyle:UIAlertControllerStyleAlert];
-        [confirmation addAction:[UIAlertAction actionWithTitle:@"Keep Installing"
+        [confirmation addAction:[UIAlertAction actionWithTitle:VZL(@"Keep Installing")
             style:UIAlertActionStyleCancel handler:nil]];
-        [confirmation addAction:[UIAlertAction actionWithTitle:@"Cancel Installation"
+        [confirmation addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel Installation")
             style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             (void)action;
             [self.installationTimer invalidate];
@@ -1971,14 +2501,14 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                 [self presentVMLibrary];
                 if (writeError)
                     setStatus([NSString stringWithFormat:
-                        @"Installed, but settings save failed: %@", writeError]);
+                        VZL(@"Installed, but settings save failed: %@"), writeError]);
                 UIAlertController *success = [UIAlertController
-                    alertControllerWithTitle:@"macOS Installed"
-                                     message:@"The new virtual Mac is ready to use."
+                    alertControllerWithTitle:VZL(@"macOS Installed")
+                                     message:VZL(@"The new Virtual Mac is ready to use.")
                               preferredStyle:UIAlertControllerStyleAlert];
-                [success addAction:[UIAlertAction actionWithTitle:@"OK"
+                [success addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
                     style:UIAlertActionStyleCancel handler:nil]];
-                [success addAction:[UIAlertAction actionWithTitle:@"Start"
+                [success addAction:[UIAlertAction actionWithTitle:VZL(@"Start")
                     style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                     (void)action;
                     VZVMLibraryViewController *library = (id)
@@ -2017,11 +2547,12 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                     archivePath = nil;
                 }
             }
-            NSString *message = archivePath
+            NSString *explanation = VZInstallationFailureExplanation(tail);
+            NSString *details = archivePath
                 ? [NSString stringWithFormat:
-                    @"%@\n\nThe incomplete bundle was retained in Installation Artifacts as %@. It can be deleted from Settings.",
-                    tail, archivePath.lastPathComponent]
-                : tail;
+                    VZL(@"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings."),
+                    tail, explanation, archivePath.lastPathComponent]
+                : [NSString stringWithFormat:@"%@\n\n%@", tail, explanation];
             NSString *failedAttempt = [[self.installationAttemptPath copy] autorelease];
             self.installationController.cancellationHandler = nil;
             [self.installationController.navigationController dismissViewControllerAnimated:YES completion:^{
@@ -2029,11 +2560,29 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                 self.installationTimer = nil;
                 self.installationProcess = 0;
                 UIAlertController *failureAlert = [UIAlertController
-                    alertControllerWithTitle:@"Installation Failed" message:message
+                    alertControllerWithTitle:VZL(@"Installation Failed")
+                                     message:explanation
                     preferredStyle:UIAlertControllerStyleAlert];
-                [failureAlert addAction:[UIAlertAction actionWithTitle:@"Keep Files"
+                [failureAlert addAction:[UIAlertAction actionWithTitle:VZL(@"Done")
                     style:UIAlertActionStyleCancel handler:nil]];
-                [failureAlert addAction:[UIAlertAction actionWithTitle:@"Delete Incomplete Installation"
+                [failureAlert addAction:[UIAlertAction actionWithTitle:VZL(@"View Details")
+                    style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                        (void)action;
+                        VZFailureDetailsViewController *controller =
+                            [[[VZFailureDetailsViewController alloc]
+                                initWithTitle:VZL(@"Installation Details")
+                                       details:details] autorelease];
+                        UINavigationController *navigation =
+                            [[[UINavigationController alloc]
+                                initWithRootViewController:controller]
+                                autorelease];
+                        navigation.modalPresentationStyle =
+                            UIModalPresentationPageSheet;
+                        navigation.preferredContentSize = CGSizeMake(640, 620);
+                        [self presentViewController:navigation animated:YES
+                            completion:nil];
+                }]];
+                [failureAlert addAction:[UIAlertAction actionWithTitle:VZL(@"Delete Incomplete Installation")
                     style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
                     (void)action; VZRemovePaths(@[failedAttempt]);
                 }]];
@@ -2048,23 +2597,23 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
             double fraction = tail.doubleValue;
             if (fraction <= 0.0) {
                 self.installationController.indeterminate = YES;
-                self.installationController.statusText = @"Booting Restore Environment…";
-                self.installationController.detailText = @"The first progress value can take several minutes while the virtual Mac changes from DFU to RestoreOS. The iPad will remain awake.";
+                self.installationController.statusText = VZL(@"Starting installation environment…");
+                self.installationController.detailText = VZL(@"The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake.");
                 return;
             }
             self.installationController.indeterminate = NO;
             self.installationController.progress = MAX(0, MIN(1, fraction));
             self.installationController.statusText = [NSString stringWithFormat:
-                @"%.1f%% complete", fraction * 100.0];
-            self.installationController.detailText = @"Installation can pause at some stages while macOS prepares the next restore phase. The iPad will remain awake.";
+                VZL(@"%.0f%% complete"), fraction * 100.0];
+            self.installationController.detailText = VZL(@"Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake.");
         } else if ([log containsString:@"INSTALL_BEGIN"]) {
-            self.installationController.statusText = @"Starting restore…";
+            self.installationController.statusText = VZL(@"Starting installation…");
         } else if ([log containsString:@"RESTORE_LOAD_OK"]) {
-            self.installationController.statusText = @"Preparing virtual hardware…";
+            self.installationController.statusText = VZL(@"Preparing virtual hardware…");
         } else if ([log containsString:@"RESTORE_LOAD_BEGIN"]) {
-            self.installationController.statusText = @"Reading restore image…";
+            self.installationController.statusText = VZL(@"Reading restore image…");
         } else if ([log containsString:@"INSTALL_PREPARE_BEGIN"]) {
-            self.installationController.statusText = @"Starting restoration services…";
+            self.installationController.statusText = VZL(@"Starting installation services…");
         }
     }];
 }
@@ -2107,7 +2656,7 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     (void)virtualMachine;
     printf("[VirtualMac] VM delegate didStopWithError=%s\n",
            error ? [[error description] UTF8String] : "(none)");
-    setStatus([NSString stringWithFormat:@"Virtual Mac stopped: %@",
+    setStatus([NSString stringWithFormat:VZL(@"Virtual Mac stopped: %@"),
                                         error.localizedDescription]);
     [self finishVMAndShowLibraryWithError:error];
 }
@@ -2139,15 +2688,20 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     gCursorView.image = nil;
     gCursorView.hidden = YES;
     gInputView.hidden = YES;
+    gTouchScrollRecognizer = nil;
+    gPinchRecognizer = nil;
+    gRotationRecognizer = nil;
+    gSmartMagnifyRecognizer = nil;
     self.activeVMBundlePath = nil;
     [self presentVMLibrary];
     if (error) {
         UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"Virtual Mac Stopped"
+            alertControllerWithTitle:VZL(@"Virtual Mac Stopped")
                              message:error.localizedDescription
                       preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
             style:UIAlertActionStyleDefault handler:nil]];
+        VZAddFailureSupportActions(alert);
         [self presentViewController:alert animated:YES completion:nil];
     }
 }
@@ -2233,15 +2787,20 @@ static void updateDisplayGeometry(void) {
 
 static void setStatus(NSString *status) {
     printf("[VirtualMac] %s\n", [status UTF8String]);
-    if (gStatusLabel)
-        gStatusLabel.text = status;
+    if (!gStatusLabel)
+        return;
+    // Boot status is diagnostic-only and hidden by default. Avoid crossing
+    // UIKit objects between the iPadOS 14 VZ worker and the main thread.
+    if (!pthread_main_np())
+        return;
+    gStatusLabel.text = status;
 }
 
 static void traceFrameUpdate(id self, SEL selector, id framebuffer,
                              VZFrameUpdateSharedPtr update) {
     uint64_t count = __sync_add_and_fetch(&gFrameUpdateCount, 1);
     const VZFrameUpdateSharedPtr *shared = update.object;
-    if (count <= 3 || count % 300 == 0)
+    if (count <= 3 || (gDebugLogging && count % 300 == 0))
         printf("[VirtualMac] PVG frame=%llu framebuffer=%p update=%p control=%p\n",
                (unsigned long long)count, framebuffer,
                shared ? shared->object : NULL,
@@ -2333,7 +2892,7 @@ static void updateCursorOverlay(VZFrameUpdateSharedPtr update) {
 static void traceCursorUpdate(id self, SEL selector, id framebuffer,
                               VZFrameUpdateSharedPtr update) {
     uint64_t count = __sync_add_and_fetch(&gCursorUpdateCount, 1);
-    if (count <= 8 || count % 300 == 0) {
+    if (count <= 8 || (gDebugLogging && count % 300 == 0)) {
         const VZFrameUpdateSharedPtr *shared = update.object;
         const uint8_t *cursor = shared ? shared->object : NULL;
         printf("[VirtualMac] PVG cursor=%llu pos=%u,%u image-change=%d "
@@ -2640,6 +3199,14 @@ static void requestMicrophoneAccess(dispatch_block_t continuation) {
 
 static void configureNetwork(id configuration, NSDictionary *options) {
     NSString *mode = options[@"NetworkMode"] ?: @"NAT";
+    if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14 &&
+        [mode isEqualToString:@"Bridge"]) {
+        // The iPadOS 14 Wi-Fi stack cannot register a second station MAC for
+        // a guest. Treat legacy configurations as NAT; newer hosts retain the
+        // existing bridged-network implementation unchanged.
+        printf("[VirtualMac] bridged networking is unavailable on iPadOS 14; using NAT\n");
+        mode = @"NAT";
+    }
     if ([mode isEqualToString:@"Disabled"] ||
         [NSUserDefaults.standardUserDefaults boolForKey:@"VZDisableNetwork"]) {
         printf("[VirtualMac] network disabled\n");
@@ -2713,7 +3280,7 @@ static void configureDirectorySharing(id configuration,
         if (!directory)
             continue;
         NSString *baseName = path.lastPathComponent.length
-            ? path.lastPathComponent : @"Shared Folder";
+            ? path.lastPathComponent : VZL(@"Shared Folder");
         NSString *name = baseName;
         for (NSUInteger suffix = 2; directories[name]; suffix++)
             name = [NSString stringWithFormat:@"%@ %lu", baseName,
@@ -2771,8 +3338,9 @@ static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
     NSUInteger hostCPUCount = NSProcessInfo.processInfo.activeProcessorCount;
     NSUInteger cpuCount = [options[@"CPUCount"] unsignedIntegerValue];
     cpuCount = MAX((NSUInteger)2, MIN(cpuCount, hostCPUCount));
-    uint64_t memoryLimit = NSProcessInfo.processInfo.physicalMemory >=
-        (12ULL << 30) ? (8ULL << 30) : (6ULL << 30);
+    uint64_t physicalMemory = NSProcessInfo.processInfo.physicalMemory;
+    uint64_t memoryLimit = MAX((2ULL << 30),
+        (physicalMemory >> 30) << 30);
     uint64_t memorySize = [options[@"MemorySize"] unsignedLongLongValue];
     memorySize = MAX((2ULL << 30), MIN(memorySize, memoryLimit));
     ((void(*)(id, SEL, NSUInteger))objc_msgSend)(
@@ -2794,13 +3362,23 @@ static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
     // (2388x1668 on the connected 11-inch iPad Pro). A Retina-density PPI
     // makes macOS expose this as a 2x logical desktop instead of a scaled
     // low-density monitor.
-    BOOL customDisplay = [options[@"DisplayMode"] isEqualToString:@"Custom"];
+    NSString *displayMode = options[@"DisplayMode"];
+    BOOL customDisplay = [displayMode isEqualToString:@"Custom"];
+    BOOL portraitDisplay = [displayMode isEqualToString:
+        @"PortraitNativeRetina"];
+    CGSize nativePixelSize = screen.nativeBounds.size;
     NSInteger displayWidth = customDisplay
         ? [options[@"DisplayWidth"] integerValue]
-        : (NSInteger)llround(hostSize.width * nativeScale);
+        : portraitDisplay
+            ? (NSInteger)llround(MIN(nativePixelSize.width,
+                                     nativePixelSize.height))
+            : (NSInteger)llround(hostSize.width * nativeScale);
     NSInteger displayHeight = customDisplay
         ? [options[@"DisplayHeight"] integerValue]
-        : (NSInteger)llround(hostSize.height * nativeScale);
+        : portraitDisplay
+            ? (NSInteger)llround(MAX(nativePixelSize.width,
+                                     nativePixelSize.height))
+            : (NSInteger)llround(hostSize.height * nativeScale);
     NSInteger pixelsPerInch = customDisplay
         ? [options[@"DisplayPixelsPerInch"] integerValue] : 264;
     displayWidth = MAX(800, MIN(7680, displayWidth));
@@ -2869,13 +3447,13 @@ static BOOL prepareFramebuffer(UIView *container) {
            [[graphicsDevices description] UTF8String],
            [[framebuffers description] UTF8String]);
     if (!framebuffer) {
-        setStatus(@"Virtual Mac has no published framebuffer");
+        setStatus(VZL(@"Virtual Mac has no published framebuffer"));
         return NO;
     }
 
     Class framebufferViewClass = objc_getClass("_VZFramebufferView");
     if (!framebufferViewClass) {
-        setStatus(@"_VZFramebufferView is unavailable");
+        setStatus(VZL(@"The Virtual Mac display view is unavailable"));
         return NO;
     }
     VZSetNSViewFrameRequestsSuppressed(NO);
@@ -2908,6 +3486,49 @@ static BOOL prepareFramebuffer(UIView *container) {
     return YES;
 }
 
+typedef struct {
+    UIView *container;
+    BOOL result;
+} VZPrepareFramebufferContext;
+
+static void prepareFramebufferOnMain(void *opaque) {
+    VZPrepareFramebufferContext *context = opaque;
+    context->result = prepareFramebuffer(context->container);
+}
+
+static BOOL prepareFramebufferThreadSafe(UIView *container) {
+    if (pthread_main_np())
+        return prepareFramebuffer(container);
+    VZPrepareFramebufferContext context = { container, NO };
+    dispatch_sync_f(dispatch_get_main_queue(), &context,
+                    prepareFramebufferOnMain);
+    return context.result;
+}
+
+typedef struct {
+    id delegate;
+    NSError *error;
+} VZFinishContext;
+
+static void finishVMOnMain(void *opaque) {
+    VZFinishContext *context = opaque;
+    [context->delegate finishVMAndShowLibraryWithError:context->error];
+    [context->delegate release];
+    [context->error release];
+    free(context);
+}
+
+static void finishVMThreadSafe(id delegate, NSError *error) {
+    if (pthread_main_np()) {
+        [delegate finishVMAndShowLibraryWithError:error];
+        return;
+    }
+    VZFinishContext *context = calloc(1, sizeof(*context));
+    context->delegate = [delegate retain];
+    context->error = [error retain];
+    dispatch_async_f(dispatch_get_main_queue(), context, finishVMOnMain);
+}
+
 static void activateFramebuffer(void) {
     id view = gFramebufferView;
     id framebuffer = gFramebuffer;
@@ -2930,12 +3551,36 @@ static void activateFramebuffer(void) {
                    dispatch_get_main_queue(), ^{
         logFramebufferState(view, framebuffer, "after-2s");
     });
-    setStatus(@"Virtual Mac running — native PVG framebuffer attached");
+    setStatus(VZL(@"Virtual Mac running — native PVG framebuffer attached"));
 }
 
-static void startVirtualMachine(UIView *container, id delegate,
-                                NSString *bundlePath,
-                                NSDictionary *options) {
+typedef struct {
+    id virtualMachine;
+    id startOptions;
+    void (^completion)(NSError *);
+} VZInvokeStartContext;
+
+static void invokeVirtualMachineStartOnMain(void *opaque) {
+    VZInvokeStartContext *context = opaque;
+    if (context->startOptions) {
+        ((void(*)(id, SEL, id, id))objc_msgSend)(
+            context->virtualMachine,
+            S("startWithOptions:completionHandler:"),
+            context->startOptions, context->completion);
+    } else {
+        ((void(*)(id, SEL, id))objc_msgSend)(
+            context->virtualMachine, S("startWithCompletionHandler:"),
+            context->completion);
+    }
+    [context->virtualMachine release];
+    [context->startOptions release];
+    [context->completion release];
+    free(context);
+}
+
+static void startVirtualMachineWorker(UIView *container, id delegate,
+                                      NSString *bundlePath,
+                                      NSDictionary *options) {
     unlink("/tmp/vzxpchook.log");
     unlink("/tmp/vmmhook.log");
     unlink("/tmp/vmm.stderr.log");
@@ -2945,8 +3590,10 @@ static void startVirtualMachine(UIView *container, id delegate,
     setenv("VZ_AVP_BOOTER",
            "/var/root/VirtualMac/payload/Frameworks/Virtualization.framework/Resources/AVPBooter.vmapple2.bin",
            1);
-    setenv("VMMHOOK_TRACE_VCPU_LIMIT", "8", 1);
-    setenv("VMMHOOK_TRACE_XPC_LIMIT", "8", 1);
+    gDebugLogging = [VZAppSettings.sharedSettings boolForKey:VZDebugLoggingKey];
+    setenv("VZ_DEBUG_LOGGING", gDebugLogging ? "1" : "0", 1);
+    setenv("VMMHOOK_TRACE_VCPU_LIMIT", gDebugLogging ? "256" : "8", 1);
+    setenv("VMMHOOK_TRACE_XPC_LIMIT", gDebugLogging ? "200" : "8", 1);
     setenv("VMM_FACTORY_SETTLE_USEC", "100000", 1);
     // Timestamp correlation places PGIOSurfaceHostDevice finalization just
     // before serialized factory boundary 6. Pause only that boundary long
@@ -2954,7 +3601,12 @@ static void startVirtualMachine(UIView *container, id delegate,
     setenv("VMM_FACTORY_LONG_STOP", "6", 1);
     setenv("VMM_FACTORY_LONG_SETTLE_USEC", "5000000", 1);
     setenv("PVG_TRACE", "1", 1);
-    setenv("PVG_TRACE_METHODS", "1", 1);
+    // Functional PVG task compatibility remains installed in every build;
+    // this flag enables only the additional diagnostic method wrappers.
+    if (gDebugLogging)
+        setenv("PVG_TRACE_METHODS", "1", 1);
+    else
+        unsetenv("PVG_TRACE_METHODS");
     // WindowServer's long-lived PVG task reached 1.07 GiB while Launchpad was
     // populating its icon textures. Keep ordinary app clients at 1 GiB so 20+
     // simultaneous clients fit in the iPad VA, but give the first three
@@ -2964,13 +3616,13 @@ static void startVirtualMachine(UIView *container, id delegate,
     setenv("PVG_LARGE_TASK_COUNT", "3", 1);
     setenv("PVG_METALLIB_FALLBACK", "1", 1);
 
-    setStatus(@"Loading extracted Apple virtualization frameworks…");
+    setStatus(VZL(@"Loading extracted Apple virtualization frameworks…"));
     if (!loadExtractedFrameworks()) {
-        setStatus(@"Failed to load extracted frameworks");
+        setStatus(VZL(@"Failed to load extracted frameworks"));
         NSError *loadError = [NSError errorWithDomain:@"VirtualMac" code:1
             userInfo:@{NSLocalizedDescriptionKey:
-                @"Failed to load the extracted Apple virtualization frameworks."}];
-        [delegate finishVMAndShowLibraryWithError:loadError];
+                VZL(@"Failed to load the extracted Apple virtualization frameworks.")}];
+        finishVMThreadSafe(delegate, loadError);
         return;
     }
 
@@ -2978,21 +3630,21 @@ static void startVirtualMachine(UIView *container, id delegate,
     NSError *error = nil;
     id configuration = makeConfiguration(bundlePath, options, &error);
     if (!configuration) {
-        setStatus([NSString stringWithFormat:@"Configuration failed: %@",
+        setStatus([NSString stringWithFormat:VZL(@"Configuration failed: %@"),
                                             error.localizedDescription]);
         if (!error)
             error = [NSError errorWithDomain:@"VirtualMac" code:2
                 userInfo:@{NSLocalizedDescriptionKey:
-                    @"The virtual Mac configuration could not be created."}];
-        [delegate finishVMAndShowLibraryWithError:error];
+                    VZL(@"The Virtual Mac configuration could not be created.")}];
+        finishVMThreadSafe(delegate, error);
         return;
     }
     BOOL valid = ((BOOL(*)(id, SEL, NSError **))objc_msgSend)(
         configuration, S("validateWithError:"), &error);
     if (!valid) {
-        setStatus([NSString stringWithFormat:@"Validation failed: %@",
+        setStatus([NSString stringWithFormat:VZL(@"Validation failed: %@"),
                                             error.localizedDescription]);
-        [delegate finishVMAndShowLibraryWithError:error];
+        finishVMThreadSafe(delegate, error);
         return;
     }
 
@@ -3015,26 +3667,26 @@ static void startVirtualMachine(UIView *container, id delegate,
     dumpRPCHandlers(gVirtualMachine, "after-init");
     // setFramebuffer: installs the process_frame_update handler needed by the
     // VMM. The host hook holds its set_frame_rate message until start succeeds.
-    if (!prepareFramebuffer(container)) {
+    if (!prepareFramebufferThreadSafe(container)) {
         NSError *framebufferError = [NSError errorWithDomain:@"VirtualMac"
             code:3 userInfo:@{NSLocalizedDescriptionKey:
-                @"The virtual Mac did not publish a display framebuffer."}];
-        [delegate finishVMAndShowLibraryWithError:framebufferError];
+                VZL(@"The Virtual Mac did not publish a display framebuffer.")}];
+        finishVMThreadSafe(delegate, framebufferError);
         return;
     }
-    setStatus(@"Starting virtual Mac…");
+    setStatus(VZL(@"Starting Virtual Mac…"));
     void (^completion)(NSError *) = ^(NSError *startError) {
         if (startError) {
-            setStatus([NSString stringWithFormat:@"Virtual Mac start failed: %@",
+            setStatus([NSString stringWithFormat:VZL(@"Virtual Mac start failed: %@"),
                                                 startError.localizedDescription]);
-            [delegate finishVMAndShowLibraryWithError:startError];
+            finishVMThreadSafe(delegate, startError);
             return;
         }
         printf("[VirtualMac] VM STARTED state=%ld\n",
                (long)((NSInteger(*)(id, SEL))objc_msgSend)(
                    gVirtualMachine, S("state")));
         dumpRPCHandlers(gVirtualMachine, "after-start");
-        setStatus(@"Virtual Mac running — preparing native PVG display");
+        setStatus(VZL(@"Virtual Mac running — preparing native PVG display"));
         gHostVMStarted();
         // Let the start reply return before exposing the registered display.
         dispatch_after(
@@ -3043,21 +3695,73 @@ static void startVirtualMachine(UIView *container, id delegate,
             activateFramebuffer();
         });
     };
+    id startOptions = nil;
     if ([options[@"BootRecovery"] boolValue] &&
         [gVirtualMachine respondsToSelector:
             S("startWithOptions:completionHandler:")]) {
-        id startOptions = NEW("VZMacOSVirtualMachineStartOptions");
+        startOptions = NEW("VZMacOSVirtualMachineStartOptions");
         ((void(*)(id, SEL, BOOL))objc_msgSend)(
             startOptions, S("setStartUpFromMacOSRecovery:"), YES);
         printf("[VirtualMac] configured recovery start\n");
+    }
+    if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14 &&
+        !pthread_main_np()) {
+        VZInvokeStartContext *context = calloc(1, sizeof(*context));
+        context->virtualMachine = [gVirtualMachine retain];
+        context->startOptions = [startOptions retain];
+        context->completion = [completion copy];
+        dispatch_async_f(dispatch_get_main_queue(), context,
+                         invokeVirtualMachineStartOnMain);
+    } else if (startOptions) {
         ((void(*)(id, SEL, id, id))objc_msgSend)(
             gVirtualMachine, S("startWithOptions:completionHandler:"),
             startOptions, completion);
-        [startOptions release];
     } else {
         ((void(*)(id, SEL, id))objc_msgSend)(
             gVirtualMachine, S("startWithCompletionHandler:"), completion);
     }
+    [startOptions release];
+}
+
+typedef struct {
+    UIView *container;
+    id delegate;
+    NSString *bundlePath;
+    NSDictionary *options;
+} VZStartContext;
+
+static void startVirtualMachineOnBackgroundQueue(void *opaque) {
+    VZStartContext *context = opaque;
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    startVirtualMachineWorker(context->container, context->delegate,
+                              context->bundlePath, context->options);
+    [context->container release];
+    [context->delegate release];
+    [context->bundlePath release];
+    [context->options release];
+    free(context);
+    [pool drain];
+}
+
+static void startVirtualMachine(UIView *container, id delegate,
+                                NSString *bundlePath,
+                                NSDictionary *options) {
+    // Ventura's VZ startup performs synchronous XPC and device construction.
+    // On iPadOS 14, doing that from a tap blocks UIKit long enough to trip the
+    // 10-second scene-update watchdog. Keep iPadOS 15/16 on their proven path.
+    if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14 &&
+        pthread_main_np()) {
+        VZStartContext *context = calloc(1, sizeof(*context));
+        context->container = [container retain];
+        context->delegate = [delegate retain];
+        context->bundlePath = [bundlePath copy];
+        context->options = [options copy];
+        dispatch_async_f(
+            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), context,
+            startVirtualMachineOnBackgroundQueue);
+        return;
+    }
+    startVirtualMachineWorker(container, delegate, bundlePath, options);
 }
 
 @interface VirtualMacAppDelegate : UIResponder <UIApplicationDelegate>
@@ -3083,6 +3787,7 @@ static void startVirtualMachine(UIView *container, id delegate,
     freopen("/tmp/VirtualMac.log", "a", stdout);
     freopen("/tmp/VirtualMac.log", "a", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
+    installIPadOS162KeyboardRenderingFix();
     installShellShortcutRelay();
 
     self.window = [[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]
@@ -3104,6 +3809,7 @@ static void startVirtualMachine(UIView *container, id delegate,
         gStatusLabel.numberOfLines = 2;
         gStatusLabel.userInteractionEnabled = NO;
         gStatusLabel.layer.cornerRadius = 10;
+        gStatusLabel.layer.cornerCurve = kCACornerCurveContinuous;
         gStatusLabel.clipsToBounds = YES;
         [controller.view addSubview:gStatusLabel];
         [NSLayoutConstraint activateConstraints:@[
@@ -3141,20 +3847,43 @@ static void startVirtualMachine(UIView *container, id delegate,
     scrollRecognizer.allowedTouchTypes = @[];
     scrollRecognizer.cancelsTouchesInView = NO;
     [inputView addGestureRecognizer:scrollRecognizer];
+    UIPanGestureRecognizer *touchScroll = [[[UIPanGestureRecognizer alloc]
+        initWithTarget:inputView action:@selector(handleTouchScroll:)]
+        autorelease];
+    touchScroll.minimumNumberOfTouches = 2;
+    touchScroll.maximumNumberOfTouches = 2;
+    touchScroll.allowedTouchTypes = @[@(UITouchTypeDirect)];
+    touchScroll.cancelsTouchesInView = YES;
+    touchScroll.enabled = [VZAppSettings.sharedSettings
+        boolForKey:VZTouchTwoFingerScrollingKey];
+    [inputView addGestureRecognizer:touchScroll];
+    gTouchScrollRecognizer = touchScroll;
     UIPinchGestureRecognizer *pinch = [[[UIPinchGestureRecognizer alloc]
         initWithTarget:inputView action:@selector(handlePinch:)] autorelease];
     pinch.cancelsTouchesInView = NO;
     [inputView addGestureRecognizer:pinch];
+    gPinchRecognizer = pinch;
     UIRotationGestureRecognizer *rotation = [[[UIRotationGestureRecognizer alloc]
         initWithTarget:inputView action:@selector(handleRotation:)] autorelease];
     rotation.cancelsTouchesInView = NO;
     [inputView addGestureRecognizer:rotation];
+    gRotationRecognizer = rotation;
     UITapGestureRecognizer *smartMagnify = [[[UITapGestureRecognizer alloc]
         initWithTarget:inputView action:@selector(handleSmartMagnify:)]
         autorelease];
     smartMagnify.numberOfTouchesRequired = 2;
     smartMagnify.numberOfTapsRequired = 2;
     smartMagnify.cancelsTouchesInView = NO;
+    gSmartMagnifyRecognizer = smartMagnify;
+    if ([VZAppSettings.sharedSettings
+            boolForKey:VZTouchTwoFingerScrollingKey]) {
+        // Direct two-finger motion otherwise begins UIKit's pinch/rotation
+        // recognizers first and the pan never emits a scroll event. Those
+        // recognizers remain available for a hardware trackpad.
+        pinch.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+        rotation.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+        smartMagnify.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+    }
     [inputView addGestureRecognizer:smartMagnify];
     [controller.view addSubview:inputView];
 
@@ -3179,11 +3908,11 @@ static void startVirtualMachine(UIView *container, id delegate,
         iconWithSystemImageName:@"slider.horizontal.3"];
     application.shortcutItems = @[[[[UIApplicationShortcutItem alloc]
         initWithType:@"com.mac.virtual.show-library"
-        localizedTitle:@"Show Library" localizedSubtitle:nil
+        localizedTitle:VZL(@"Show Library") localizedSubtitle:nil
         icon:libraryIcon userInfo:nil] autorelease],
         [[[UIApplicationShortcutItem alloc]
         initWithType:@"com.mac.virtual.show-controls"
-        localizedTitle:@"Show Virtual Mac Controls" localizedSubtitle:nil
+        localizedTitle:VZL(@"Show Virtual Mac Controls") localizedSubtitle:nil
         icon:controlsIcon userInfo:nil] autorelease]];
     unlink("/tmp/virtual-mac-vm-active");
     gMouseLocation = CGPointMake(CGRectGetMidX(inputView.bounds),
@@ -3301,6 +4030,7 @@ static void startVirtualMachine(UIView *container, id delegate,
 {
     (void)application;
     resetPointerSession(YES);
+    recoverNetworkingAfterResume();
     if (gInputView) {
         for (id interaction in gInputView.interactions)
             if ([interaction respondsToSelector:@selector(invalidate)])

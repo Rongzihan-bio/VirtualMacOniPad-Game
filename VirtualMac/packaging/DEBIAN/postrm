@@ -1,11 +1,26 @@
-#!/var/jb/bin/sh
+#!/bin/sh
 
 set -eu
 export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 
 if test "${1:-}" = remove || test "${1:-}" = purge; then
     # VM bundles deliberately remain in /var/mobile/Media/VirtualMac.
-    /var/jb/usr/bin/uicache -a 2>/dev/null || true
-    echo "finish:restart"
+    uicache -a 2>/dev/null || true
+    if test -n "${CYDIA:-}"; then
+        read -r finish_fd finish_version <<EOF
+$CYDIA
+EOF
+        case "$finish_fd" in
+            ''|*[!0-9]*) ;;
+            *)
+                if test "${finish_version:-0}" -ge 1 2>/dev/null; then
+                    echo "finish:restart" >&$finish_fd
+                fi
+                ;;
+        esac
+    else
+        echo "finish:restart"
+    fi
 fi
+rm -f /var/root/.virtualmac-preserve-root 2>/dev/null || true
 exit 0

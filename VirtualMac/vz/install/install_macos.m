@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -35,6 +36,38 @@ static NSURL *FileURL(NSString *path)
     return [NSURL fileURLWithPath:path];
 }
 
+static void MakeFailedBundleAccessible(void)
+{
+    if (!gStagingBundlePath.length || ![[NSFileManager defaultManager]
+            fileExistsAtPath:gStagingBundlePath])
+        return;
+    // The installer runs as root, while UIKit deliberately remains mobile.
+    // Hand the complete partial tree back before reporting the error so the
+    // app can archive or delete it. Restore may add files that this launcher
+    // does not know by name, so enumerating is safer than a fixed file list.
+    struct passwd *mobile = getpwnam("mobile");
+    uid_t uid = mobile ? mobile->pw_uid : 501;
+    gid_t gid = mobile ? mobile->pw_gid : 501;
+    NSMutableArray<NSString *> *paths = [NSMutableArray
+        arrayWithObject:gStagingBundlePath];
+    NSDirectoryEnumerator *enumerator = [[NSFileManager defaultManager]
+        enumeratorAtPath:gStagingBundlePath];
+    for (NSString *relativePath in enumerator)
+        [paths addObject:[gStagingBundlePath
+            stringByAppendingPathComponent:relativePath]];
+    for (NSString *path in paths) {
+        struct stat status;
+        if (lstat(path.fileSystemRepresentation, &status) != 0)
+            continue;
+        lchown(path.fileSystemRepresentation, uid, gid);
+        if (S_ISLNK(status.st_mode))
+            continue;
+        mode_t accessibleMode = status.st_mode & 0777;
+        accessibleMode |= S_ISDIR(status.st_mode) ? 0700 : 0600;
+        chmod(path.fileSystemRepresentation, accessibleMode);
+    }
+}
+
 static uint64_t EnvironmentUInt64(const char *name, uint64_t fallback,
                                   uint64_t minimum, uint64_t maximum)
 {
@@ -51,6 +84,7 @@ static uint64_t EnvironmentUInt64(const char *name, uint64_t fallback,
 
 static void FinishWithError(NSString *stage, NSError *error)
 {
+    MakeFailedBundleAccessible();
     fprintf(stderr, "INSTALL_FAILED\tstage=%s\terror=%s\n",
             stage.UTF8String ?: "(unknown)",
             error.description.UTF8String ?: "(unknown)");
@@ -182,7 +216,9 @@ static id CreateConfiguration(id requirements, NSError **error)
     SetObject(configuration, "setBootLoader:", New("VZMacOSBootLoader"));
     SetObject(configuration, "setStorageDevices:", @[blockDevice]);
 
-    // The display is install-time only; the user's configured native-resolution display remains the runtime device.
+    // The display is install-time only; the user's configured native-resolution
+    // display remains the runtime device. RestoreOS builds may still require a
+    // graphics device, so every supported host configures the same display.
     id display = ((id (*)(id, SEL, NSInteger, NSInteger, NSInteger))
         objc_msgSend)(Alloc("VZMacGraphicsDisplayConfiguration"),
             S("initWithWidthInPixels:heightInPixels:pixelsPerInch:"),

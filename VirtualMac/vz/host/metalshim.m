@@ -8,6 +8,8 @@
 #import <Metal/Metal.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#include <stdlib.h>
+#include <string.h>
 
 static id (*gNewBufferWithLength)(id, SEL, NSUInteger, MTLResourceOptions);
 static id (*gNewBufferWithBytes)(
@@ -24,6 +26,16 @@ static void (*gSetTexturePixelFormat)(id, SEL, MTLPixelFormat);
 static void (*gSetHeapStorageMode)(id, SEL, MTLStorageMode);
 static BOOL gInstalledSharedBufferCompatibility;
 static unsigned long gMacCompressedTextureCount;
+
+static BOOL DebugLoggingEnabled(void) {
+    static BOOL enabled;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *value = getenv("VZ_DEBUG_LOGGING");
+        enabled = value && value[0] && strcmp(value, "0") != 0;
+    });
+    return enabled;
+}
 
 // macOS: NSArray<id<MTLDevice>> *MTLCopyAllDevices(void)  — +1 (the "Copy" rule).
 // iOS has exactly one GPU, so return the system default in a one-element array.
@@ -178,10 +190,13 @@ static void iPadSetTexturePixelFormat(id self, SEL selector,
         return;
     }
     MTLPixelFormat fallback = iPadCompressedFallback(pixelFormat);
-    unsigned long count = __sync_add_and_fetch(&gMacCompressedTextureCount, 1);
-    if (count <= 20 || count % 100 == 0)
-        fprintf(stderr, "[metalshim] mapped Mac BC format=%lu to iPad format=%lu count=%lu\n",
-                (unsigned long)pixelFormat, (unsigned long)fallback, count);
+    if (DebugLoggingEnabled()) {
+        unsigned long count = __sync_add_and_fetch(
+            &gMacCompressedTextureCount, 1);
+        if (count <= 20 || count % 100 == 0)
+            fprintf(stderr, "[metalshim] mapped Mac BC format=%lu to iPad format=%lu count=%lu\n",
+                    (unsigned long)pixelFormat, (unsigned long)fallback, count);
+    }
     gSetTexturePixelFormat(self, selector, fallback);
 }
 
@@ -201,7 +216,7 @@ static id iPadNewTextureWithDescriptor(
     id self, SEL selector, MTLTextureDescriptor *descriptor) {
     NormalizeTextureDescriptor(descriptor);
     id texture = gNewTextureWithDescriptor(self, selector, descriptor);
-    if (IsMacBCPixelFormat(descriptor.pixelFormat))
+    if (DebugLoggingEnabled() && IsMacBCPixelFormat(descriptor.pixelFormat))
         fprintf(stderr, "[metalshim] BC texture format=%lu %lux%lu -> %p\n",
                 (unsigned long)descriptor.pixelFormat,
                 (unsigned long)descriptor.width,

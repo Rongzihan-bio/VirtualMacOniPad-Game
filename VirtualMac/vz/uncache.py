@@ -1447,6 +1447,23 @@ def main(dsc, image_substr, dex_out, final_out, mode="compact"):
     }
     imports = []; impidx = {}
     entries = {}  # new_loc -> (kind, val, auth, key, div, addrdiv, high8)
+
+    def canonical_import_name(name):
+        """Turn ipsw/a2s slot labels back into the imported symbol name.
+
+        Address-to-symbol databases name a shared-cache GOT slot
+        ``__got._symbol`` (and some older databases use ``_ptr._symbol``).
+        That is useful when describing the cache address, but it is not an
+        exported symbol.  Emitting the label into LC_DYLD_CHAINED_FIXUPS makes
+        dyld weak-bind the reconstructed auth stub to NULL.  This is visible
+        in Big Sur Hypervisor.framework: every __auth_got call target,
+        including dispatch_once, becomes zero on iPadOS 14.
+        """
+        if name and name.startswith("__got."):
+            name = name[len("__got."):]
+        if name and name.startswith("_ptr."):
+            name = name[len("_ptr."):]
+        return ALIAS.get(name, name)
     # PLAIN pointers carry a TBI/high8 byte in bits 56-63 (arm64e plain-rebase has a
     # dedicated high8 field). Strip it for in-image classification + target math, then
     # re-apply on emit. AUTH targets (offsetFromSharedCacheBase + auth_value_add) never
@@ -1488,9 +1505,7 @@ def main(dsc, image_substr, dex_out, final_out, mode="compact"):
             entries[nloc] = ("rebase", localize[rt]-nbase, auth, key, div, ad, high8); nreb += 1
         else:
             name = sym_map.get(rt, (None, None))[0]
-            if name and name.startswith("_ptr."):
-                name = name[5:]          # ipsw GOT-slot notation -> the real symbol
-            name = ALIAS.get(name, name)
+            name = canonical_import_name(name)
             if name == "_OBJC_CLASS_$_Protocol":
                 # Protocol-uniquing reference: the cache redirects every @protocol / adopted-
                 # protocol pointer to libobjc's canonical protocol_t (whose isa is
@@ -1520,14 +1535,14 @@ def main(dsc, image_substr, dex_out, final_out, mode="compact"):
     for ns, nt in objc_slot_reb:                  # objc selref slots (plain in-image rebases)
         entries[ns] = ("rebase", nt - nbase, 0, 0, 0, 0, 0); nreb += 1
     for slot, name in auth_stub_binds:            # rebuilt __auth_got: auth-binds (braa: key IA, addrDiv)
-        name = ALIAS.get(name, name)
+        name = canonical_import_name(name)
         k = (0xFE, name)
         if k not in impidx:
             impidx[k] = len(imports); imports.append(k)
         entries[slot] = ("bind", impidx[k], 1, 0, 0, 1, 0); nbind += 1
     for name, slot in got_slot.items():           # rebuilt GOT pool: data (plain) + fn ptrs (auth, braa)
         au = got_auth[name]
-        name = ALIAS.get(name, name)
+        name = canonical_import_name(name)
         k = (0xFE, name)
         if k not in impidx:
             impidx[k] = len(imports); imports.append(k)

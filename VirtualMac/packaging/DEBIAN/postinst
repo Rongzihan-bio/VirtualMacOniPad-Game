@@ -1,15 +1,240 @@
-#!/var/jb/bin/sh
+#!/bin/sh
 
 set -eu
 export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 
 runtime=/var/root/VirtualMac
-app=/var/jb/Applications/VirtualMac.app
+tweak_payload=$runtime/bootstrap-common/usr/lib/TweakInject
 library=/var/mobile/Media/VirtualMac
 support=$library
-launchctl=/var/jb/usr/bin/launchctl
+host_version="$(sw_vers -productVersion)"
+objc_class_data_auth=0
+# iPadOS changed Objective-C class-data authentication during iPadOS 15.
+# Detect the actual libobjc implementation: the newer runtime's safe_ro helper is present 
+# in the system cache's local-symbol companion beginning with 15.4, while 15.3.1 and earlier lack it.
+case "$host_version" in
+    15.*)
+        objc_symbols=/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e.symbols
+        if test -f "$objc_symbols" && \
+            LC_ALL=C grep -a -q '_ZNK17class_data_bits_t7safe_roEv' "$objc_symbols"; then
+            objc_class_data_auth=1
+        fi
+        ;;
+esac
+prefix=/var/jb
+rootless=1
+jbctl=/var/jb/usr/bin/jbctl
+
+# Taurine caches code-signing state on the vnode. Overwriting an already
+# executed Mach-O in place can leave the old validation attached to the new
+# bytes and produce EAUTH until an on-device signer rewrites it. Install every
+# selected/copied executable and dylib through a new inode instead.
+replace_file() {
+    replace_source="$1"
+    replace_destination="$2"
+    replace_temporary="${replace_destination}.virtualmac-new"
+    cp "$replace_source" "$replace_temporary"
+    chmod 755 "$replace_temporary"
+    mv -f "$replace_temporary" "$replace_destination"
+}
+
+test -x "$jbctl" || jbctl=/var/jb/basebin/jbctl
+if test ! -x "$jbctl"; then
+    # Taurine is rootful. The framework runtime already lives at the common
+    # /var/root path; install only the bootstrap-specific app and helpers.
+    rootless=0
+    prefix=
+    rootful_payload="$runtime/bootstrap-rootful"
+    universal_payload=/var/jb
+    test -d "$universal_payload/Applications/VirtualMac.app"
+    test -x "$rootful_payload/usr/libexec/VirtualMac/InternetSharing.ipados14"
+    # Replace the app bundle as a unit so resources removed by an update do
+    # not survive indefinitely on a rootful device.
+    rm -rf /Applications/VirtualMac.app
+    cp -R "$universal_payload/Applications/VirtualMac.app" /Applications/
+    replace_file \
+        "$universal_payload/Applications/VirtualMac.app/VirtualMac" \
+        /Applications/VirtualMac.app/VirtualMac
+    replace_file \
+        "$universal_payload/Applications/VirtualMac.app/VZHostCompat.dylib" \
+        /Applications/VirtualMac.app/VZHostCompat.dylib
+    mkdir -p /usr/bin
+    replace_file "$universal_payload/usr/bin/virtualmac-diagnostics" \
+        /usr/bin/virtualmac-diagnostics
+    mkdir -p /usr/lib/VirtualMac /usr/libexec/VirtualMac \
+        /usr/sbin/VirtualMac
+    for source_file in \
+        "$universal_payload/usr/lib/libmrc.dylib" \
+        "$universal_payload/usr/lib/AuthorizationCompat.dylib" \
+        "$universal_payload/usr/lib/OpenDirectoryCompat.dylib" \
+        "$universal_payload/usr/lib/IOKit14Compat.dylib"; do
+        replace_file "$source_file" "/usr/lib/VirtualMac/${source_file##*/}"
+    done
+    for source_file in "$rootful_payload/usr/libexec/VirtualMac/"*; do
+        replace_file "$source_file" "/usr/libexec/VirtualMac/${source_file##*/}"
+    done
+    replace_file "$universal_payload/usr/sbin/rtadvd" \
+        /usr/sbin/VirtualMac/rtadvd
+
+    # Releases before 1.1 staged a second copy of these shared files below the
+    # rootful bootstrap directory. They are no longer package payload; remove
+    # only those exact legacy paths after their replacements are installed.
+    rm -rf \
+        "$rootful_payload/Applications" \
+        "$rootful_payload/Library" \
+        "$rootful_payload/usr/bin" \
+        "$rootful_payload/usr/lib" \
+        "$rootful_payload/usr/sbin"
+    rm -f \
+        "$rootful_payload/usr/libexec/InternetSharing" \
+        "$rootful_payload/usr/libexec/InternetSharing.ipados14" \
+        "$rootful_payload/usr/libexec/InternetSharing.ipados15" \
+        "$rootful_payload/usr/libexec/InternetSharing.ipados16"
+fi
+app="$prefix/Applications/VirtualMac.app"
+launchctl="$prefix/usr/bin/launchctl"
+uicache="$prefix/usr/bin/uicache"
+helper_bin_dir="$prefix/usr/libexec"
+helper_lib_dir="$prefix/usr/lib"
+launch_daemons="$prefix/Library/LaunchDaemons"
+
+# Install this only after dpkg has removed paths owned by 1.0. The former
+# MobileSubstrate path can be a symlink to this canonical directory, so
+# unpacking the new file before obsolete-file cleanup is not upgrade-safe.
+tweak_dir="$prefix/usr/lib/TweakInject"
+mkdir -p "$tweak_dir"
+replace_file "$tweak_payload/VZKeyboardPassthrough.dylib" \
+    "$tweak_dir/VZKeyboardPassthrough.dylib"
+cp "$tweak_payload/VZKeyboardPassthrough.plist" \
+    "$tweak_dir/VZKeyboardPassthrough.plist.virtualmac-new"
+chmod 644 "$tweak_dir/VZKeyboardPassthrough.plist.virtualmac-new"
+mv -f "$tweak_dir/VZKeyboardPassthrough.plist.virtualmac-new" \
+    "$tweak_dir/VZKeyboardPassthrough.plist"
+if test "$rootless" = 0; then
+    helper_bin_dir=/usr/libexec/VirtualMac
+    helper_lib_dir=/usr/lib/VirtualMac
+    launch_daemons="$runtime/rootful/Library/LaunchDaemons"
+fi
 
 chmod 755 "$app/VirtualMac" "$app/VZHostCompat.dylib"
+
+vmm_dir="$runtime/payload/VirtualMachine.xpc/Contents/MacOS"
+vmm_variant="$vmm_dir/com.apple.Virtualization.VirtualMachine.ipados16"
+case "$host_version" in
+    14.*)
+        vmm_variant="$vmm_dir/com.apple.Virtualization.VirtualMachine.ipados14"
+        ;;
+    15.*)
+        vmm_variant="$vmm_dir/com.apple.Virtualization.VirtualMachine.ipados15"
+        ;;
+esac
+replace_file "$vmm_variant" \
+    "$vmm_dir/com.apple.Virtualization.VirtualMachine"
+case "$host_version" in
+    14.*)
+        hook_variant="$runtime/payload/Frameworks/LaunchServicesCompat.dylib.ipados14"
+        ;;
+    *)
+        hook_variant=""
+        ;;
+esac
+if test -n "$hook_variant"; then
+    replace_file "$hook_variant" \
+        "$runtime/payload/Frameworks/LaunchServicesCompat.dylib"
+fi
+
+installation_frameworks="$runtime/payload/Installation.xpc/Contents/Frameworks"
+installation_macos="$runtime/payload/Installation.xpc/Contents/MacOS"
+installation_variant="$installation_macos/com.apple.Virtualization.Installation.ipados16"
+installation_compat_variant="$installation_frameworks/InstallationCompat.dylib.ipados16"
+mobile_device_dir="$installation_frameworks/MobileDevice.framework/Versions/A"
+mobile_device_variant="$mobile_device_dir/MobileDevice.ipados16"
+case "$host_version" in
+    14.*)
+        installation_variant="$installation_macos/com.apple.Virtualization.Installation.ipados14"
+        installation_compat_variant="$installation_frameworks/InstallationCompat.dylib.ipados14"
+        mobile_device_variant="$mobile_device_dir/MobileDevice.ipados14"
+        ;;
+    15.*)
+        installation_variant="$installation_macos/com.apple.Virtualization.Installation.ipados15"
+        installation_compat_variant="$installation_frameworks/InstallationCompat.dylib.ipados15"
+        mobile_device_variant="$mobile_device_dir/MobileDevice.ipados15"
+        ;;
+esac
+if test "$objc_class_data_auth" = 1; then
+        installation_variant="$installation_macos/com.apple.Virtualization.Installation.ipados15-auth"
+        mobile_device_variant="$mobile_device_dir/MobileDevice.ipados15-auth"
+fi
+replace_file "$installation_variant" \
+    "$installation_macos/com.apple.Virtualization.Installation"
+replace_file "$installation_compat_variant" \
+    "$installation_frameworks/InstallationCompat.dylib"
+replace_file "$mobile_device_variant" "$mobile_device_dir/MobileDevice"
+
+# iPadOS 15.4 and later authenticate class_t::data like Ventura; 15.3.1 and
+# earlier do not. The symbol probe above selects the matching form.
+if test "$objc_class_data_auth" = 1; then
+        replace_file "$helper_lib_dir/libmrc.ipados15-auth.dylib" \
+            "$helper_lib_dir/libmrc.dylib"
+fi
+
+sharing_variant="$helper_bin_dir/InternetSharing.ipados16"
+case "$host_version" in
+    14.*)
+        sharing_variant="$helper_bin_dir/InternetSharing.ipados14"
+        ;;
+    15.*)
+        sharing_variant="$helper_bin_dir/InternetSharing.ipados15"
+        ;;
+esac
+replace_file "$sharing_variant" "$helper_bin_dir/InternetSharing"
+chmod 755 "$helper_bin_dir/InternetSharing" \
+    "$helper_lib_dir/libmrc.dylib"
+
+# Select framework binaries from the same package by the actual host ABI.
+# The normal payload is the established iPadOS 16 runtime.  Replace only on
+# 14/15 with binaries carrying their older Objective-C class-data ABI.
+case "$host_version" in
+    14.*)
+        compat="$runtime/payload/Compatibility/iPadOS14"
+        ;;
+    15.*)
+        compat="$runtime/payload/Compatibility/iPadOS15"
+        ;;
+esac
+if test "$objc_class_data_auth" = 1; then
+    compat="$runtime/payload/Compatibility/iPadOS15Authenticated"
+fi
+case "$host_version" in
+    14.*|15.*)
+        replace_file "$compat/Hypervisor" \
+            "$runtime/payload/Frameworks/Hypervisor.framework/Versions/A/Hypervisor"
+        if test "$host_version" != "${host_version#14.}"; then
+            replace_file "$compat/HypervisorBigSur" \
+                "$runtime/payload/Frameworks/Hypervisor.framework/Versions/A/HypervisorBigSur"
+            replace_file "$compat/LibSystemCompat.dylib" \
+                "$runtime/payload/Frameworks/LibSystem14"
+            replace_file "$compat/vmnet" \
+                "$runtime/payload/Frameworks/vmnet.framework/vmnet"
+            replace_file "$compat/Netrb" \
+                "$runtime/payload/Frameworks/Netrb.framework/Netrb"
+        fi
+        replace_file "$compat/ParavirtualizedGraphics" \
+            "$runtime/payload/Frameworks/ParavirtualizedGraphics.framework/Versions/A/ParavirtualizedGraphics"
+        replace_file "$compat/Virtualization" \
+            "$runtime/payload/Frameworks/Virtualization.framework/Versions/A/Virtualization"
+        replace_file "$compat/MetalSerializer" \
+            "$runtime/payload/Frameworks/MetalSerializer.framework/Versions/A/MetalSerializer"
+        replace_file "$compat/VideoToolbox" \
+            "$runtime/payload/Frameworks/VideoToolbox.framework/VideoToolbox"
+        replace_file "$compat/DiskImages2" \
+            "$runtime/payload/Frameworks/DiskImages2.framework/Versions/A/DiskImages2"
+        if test "$host_version" != "${host_version#14.}"; then
+            replace_file "$compat/IOKit15Compat.dylib" \
+                "$runtime/payload/Frameworks/IOKit15Compat.dylib"
+        fi
+        ;;
+esac
 chmod 755 \
     "$runtime/payload/VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine" \
     "$runtime/payload/Installation.xpc/Contents/MacOS/com.apple.Virtualization.Installation" \
@@ -32,28 +257,112 @@ touch /var/db/dhcpd_leases
 chown root:wheel /var/db/dhcpd_leases
 chmod 644 /var/db/dhcpd_leases
 
-while IFS="$(printf '\t')" read -r hash file; do
-    test -n "$hash"
-    test -f "$file"
-    jbctl trustcache add "$hash"
-done </var/jb/usr/share/VirtualMac/trustcache.txt
+if test "$rootless" = 1; then
+    while IFS="$(printf '\t')" read -r hash file; do
+        test -n "$hash"
+        test -f "$file"
+        "$jbctl" trustcache add "$hash"
+    done <"$prefix/usr/share/VirtualMac/trustcache.txt"
+elif test -x /taurine/jbexec; then
+    # Taurine's amfid bypass validates ad-hoc signatures, but privileged
+    # platform binaries must also be preflighted with jailbreakd.  Otherwise
+    # their CDHashes are accepted only after an LLDB launch and disappear on
+    # the next respring, making the app look like it crashes before dyld.
+    #
+    # The package manifest uses rootless /var/jb paths. Map those entries to
+    # their rootful install locations; runtime files already use /var/root.
+    while IFS="$(printf '\t')" read -r hash file; do
+        target="$file"
+        case "$target" in
+            /var/jb/*) target="/${target#/var/jb/}" ;;
+        esac
+        test -f "$target" || continue
+        # jbexec registers the file before it performs a diagnostic spawn.
+        # Dylibs and XPC executables can report EPERM from that final spawn
+        # even though preflight succeeded, so do not fail package setup on its
+        # diagnostic exit status.
+        PREFLIGHT=1 /bin/bash -c \
+            'exec -a "$1" /taurine/jbexec' _ "$target" >/dev/null || true
+    done </var/jb/usr/share/VirtualMac/trustcache.txt
+    # Files copied from the universal bootstrap payload have path-dependent
+    # Taurine trust. Preflight every final package-owned rootful Mach-O after
+    # the copy; preflighting only its /var/root staging source is insufficient.
+    for target in \
+        /usr/libexec/VirtualMac/InternetSharing \
+        /usr/libexec/VirtualMac/InternetSharing.ipados14 \
+        /usr/libexec/VirtualMac/bootpd \
+        /usr/lib/VirtualMac/AuthorizationCompat.dylib \
+        /usr/lib/VirtualMac/libmrc.dylib \
+        /usr/lib/VirtualMac/OpenDirectoryCompat.dylib \
+        /usr/lib/VirtualMac/IOKit14Compat.dylib \
+        /usr/sbin/VirtualMac/rtadvd \
+        /usr/lib/TweakInject/VZKeyboardPassthrough.dylib; do
+        test -f "$target" || continue
+        PREFLIGHT=1 /bin/bash -c \
+            'exec -a "$1" /taurine/jbexec' _ "$target" >/dev/null || true
+    done
+fi
 
 for domain in system user/501; do
-    "$launchctl" bootout "$domain/com.apple.bootpd" 2>/dev/null || true
+    "$launchctl" bootout "$domain/vzi.apple.bootpd-controller" 2>/dev/null || true
     "$launchctl" bootout "$domain/vzi.apple.bootpd" 2>/dev/null || true
     "$launchctl" bootout "$domain/com.apple.NetworkSharing" 2>/dev/null || true
 done
-"$launchctl" enable user/501/vzi.apple.bootpd
-"$launchctl" bootstrap user/501 \
-    /var/jb/Library/LaunchDaemons/com.apple.bootpd.plist
-"$launchctl" bootstrap user/501 \
-    /var/jb/Library/LaunchDaemons/com.apple.NetworkSharing.plist
-"$launchctl" kickstart -k user/501/com.apple.NetworkSharing
+# iPadOS 15 has no launchd user/501 domain.  Keep the established iPadOS 16
+# foreground-user placement unchanged, but use the system domain on older
+# hosts (both jobs already declare UserName=root).
+network_domain=user/501
+case "$host_version" in
+    14.*)
+        network_domain=system
+        ;;
+    15.*) network_domain=system ;;
+esac
+if test "$host_version" != "${host_version#14.}"; then
+    # Avoid opening UDP/67 before the configuration exists. NetworkSharing is
+    # started before vmnet because iPadOS 14 cannot resolve this private
+    # system-domain Mach service on demand. It writes the config when the VMM
+    # attaches its NIC; the controller then enables the private socket job.
+    # launchd enable/disable overrides survive a job reload, so explicitly
+    # clear a prior development package's enable. The controller loads the
+    # private job later, when InternetSharing has written its config.
+    "$launchctl" disable "$network_domain/vzi.apple.bootpd"
+    rm -f /tmp/bootpd.plist
+    "$launchctl" bootstrap "$network_domain" \
+        "$launch_daemons/vzi.apple.bootpd-controller.plist"
+    "$launchctl" bootstrap "$network_domain" \
+        "$launch_daemons/com.apple.NetworkSharing.plist"
+    "$launchctl" kickstart -k \
+        "$network_domain/com.apple.NetworkSharing"
+else
+    "$launchctl" bootstrap "$network_domain" \
+        "$launch_daemons/com.apple.NetworkSharing.plist"
+    "$launchctl" kickstart -k "$network_domain/com.apple.NetworkSharing"
+    # Keep the established iPadOS 15/16 behavior, where the helper does not
+    # enter the iPadOS 14 missing-configuration socket retry loop.
+    "$launchctl" enable "$network_domain/vzi.apple.bootpd"
+    "$launchctl" bootstrap "$network_domain" \
+        "$launch_daemons/com.apple.bootpd.plist"
+fi
 
-/var/jb/usr/bin/uicache -p "$app"
+"$uicache" -p "$app"
 
-# Let Sileo offer its Restart SpringBoard completion button. Never restart the
-# user's session from a package maintainer script.
-echo "finish:restart"
+# Sileo passes its result descriptor and protocol version through $CYDIA.
+# Stdout is only a log stream and does not create a Restart SpringBoard action.
+if test -n "${CYDIA:-}"; then
+    read -r finish_fd finish_version <<EOF
+$CYDIA
+EOF
+    case "$finish_fd" in
+        ''|*[!0-9]*) ;;
+        *)
+            if test "${finish_version:-0}" -ge 1 2>/dev/null; then
+                echo "finish:restart" >&$finish_fd
+            fi
+            ;;
+    esac
+else
+    echo "finish:restart"
+fi
 
 exit 0

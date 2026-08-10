@@ -3,6 +3,9 @@
 #import "VZSettingsViewController.h"
 #import "VZNewVMViewController.h"
 #import "VZProgressViewController.h"
+#import "VZRestoreCatalog.h"
+#import "VZLocalization.h"
+#import "VZSupport.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <ifaddrs.h>
@@ -66,7 +69,16 @@ NSString *VZInstallationsPath(void)
 static uint64_t VZDeviceMemoryLimit(void)
 {
     uint64_t physical = NSProcessInfo.processInfo.physicalMemory;
-    return physical >= GiB(12) ? GiB(8) : GiB(6);
+    // The marketed capacity is larger than the memory iPadOS exposes to this
+    // process.
+    // VZ rejects a rounded-up 16/8 GiB value as greater than its host limit.
+    return MAX(GiB(2), (physical >> 30) << 30);
+}
+
+static uint64_t VZDefaultMemorySize(void)
+{
+    uint64_t physical = NSProcessInfo.processInfo.physicalMemory;
+    return physical >= GiB(12) ? GiB(8) : GiB(4);
 }
 
 static uint64_t VZDefaultStorageSize(void)
@@ -82,6 +94,16 @@ static uint64_t VZAvailableStorageSize(void)
     NSDictionary *attributes = [NSFileManager.defaultManager
         attributesOfFileSystemForPath:VZVMLibraryPath() error:nil];
     return [attributes[NSFileSystemFreeSize] unsignedLongLongValue];
+}
+
+static uint64_t VZVMStorageCapacity(NSString *bundlePath,
+                                    NSDictionary *options)
+{
+    NSDictionary *attributes = [NSFileManager.defaultManager
+        attributesOfItemAtPath:[bundlePath stringByAppendingPathComponent:
+            @"Disk.img"] error:nil];
+    uint64_t capacity = [attributes[NSFileSize] unsignedLongLongValue];
+    return capacity ?: [options[VZStorageSizeKey] unsignedLongLongValue];
 }
 
 static NSString *VZMACStringFromBytes(const uint8_t bytes[6])
@@ -122,8 +144,36 @@ static NSString *VZMACAddressForBundle(NSString *bundlePath)
     return VZMACStringFromBytes(bytes);
 }
 
+static BOOL VZHostSupportsBridgedNetworking(void)
+{
+    // iPadOS 14 lacks the private Wi-Fi virtualization integration that lets
+    // a macOS host bridge a guest MAC through a Wi-Fi station. NAT is the
+    // supported network attachment on that host release. Keep the existing
+    // bridged-network UI and behavior unchanged on iPadOS 15 and 16.
+    return NSProcessInfo.processInfo.operatingSystemVersion.majorVersion > 14;
+}
+
+static NSString *VZEffectiveNetworkMode(NSDictionary *options)
+{
+    NSString *mode = options[VZNetworkModeKey] ?: @"NAT";
+    return !VZHostSupportsBridgedNetworking() &&
+        [mode isEqualToString:@"Bridge"] ? @"NAT" : mode;
+}
+
+static NSString *VZNetworkModeDisplayName(NSDictionary *options)
+{
+    NSString *mode = VZEffectiveNetworkMode(options);
+    if ([mode isEqualToString:@"Bridge"])
+        return VZL(@"Bridge");
+    if ([mode isEqualToString:@"Disabled"])
+        return VZL(@"Disabled");
+    return mode;
+}
+
 static NSArray *VZBridgeInterfaceNames(void)
 {
+    if (!VZHostSupportsBridgedNetworking())
+        return @[];
     NSMutableSet *names = [NSMutableSet set];
     struct ifaddrs *interfaces = NULL;
     if (getifaddrs(&interfaces) == 0) {
@@ -146,13 +196,13 @@ static NSArray *VZBridgeInterfaceNames(void)
 static NSString *VZInterfaceDisplayName(NSString *interface)
 {
     if ([interface isEqualToString:@"en0"])
-        return @"Wi-Fi";
+        return VZL(@"Wi-Fi");
     if ([interface hasPrefix:@"pdp_ip"])
-        return @"Cellular";
+        return VZL(@"Cellular");
     if ([interface hasPrefix:@"bridge"])
-        return [NSString stringWithFormat:@"Network Bridge (%@)", interface];
+        return [NSString stringWithFormat:VZL(@"Network Bridge (%@)"), interface];
     if ([interface hasPrefix:@"en"])
-        return [NSString stringWithFormat:@"Ethernet (%@)", interface];
+        return [NSString stringWithFormat:VZL(@"Ethernet (%@)"), interface];
     return interface;
 }
 
@@ -179,9 +229,9 @@ static NSString *VZActiveInternetDisplayName(void)
         freeifaddrs(interfaces);
     }
     if ([candidate hasPrefix:@"utun"])
-        return @"VPN";
+        return VZL(@"VPN");
     return candidate ? VZInterfaceDisplayName(candidate)
-                     : @"iPad Internet Connection";
+                     : VZL(@"iPad Internet Connection");
 }
 
 BOOL VZRestoreImageUsesMontereyProfile(NSString *path)
@@ -231,7 +281,7 @@ NSDictionary *VZVMDefaultOptions(void)
         MIN((NSUInteger)4, NSProcessInfo.processInfo.activeProcessorCount));
     return @{
         VZCPUCountKey: @(processors),
-        VZMemorySizeKey: @(VZDeviceMemoryLimit()),
+        VZMemorySizeKey: @(VZDefaultMemorySize()),
         VZStorageSizeKey: @(VZDefaultStorageSize()),
         VZNetworkModeKey: @"NAT",
         VZBridgeInterfaceKey: @"en0",
@@ -244,7 +294,7 @@ NSDictionary *VZVMDefaultOptions(void)
         VZVideoToolboxEnabledKey: @YES,
         VZDisplayModeKey: @"NativeRetina",
         VZDisplayWidthKey: @1920,
-        VZDisplayHeightKey: @1200,
+        VZDisplayHeightKey: @1080,
         VZDisplayPPIKey: @264,
         VZMACAddressKey: VZRandomMACAddress(),
     };
@@ -332,6 +382,15 @@ NSArray<NSDictionary *> *VZDiscoverVirtualMachines(void)
         ^(NSString *path, NSString *name) {
         if (!VZIsValidVMBundle(path))
             return;
+        NSString *manifest = [path stringByAppendingPathComponent:
+            VZVMConfigurationFileName];
+        if (![manager fileExistsAtPath:manifest]) {
+            NSError *manifestError = nil;
+            NSDictionary *defaults = VZVMOptionsForBundle(path);
+            if (!VZWriteVMOptions(defaults, path, &manifestError))
+                NSLog(@"Virtual Mac could not synthesize settings for %@: %@",
+                      path, manifestError);
+        }
         NSString *identity = path.stringByResolvingSymlinksInPath;
         if ([seen containsObject:identity])
             return;
@@ -383,6 +442,14 @@ static NSString *VZMarketingNameForRestoreImage(NSURL *url)
         return marketing[major] ?: [@"macOS " stringByAppendingString:major];
     }
     return base.length ? base : @"macOS";
+}
+
+static UIImage *VZInstallerArtworkForImage(NSDictionary *image)
+{
+    NSString *name = [VZRestoreCatalog artworkNameForImage:image];
+    NSString *path = [NSBundle.mainBundle pathForResource:name ofType:@"png"
+                                               inDirectory:@"Installers"];
+    return [UIImage imageWithContentsOfFile:path];
 }
 
 static BOOL VZVMNameIsOccupied(NSString *name)
@@ -491,13 +558,20 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 }
 
 @interface VZVMConfigurationViewController : UITableViewController
-    <UIDocumentPickerDelegate>
+    <UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate>
 @property(nonatomic, copy) NSString *bundlePath;
 @property(nonatomic, copy) NSString *vmName;
 @property(nonatomic, assign) BOOL running;
 @property(nonatomic, retain) NSMutableDictionary *options;
+@property(nonatomic, retain) NSDictionary *originalOptions;
+@property(nonatomic, copy) NSString *originalVMName;
 @property(nonatomic, copy) void (^completion)(NSDictionary *options);
 @property(nonatomic, copy) void (^deletion)(void);
+@property(nonatomic, assign) BOOL showsExperimentalInstallWarning;
+@property(nonatomic, assign) BOOL showsUnsupportedInstallWarning;
+@property(nonatomic, copy) NSString *experimentalMacOSName;
+@property(nonatomic, copy) void (^chooseDifferentVersionHandler)(void);
+@property(nonatomic, retain) UIView *experimentalWarningHeader;
 @end
 
 @implementation VZVMConfigurationViewController
@@ -512,7 +586,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         self.vmName = bundlePath.lastPathComponent.stringByDeletingPathExtension;
         self.options = [NSMutableDictionary dictionaryWithDictionary:options];
         self.completion = completion;
-        self.title = bundlePath ? @"Virtual Mac" : @"New Virtual Mac";
+        self.title = bundlePath ? VZL(@"Virtual Mac") : VZL(@"New Virtual Mac");
     }
     return self;
 }
@@ -520,17 +594,188 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-    self.navigationItem.leftBarButtonItem = [[[UIBarButtonItem alloc]
-        initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self
-        action:@selector(cancel:)] autorelease];
+    self.originalOptions = [NSDictionary dictionaryWithDictionary:self.options];
+    self.originalVMName = self.vmName ?: @"";
+    // A newly created VM is pushed from the version picker, so preserve the
+    // navigation controller's normal Back button. Existing VM settings are
+    // presented as the sheet root and retain Cancel.
+    if (self.bundlePath) {
+        self.navigationItem.leftBarButtonItem = [[[UIBarButtonItem alloc]
+            initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self
+            action:@selector(cancel:)] autorelease];
+    }
     self.navigationItem.rightBarButtonItem = [[[UIBarButtonItem alloc]
-        initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self
-        action:@selector(done:)] autorelease];
+        initWithTitle:self.bundlePath ? VZL(@"Save") : VZL(@"Continue")
+        style:UIBarButtonItemStyleDone target:self action:@selector(done:)]
+        autorelease];
+    if (!self.bundlePath && self.showsExperimentalInstallWarning)
+        [self installExperimentalWarningHeader];
+}
+
+- (void)installExperimentalWarningHeader
+{
+    UIView *header = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+    header.backgroundColor = UIColor.clearColor;
+
+    UIView *card = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
+    card.layer.cornerRadius = 12.0;
+    card.layer.cornerCurve = kCACornerCurveContinuous;
+    [header addSubview:card];
+
+    UIImageView *icon = [[[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"exclamationmark.triangle.fill"]] autorelease];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    icon.tintColor = self.showsUnsupportedInstallWarning
+        ? UIColor.systemRedColor : UIColor.systemYellowColor;
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    [card addSubview:icon];
+
+    UILabel *title = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    title.textColor = UIColor.labelColor;
+    title.numberOfLines = 0;
+    NSString *macOSName = self.experimentalMacOSName ?: @"macOS";
+    title.text = self.showsUnsupportedInstallWarning
+        ? [NSString stringWithFormat:VZL(@"%@ is not supported"), macOSName]
+        : [NSString stringWithFormat:
+            VZL(@"Support for %@ is experimental"), macOSName];
+    [card addSubview:title];
+
+    UILabel *message = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+    message.translatesAutoresizingMaskIntoConstraints = NO;
+    message.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    message.textColor = UIColor.secondaryLabelColor;
+    message.numberOfLines = 0;
+    if (self.showsUnsupportedInstallWarning) {
+        NSString *appVersion = NSBundle.mainBundle.infoDictionary[
+            @"CFBundleShortVersionString"] ?: @"";
+        message.text = [NSString stringWithFormat:
+            VZL(@"Virtual Mac %@ does not support %@. Check for updates in Sileo."),
+            appVersion, macOSName];
+    } else {
+        message.text = [NSString stringWithFormat:
+            VZL(@"%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display."),
+            macOSName];
+    }
+    [card addSubview:message];
+
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+    button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    [button setTitle:VZL(@"Choose a Different Version")
+             forState:UIControlStateNormal];
+    [button addTarget:self action:@selector(chooseDifferentVersion:)
+        forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:button];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:20.0],
+        [card.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-20.0],
+        [card.topAnchor constraintEqualToAnchor:header.topAnchor constant:16.0],
+        [card.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-8.0],
+        [icon.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [icon.topAnchor constraintEqualToAnchor:card.topAnchor constant:16.0],
+        [icon.widthAnchor constraintEqualToConstant:22.0],
+        [icon.heightAnchor constraintEqualToConstant:22.0],
+        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:10.0],
+        [title.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [title.centerYAnchor constraintEqualToAnchor:icon.centerYAnchor],
+        [message.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [message.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [message.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10.0],
+        [button.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [button.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [button.topAnchor constraintEqualToAnchor:message.bottomAnchor constant:8.0],
+        [button.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-6.0],
+        [button.heightAnchor constraintGreaterThanOrEqualToConstant:44.0]
+    ]];
+    self.experimentalWarningHeader = header;
+    self.tableView.tableHeaderView = header;
+}
+
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+    UIView *header = self.experimentalWarningHeader;
+    if (!header)
+        return;
+    CGFloat width = CGRectGetWidth(self.tableView.bounds);
+    if (width <= 0)
+        return;
+    header.bounds = CGRectMake(0, 0, width, CGRectGetHeight(header.bounds));
+    CGFloat height = [header systemLayoutSizeFittingSize:
+        CGSizeMake(width, UILayoutFittingCompressedSize.height)
+        withHorizontalFittingPriority:UILayoutPriorityRequired
+        verticalFittingPriority:UILayoutPriorityFittingSizeLevel].height;
+    if (fabs(CGRectGetHeight(header.frame) - height) > 0.5) {
+        header.frame = CGRectMake(0, 0, width, height);
+        self.tableView.tableHeaderView = header;
+    }
+}
+
+- (void)chooseDifferentVersion:(id)sender
+{
+    (void)sender;
+    if (self.navigationController.viewControllers.firstObject != self) {
+        [self.navigationController popViewControllerAnimated:YES];
+        return;
+    }
+    void (^handler)(void) = [[self.chooseDifferentVersionHandler copy]
+        autorelease];
+    [self dismissViewControllerAnimated:YES completion:handler];
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    // The configuration can either be the sheet root or be pushed from the
+    // creation flow. In both cases it owns the unsaved-change decision.
+    self.navigationController.presentationController.delegate = self;
+}
+
+- (BOOL)hasUnsavedChanges
+{
+    return ![self.options isEqualToDictionary:self.originalOptions] ||
+        ![(self.vmName ?: @"") isEqualToString:(self.originalVMName ?: @"")];
+}
+
+- (void)confirmDiscardChanges
+{
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:VZL(@"Discard Changes?")
+        message:VZL(@"Your changes to this Virtual Mac will not be saved.")
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Keep Editing")
+        style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Discard Changes")
+        style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        (void)action;
+        self.navigationController.presentationController.delegate = nil;
+        [self dismissViewControllerAnimated:YES completion:nil];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (BOOL)presentationControllerShouldDismiss:(UIPresentationController *)controller
+{
+    (void)controller;
+    return ![self hasUnsavedChanges];
+}
+
+- (void)presentationControllerDidAttemptToDismiss:
+    (UIPresentationController *)controller
+{
+    (void)controller;
+    [self confirmDiscardChanges];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
-    return self.bundlePath ? 6 : 5;
+    return 6;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView
@@ -558,9 +803,10 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 {
     if (section == 5)
         return nil;
-    return @[@"Resources",
-             self.bundlePath ? @"Boot and Network" : @"Network",
-             @"Input", @"Display", @"Audio and Acceleration"][section];
+    return @[VZL(@"Resources"),
+             self.bundlePath ? VZL(@"Boot and Network") : VZL(@"Network"),
+             VZL(@"Input"), VZL(@"Display"),
+             VZL(@"Audio and Acceleration")][section];
 }
 
 - (NSString *)tableView:(UITableView *)tableView
@@ -568,7 +814,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 {
     (void)tableView;
     if (self.running && section == 0)
-        return @"Configuration changes take effect after the virtual Mac is shut down and started again. Renaming and deletion are unavailable while it is running.";
+        return VZL(@"Configuration changes take effect after the Virtual Mac is shut down and started again. Renaming and deletion are unavailable while it is running.");
     return nil;
 }
 
@@ -594,7 +840,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     if (indexPath.section == 0) {
         NSInteger resourceRows = self.bundlePath ? 2 : 3;
         if (indexPath.row == 0) {
-            cell.textLabel.text = @"Name";
+            cell.textLabel.text = VZL(@"Name");
             cell.detailTextLabel.text = self.vmName;
             if (self.running) {
                 cell.accessoryType = UITableViewCellAccessoryNone;
@@ -605,7 +851,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         }
         NSInteger resourceIndex = indexPath.row - 1;
         if (resourceIndex == resourceRows) {
-            cell.textLabel.text = @"Add Shared Folder";
+            cell.textLabel.text = VZL(@"Add Shared Folder");
             cell.detailTextLabel.text = nil;
             return cell;
         }
@@ -614,11 +860,11 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                 [resourceIndex - resourceRows - 1];
             cell.textLabel.text = [share[@"Path"] lastPathComponent];
             cell.detailTextLabel.text = [share[@"ReadOnly"] boolValue]
-                ? @"Read Only" : @"Read & Write";
+                ? VZL(@"Read Only") : VZL(@"Read & Write");
             return cell;
         }
-        NSArray *names = self.bundlePath ? @[@"Processors", @"Memory"]
-                                         : @[@"Processors", @"Memory", @"Storage"];
+        NSArray *names = self.bundlePath ? @[VZL(@"Processors"), VZL(@"Memory")]
+                                         : @[VZL(@"Processors"), VZL(@"Memory"), VZL(@"Storage")];
         NSString *key = @[VZCPUCountKey, VZMemorySizeKey,
                            VZStorageSizeKey][resourceIndex];
         cell.textLabel.text = names[resourceIndex];
@@ -628,7 +874,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             : [NSString stringWithFormat:@"%llu GB", value >> 30];
     } else if (indexPath.section == 1 && self.bundlePath &&
                indexPath.row == 0) {
-        cell.textLabel.text = @"Start in Recovery";
+        cell.textLabel.text = VZL(@"Start in Recovery");
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
         toggle.on = [self.options[VZBootRecoveryKey] boolValue];
         [toggle addTarget:self action:@selector(recoveryChanged:)
@@ -638,43 +884,47 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         cell.detailTextLabel.text = nil;
     } else if (indexPath.section == 1 &&
                indexPath.row == (self.bundlePath ? 1 : 0)) {
-        cell.textLabel.text = @"Network";
-        NSString *mode = self.options[VZNetworkModeKey];
+        cell.textLabel.text = VZL(@"Network");
+        NSString *mode = VZEffectiveNetworkMode(self.options);
         NSString *interface = self.options[VZBridgeInterfaceKey];
         cell.detailTextLabel.text = [mode isEqualToString:@"Bridge"]
-            ? [NSString stringWithFormat:@"Bridge via %@",
+            ? [NSString stringWithFormat:VZL(@"Bridge via %@"),
                 VZInterfaceDisplayName(interface)]
             : [mode isEqualToString:@"NAT"]
-                ? [NSString stringWithFormat:@"Shared via %@",
-                    VZActiveInternetDisplayName()] : mode;
+                ? [NSString stringWithFormat:VZL(@"Shared via %@"),
+                    VZActiveInternetDisplayName()]
+                : [mode isEqualToString:@"Disabled"] ? VZL(@"Disabled")
+                                                      : mode;
     } else if (indexPath.section == 1) {
-        cell.textLabel.text = @"MAC Address";
+        cell.textLabel.text = VZL(@"MAC Address");
         cell.detailTextLabel.text = self.options[VZMACAddressKey];
     } else if (indexPath.section == 2 && indexPath.row == 0) {
-        cell.textLabel.text = @"Keyboard";
+        cell.textLabel.text = VZL(@"Keyboard");
         cell.detailTextLabel.text =
             [self.options[VZKeyboardDeviceKey] isEqualToString:@"USBKeyboard"]
-            ? @"USB Keyboard" : @"Mac Keyboard";
+            ? VZL(@"USB Keyboard") : VZL(@"Mac Keyboard");
     } else if (indexPath.section == 2) {
-        cell.textLabel.text = @"Pointing Device";
+        cell.textLabel.text = VZL(@"Pointing Device");
         cell.detailTextLabel.text =
             [self.options[VZPointingDeviceKey] isEqualToString:@"USBMouse"]
-            ? @"USB Mouse" : @"Mac Trackpad";
+            ? VZL(@"USB Mouse") : VZL(@"Mac Trackpad");
     } else if (indexPath.section == 3 && indexPath.row == 0) {
-        cell.textLabel.text = @"Resolution";
-        cell.detailTextLabel.text =
-            [self.options[VZDisplayModeKey] isEqualToString:@"Custom"]
-            ? @"Custom" : @"Native Retina";
+        cell.textLabel.text = VZL(@"Resolution");
+        NSString *displayMode = self.options[VZDisplayModeKey];
+        cell.detailTextLabel.text = [displayMode isEqualToString:@"Custom"]
+            ? VZL(@"Custom")
+            : [displayMode isEqualToString:@"PortraitNativeRetina"]
+                ? VZL(@"Portrait Full Screen") : VZL(@"Full Screen");
     } else if (indexPath.section == 3) {
-        NSArray *names = @[@"Width", @"Height", @"Pixels Per Inch"];
+        NSArray *names = @[VZL(@"Width"), VZL(@"Height"), VZL(@"Pixels Per Inch")];
         NSArray *keys = @[VZDisplayWidthKey, VZDisplayHeightKey,
                           VZDisplayPPIKey];
         cell.textLabel.text = names[indexPath.row - 1];
         cell.detailTextLabel.text = [self.options[keys[indexPath.row - 1]]
             stringValue];
     } else if (indexPath.section == 4) {
-        NSArray *names = @[@"Audio Output", @"Microphone Input",
-                           @"VideoToolbox Acceleration"];
+        NSArray *names = @[VZL(@"Audio Output"), VZL(@"Microphone Input"),
+                           VZL(@"Video Encoding and Decoding Acceleration")];
         NSArray *keys = @[VZAudioOutputEnabledKey, VZAudioInputEnabledKey,
                           VZVideoToolboxEnabledKey];
         cell.textLabel.text = names[indexPath.row];
@@ -686,8 +936,13 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         cell.accessoryView = toggle;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.detailTextLabel.text = nil;
+    } else if (!self.bundlePath) {
+        cell.textLabel.text = VZL(@"Continue");
+        cell.textLabel.textAlignment = NSTextAlignmentCenter;
+        cell.textLabel.textColor = UIColor.systemBlueColor;
+        cell.accessoryType = UITableViewCellAccessoryNone;
     } else {
-        cell.textLabel.text = @"Delete Virtual Mac";
+        cell.textLabel.text = VZL(@"Delete Virtual Mac");
         cell.textLabel.textAlignment = NSTextAlignmentCenter;
         cell.textLabel.textColor = self.running
             ? UIColor.secondaryLabelColor : UIColor.systemRedColor;
@@ -713,7 +968,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             [self.tableView reloadData];
         }]];
     }
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
     sheet.popoverPresentationController.sourceView = cell;
     [self presentViewController:sheet animated:YES completion:nil];
@@ -722,17 +977,17 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)editMACAddress
 {
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"MAC Address"
-                         message:@"Enter six hexadecimal octets separated by colons."
+        alertControllerWithTitle:VZL(@"MAC Address")
+                         message:VZL(@"Enter six hexadecimal octets separated by colons.")
                   preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
         field.text = self.options[VZMACAddressKey];
         field.autocapitalizationType = UITextAutocapitalizationTypeNone;
         field.autocorrectionType = UITextAutocorrectionTypeNo;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action;
         NSString *value = alert.textFields.firstObject.text.lowercaseString;
@@ -752,11 +1007,11 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                     bytes:(BOOL)bytes
 {
     NSString *range = maximum
-        ? [NSString stringWithFormat:@"Allowed: %llu–%llu%@",
+        ? [NSString stringWithFormat:VZL(@"Allowed: %llu–%llu%@"),
             bytes ? minimum >> 30 : minimum,
             bytes ? maximum >> 30 : maximum, bytes ? @" GB" : @""]
         : [NSString stringWithFormat:
-            @"Minimum: %llu GB. The upper limit is determined by the filesystem.",
+            VZL(@"Minimum: %llu GB. The upper limit is determined by the filesystem."),
             minimum >> 30];
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:title
@@ -768,9 +1023,9 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                       bytes ? value >> 30 : value];
         field.keyboardType = UIKeyboardTypeNumberPad;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action;
         uint64_t entered = strtoull(
@@ -790,12 +1045,12 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                                          250 * NSEC_PER_MSEC),
                            dispatch_get_main_queue(), ^{
                 UIAlertController *warning = [UIAlertController
-                    alertControllerWithTitle:@"Disk Exceeds Available Storage"
+                    alertControllerWithTitle:VZL(@"Disk Exceeds Available Storage")
                     message:[NSString stringWithFormat:
-                        @"Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up.",
+                        VZL(@"Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up."),
                         available]
                     preferredStyle:UIAlertControllerStyleAlert];
-                [warning addAction:[UIAlertAction actionWithTitle:@"OK"
+                [warning addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
                     style:UIAlertActionStyleDefault handler:nil]];
                 [self presentViewController:warning animated:YES completion:nil];
             });
@@ -813,17 +1068,17 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     if (self.running)
         return;
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Name"
-                         message:@"Choose a name for this virtual Mac."
+        alertControllerWithTitle:VZL(@"Name")
+                         message:VZL(@"Choose a name for this Virtual Mac.")
                   preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
         field.text = self.vmName;
         field.clearButtonMode = UITextFieldViewModeWhileEditing;
         field.autocapitalizationType = UITextAutocapitalizationTypeWords;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action;
         self.vmName = VZUniqueVMNameExcludingPath(
@@ -840,16 +1095,16 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 {
     if (!self.bundlePath.length || self.running)
         return;
-    NSString *name = self.vmName.length ? self.vmName : @"this virtual Mac";
+    NSString *name = self.vmName.length ? self.vmName : VZL(@"this Virtual Mac");
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Delete Virtual Mac?"
+        alertControllerWithTitle:VZL(@"Delete Virtual Mac?")
                          message:[NSString stringWithFormat:
-                            @"“%@” and all files stored in it will be permanently deleted.",
+                            VZL(@"“%@” and all files stored in it will be permanently deleted."),
                             name]
                   preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Delete"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Delete")
         style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
         NSString *path = [[self.bundlePath copy] autorelease];
@@ -897,7 +1152,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                     preferredStyle:UIAlertControllerStyleActionSheet];
             for (NSNumber *readOnly in @[@NO, @YES]) {
                 NSString *title = readOnly.boolValue
-                    ? @"Read Only" : @"Read & Write";
+                    ? VZL(@"Read Only") : VZL(@"Read & Write");
                 [sheet addAction:[UIAlertAction actionWithTitle:title
                     style:UIAlertActionStyleDefault
                     handler:^(UIAlertAction *action) {
@@ -910,7 +1165,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                     [self.tableView reloadData];
                 }]];
             }
-            [sheet addAction:[UIAlertAction actionWithTitle:@"Remove"
+            [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Remove")
                 style:UIAlertActionStyleDestructive
                 handler:^(UIAlertAction *action) {
                 (void)action;
@@ -920,7 +1175,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                 self.options[VZSharedDirectoriesKey] = shares;
                 [self.tableView reloadData];
             }]];
-            [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+            [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
                 style:UIAlertActionStyleCancel handler:nil]];
             sheet.popoverPresentationController.sourceView =
                 [tableView cellForRowAtIndexPath:indexPath];
@@ -928,24 +1183,24 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         } else if (resourceIndex == 0) {
             NSUInteger maxCPU = MAX((NSUInteger)2,
                 MIN((NSUInteger)8, NSProcessInfo.processInfo.activeProcessorCount));
-            [self editNumberForKey:VZCPUCountKey title:@"Processors"
+            [self editNumberForKey:VZCPUCountKey title:VZL(@"Processors")
                               min:2 max:maxCPU bytes:NO];
         } else if (resourceIndex == 1) {
-            [self editNumberForKey:VZMemorySizeKey title:@"Memory"
+            [self editNumberForKey:VZMemorySizeKey title:VZL(@"Memory")
                               min:GiB(2) max:VZDeviceMemoryLimit() bytes:YES];
         } else if (resourceIndex == 2) {
-            [self editNumberForKey:VZStorageSizeKey title:@"Storage"
+            [self editNumberForKey:VZStorageSizeKey title:VZL(@"Storage")
                               min:GiB(32) max:0 bytes:YES];
         }
     } else if (indexPath.section == 1 &&
                indexPath.row == (self.bundlePath ? 1 : 0)) {
         UIAlertController *sheet = [UIAlertController
-            alertControllerWithTitle:@"Network Attachment" message:nil
+            alertControllerWithTitle:VZL(@"Network Attachment") message:nil
                       preferredStyle:UIAlertControllerStyleActionSheet];
         for (NSString *mode in @[@"NAT", @"Disabled"]) {
             NSString *title = [mode isEqualToString:@"NAT"]
-                ? [NSString stringWithFormat:@"NAT: Share %@",
-                    VZActiveInternetDisplayName()] : mode;
+                ? [NSString stringWithFormat:VZL(@"NAT: Share %@"),
+                    VZActiveInternetDisplayName()] : VZL(@"Disabled");
             [sheet addAction:[UIAlertAction actionWithTitle:title
                 style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                 (void)action;
@@ -954,7 +1209,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             }]];
         }
         for (NSString *interface in VZBridgeInterfaceNames()) {
-            NSString *title = [NSString stringWithFormat:@"Bridge: %@",
+            NSString *title = [NSString stringWithFormat:VZL(@"Bridge: %@"),
                 VZInterfaceDisplayName(interface)];
             [sheet addAction:[UIAlertAction actionWithTitle:title
                 style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
@@ -964,7 +1219,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                 [self.tableView reloadData];
             }]];
         }
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+        [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
             style:UIAlertActionStyleCancel handler:nil]];
         sheet.popoverPresentationController.sourceView =
             [tableView cellForRowAtIndexPath:indexPath];
@@ -973,39 +1228,44 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                indexPath.row == (self.bundlePath ? 2 : 1)) {
         [self editMACAddress];
     } else if (indexPath.section == 2 && indexPath.row == 0) {
-        [self chooseTitle:@"Keyboard" message:
-            @"Use USB Keyboard for macOS Monterey. Newer guests support the Mac keyboard device."
+        [self chooseTitle:VZL(@"Keyboard") message:
+            VZL(@"Use USB Keyboard for macOS Monterey. Newer guests support the Mac keyboard device.")
             choices:@[
-                @{@"title": @"Mac Keyboard", @"value": @"MacKeyboard"},
-                @{@"title": @"USB Keyboard", @"value": @"USBKeyboard"},
+                @{@"title": VZL(@"Mac Keyboard"), @"value": @"MacKeyboard"},
+                @{@"title": VZL(@"USB Keyboard"), @"value": @"USBKeyboard"},
             ] key:VZKeyboardDeviceKey
             fromCell:[tableView cellForRowAtIndexPath:indexPath]];
     } else if (indexPath.section == 2 && indexPath.row == 1) {
-        [self chooseTitle:@"Pointing Device" message:
-            @"Use USB Mouse for macOS Monterey. Newer guests support the Mac trackpad device."
+        [self chooseTitle:VZL(@"Pointing Device") message:
+            VZL(@"Use USB Mouse for macOS Monterey. Newer guests support the Mac trackpad device.")
             choices:@[
-            @{@"title": @"Mac Trackpad", @"value": @"MacTrackpad"},
-            @{@"title": @"USB Mouse", @"value": @"USBMouse"},
+            @{@"title": VZL(@"Mac Trackpad"), @"value": @"MacTrackpad"},
+            @{@"title": VZL(@"USB Mouse"), @"value": @"USBMouse"},
             ] key:VZPointingDeviceKey
             fromCell:[tableView cellForRowAtIndexPath:indexPath]];
     } else if (indexPath.section == 3 && indexPath.row == 0) {
-        [self chooseTitle:@"Display Resolution" message:nil choices:@[
-            @{@"title": @"Native Retina", @"value": @"NativeRetina"},
-            @{@"title": @"Custom", @"value": @"Custom"},
+        [self chooseTitle:VZL(@"Display Resolution") message:nil choices:@[
+            @{@"title": VZL(@"Full Screen"), @"value": @"NativeRetina"},
+            @{@"title": VZL(@"Portrait Full Screen"),
+              @"value": @"PortraitNativeRetina"},
+            @{@"title": VZL(@"Custom"), @"value": @"Custom"},
         ] key:VZDisplayModeKey
           fromCell:[tableView cellForRowAtIndexPath:indexPath]];
     } else if (indexPath.section == 3 && indexPath.row > 0) {
         NSArray *keys = @[VZDisplayWidthKey, VZDisplayHeightKey,
                           VZDisplayPPIKey];
-        NSArray *titles = @[@"Display Width", @"Display Height",
-                            @"Pixels Per Inch"];
+        NSArray *titles = @[VZL(@"Display Width"), VZL(@"Display Height"),
+                            VZL(@"Pixels Per Inch")];
         uint64_t minimum = indexPath.row == 3 ? 72 : 800;
         uint64_t maximum = indexPath.row == 3 ? 600 : 7680;
         [self editNumberForKey:keys[indexPath.row - 1]
                          title:titles[indexPath.row - 1]
                            min:minimum max:maximum bytes:NO];
     } else if (indexPath.section == 5) {
-        [self confirmDeleteVirtualMac];
+        if (self.bundlePath)
+            [self confirmDeleteVirtualMac];
+        else
+            [self done:nil];
     }
 }
 
@@ -1039,6 +1299,9 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)done:(id)sender
 {
     (void)sender;
+    if (!VZHostSupportsBridgedNetworking() &&
+        [self.options[VZNetworkModeKey] isEqualToString:@"Bridge"])
+        self.options[VZNetworkModeKey] = @"NAT";
     if (self.bundlePath) {
         NSError *error = nil;
         NSString *newName = VZUniqueVMNameExcludingPath(
@@ -1052,11 +1315,12 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             if (![NSFileManager.defaultManager moveItemAtPath:self.bundlePath
                 toPath:destination error:&error]) {
                 UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:@"Could Not Rename Virtual Mac"
+                    alertControllerWithTitle:VZL(@"Could Not Rename Virtual Mac")
                     message:error.localizedDescription
                     preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
                     style:UIAlertActionStyleDefault handler:nil]];
+                VZAddFailureSupportActions(alert);
                 [self presentViewController:alert animated:YES completion:nil];
                 return;
             }
@@ -1070,11 +1334,12 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         }
         if (!VZWriteVMOptions(self.options, self.bundlePath, &error)) {
             UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"Could Not Save"
+                alertControllerWithTitle:VZL(@"Could Not Save")
                                  message:error.localizedDescription
                           preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
                 style:UIAlertActionStyleDefault handler:nil]];
+            VZAddFailureSupportActions(alert);
             [self presentViewController:alert animated:YES completion:nil];
             return;
         }
@@ -1093,7 +1358,11 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)cancel:(id)sender
 {
     (void)sender;
-    [self dismissViewControllerAnimated:YES completion:nil];
+    if (![self hasUnsavedChanges]) {
+        [self dismissViewControllerAnimated:YES completion:nil];
+        return;
+    }
+    [self confirmDiscardChanges];
 }
 
 - (void)dealloc
@@ -1101,50 +1370,98 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [_bundlePath release];
     [_vmName release];
     [_options release];
+    [_originalOptions release];
+    [_originalVMName release];
     [_completion release];
     [_deletion release];
+    [_experimentalMacOSName release];
+    [_chooseDifferentVersionHandler release];
+    [_experimentalWarningHeader release];
     [super dealloc];
 }
 @end
 
-@interface VZLibraryControlsView : UICollectionReusableView
+static const CGFloat VZLibraryHorizontalInset = 24.0;
+
+@interface VZLibraryControlsView : UIView
 @property(nonatomic, retain) UISearchBar *searchBar;
 @property(nonatomic, retain) UISegmentedControl *layoutControl;
+@property(nonatomic, retain) NSLayoutConstraint *searchLeadingConstraint;
+@property(nonatomic, assign) BOOL alignmentPassScheduled;
 @end
 
 @implementation VZLibraryControlsView
+- (void)scheduleAlignmentPass
+{
+    if (!self.window || self.alignmentPassScheduled)
+        return;
+    self.alignmentPassScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.alignmentPassScheduled = NO;
+        [self setNeedsLayout];
+    });
+}
+
+- (void)didMoveToWindow
+{
+    [super didMoveToWindow];
+    // Perform one settled-frame pass after the controls join the window.
+    [self scheduleAlignmentPass];
+}
+
 - (instancetype)initWithFrame:(CGRect)frame
 {
     if ((self = [super initWithFrame:frame])) {
         self.searchBar = [[[UISearchBar alloc] initWithFrame:CGRectZero]
             autorelease];
         self.searchBar.translatesAutoresizingMaskIntoConstraints = NO;
-        self.searchBar.placeholder = @"Search Virtual Mac";
+        self.searchBar.placeholder = VZL(@"Search Virtual Mac");
         self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
         [self addSubview:self.searchBar];
         self.layoutControl = [[[UISegmentedControl alloc] initWithItems:@[
             [UIImage systemImageNamed:@"square.grid.2x2"],
             [UIImage systemImageNamed:@"list.bullet"]]] autorelease];
         self.layoutControl.translatesAutoresizingMaskIntoConstraints = NO;
-        self.layoutControl.accessibilityLabel = @"Library Appearance";
+        self.layoutControl.accessibilityLabel = VZL(@"Library Appearance");
         [self addSubview:self.layoutControl];
+        self.searchLeadingConstraint = [self.searchBar.leadingAnchor
+            constraintEqualToAnchor:self.leadingAnchor
+            constant:VZLibraryHorizontalInset];
         [NSLayoutConstraint activateConstraints:@[
-            [self.searchBar.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:24],
+            self.searchLeadingConstraint,
             [self.searchBar.topAnchor constraintEqualToAnchor:self.topAnchor constant:4],
             [self.searchBar.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-4],
             [self.layoutControl.leadingAnchor constraintEqualToAnchor:
                 self.searchBar.trailingAnchor constant:12],
-            [self.layoutControl.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-24],
+            [self.layoutControl.trailingAnchor constraintEqualToAnchor:self.trailingAnchor
+                constant:-VZLibraryHorizontalInset],
             [self.layoutControl.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [self.layoutControl.widthAnchor constraintEqualToConstant:112],
         ]];
     }
     return self;
 }
+- (void)layoutSubviews
+{
+    [super layoutSubviews];
+    UITextField *field = self.searchBar.searchTextField;
+    CGRect fieldFrame = [field convertRect:field.bounds toView:self];
+    if (fieldFrame.size.width > 0) {
+        // Align the rendered field, rather than UISearchBar's outer bounds,
+        // with the first library card.
+        CGFloat targetX = VZLibraryHorizontalInset;
+        CGFloat adjustment = targetX - CGRectGetMinX(fieldFrame);
+        if (ABS(adjustment) > 0.5) {
+            self.searchLeadingConstraint.constant += adjustment;
+            [self scheduleAlignmentPass];
+        }
+    }
+}
 - (void)dealloc
 {
     [_searchBar release];
     [_layoutControl release];
+    [_searchLeadingConstraint release];
     [super dealloc];
 }
 @end
@@ -1156,16 +1473,21 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 @property(nonatomic, retain) NSArray *filteredMachines;
 @property(nonatomic, copy) NSString *searchText;
 @property(nonatomic, retain) NSURL *pendingIPSWURL;
+@property(nonatomic, retain) VZLibraryControlsView *controlsView;
 @property(nonatomic, retain) UICollectionView *collectionView;
 @property(nonatomic, retain) UIView *emptyView;
+@property(nonatomic, retain) UIView *noResultsView;
+@property(nonatomic, retain) NSLayoutConstraint *noResultsBottomConstraint;
 @property(nonatomic, assign) CGFloat lastCollectionWidth;
 @property(nonatomic, retain) NSURLSessionDownloadTask *downloadTask;
 @property(nonatomic, retain) NSTimer *downloadTimer;
 @property(nonatomic, retain) VZProgressViewController *downloadController;
+@property(nonatomic, retain) VZProgressViewController *restoreCopyController;
 @property(nonatomic, copy) NSString *downloadDestination;
 @property(nonatomic, copy) NSString *downloadMarkerPath;
 @property(nonatomic, assign) int64_t downloadLastBytes;
 @property(nonatomic, retain) NSDate *downloadLastSample;
+@property(nonatomic, retain) NSDate *downloadStartedAt;
 @property(nonatomic, assign) BOOL downloadCancelled;
 @property(nonatomic, assign) BOOL didCheckInterruptedDownloads;
 @end
@@ -1202,7 +1524,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 {
     self = [super init];
     if (self) {
-        self.title = @"Virtual Mac";
+        self.title = VZL(@"Virtual Mac");
         self.navigationItem.leftBarButtonItem = [[[UIBarButtonItem alloc]
             initWithImage:[UIImage systemImageNamed:@"gearshape"]
             style:UIBarButtonItemStylePlain target:self
@@ -1219,51 +1541,95 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemBackgroundColor;
     UICollectionViewFlowLayout *layout = [[[UICollectionViewFlowLayout alloc] init] autorelease];
-    layout.sectionInset = UIEdgeInsetsMake(22, 24, 30, 24);
+    layout.sectionInset = UIEdgeInsetsMake(22, VZLibraryHorizontalInset,
+                                           30, VZLibraryHorizontalInset);
     layout.minimumInteritemSpacing = 18;
     layout.minimumLineSpacing = 18;
     self.collectionView = [[[UICollectionView alloc] initWithFrame:self.view.bounds
         collectionViewLayout:layout] autorelease];
-    self.collectionView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-        UIViewAutoresizingFlexibleHeight;
+    self.collectionView.translatesAutoresizingMaskIntoConstraints = NO;
     self.collectionView.backgroundColor = UIColor.systemBackgroundColor;
     self.collectionView.dataSource = self;
     self.collectionView.delegate = self;
     self.collectionView.alwaysBounceVertical = YES;
     [self.collectionView registerClass:UICollectionViewCell.class
         forCellWithReuseIdentifier:@"item"];
-    [self.collectionView registerClass:VZLibraryControlsView.class
-        forSupplementaryViewOfKind:UICollectionElementKindSectionHeader
-        withReuseIdentifier:@"controls"];
     UIRefreshControl *refresh = [[[UIRefreshControl alloc] init] autorelease];
     [refresh addTarget:self action:@selector(reloadLibrary)
         forControlEvents:UIControlEventValueChanged];
     self.collectionView.refreshControl = refresh;
     [self.view addSubview:self.collectionView];
+    self.controlsView = [[[VZLibraryControlsView alloc] initWithFrame:CGRectZero]
+        autorelease];
+    self.controlsView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.controlsView.searchBar.delegate = self;
+    self.controlsView.searchBar.text = self.searchText;
+    self.controlsView.layoutControl.selectedSegmentIndex =
+        [[VZAppSettings.sharedSettings stringForKey:VZLibraryLayoutKey]
+            isEqualToString:@"list"] ? 1 : 0;
+    [self.controlsView.layoutControl addTarget:self
+        action:@selector(libraryLayoutChanged:)
+        forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:self.controlsView];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.controlsView.topAnchor constraintEqualToAnchor:
+            self.view.safeAreaLayoutGuide.topAnchor],
+        [self.controlsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.controlsView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.controlsView.heightAnchor constraintEqualToConstant:58.0],
+        [self.collectionView.topAnchor constraintEqualToAnchor:
+            self.controlsView.bottomAnchor],
+        [self.collectionView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.collectionView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.collectionView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+    ]];
 
     UIView *empty = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
     empty.translatesAutoresizingMaskIntoConstraints = NO;
+    NSString *onboardingImagePath = [NSBundle.mainBundle
+        pathForResource:@"VirtualMacTemplate" ofType:@"png"];
+    UIImage *onboardingImage = [[UIImage
+        imageWithContentsOfFile:onboardingImagePath]
+        imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     UIImageView *icon = [[[UIImageView alloc] initWithImage:
-        [UIImage systemImageNamed:@"macbook.and.ipad"]] autorelease];
+        onboardingImage] autorelease];
     icon.tintColor = UIColor.secondaryLabelColor;
     icon.contentMode = UIViewContentModeScaleAspectFit;
     icon.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *title = [[[UILabel alloc] init] autorelease];
-    title.text = @"No Virtual Mac";
-    title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    title.text = VZL(@"Welcome to Virtual Mac");
+    UIFont *preferredTitleFont =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    UIFontDescriptor *boldTitleDescriptor = [preferredTitleFont.fontDescriptor
+        fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitBold];
+    title.font = boldTitleDescriptor
+        ? [UIFont fontWithDescriptor:boldTitleDescriptor size:0]
+        : preferredTitleFont;
     title.textAlignment = NSTextAlignmentCenter;
     title.translatesAutoresizingMaskIntoConstraints = NO;
     UILabel *message = [[[UILabel alloc] init] autorelease];
-    message.text = @"Install macOS from an Apple restore image.";
+    message.text = VZL(@"People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started.");
     message.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     message.textColor = UIColor.secondaryLabelColor;
     message.textAlignment = NSTextAlignmentCenter;
     message.numberOfLines = 0;
     message.translatesAutoresizingMaskIntoConstraints = NO;
     UIButton *create = [UIButton buttonWithType:UIButtonTypeSystem];
-    [create setTitle:@"Create Virtual Mac" forState:UIControlStateNormal];
+    [create setTitle:VZL(@"Create Virtual Mac") forState:UIControlStateNormal];
     create.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
-    create.configuration = [UIButtonConfiguration filledButtonConfiguration];
+    if (@available(iOS 15.0, *)) {
+        UIButtonConfiguration *createConfiguration =
+            [UIButtonConfiguration filledButtonConfiguration];
+        createConfiguration.contentInsets =
+            NSDirectionalEdgeInsetsMake(10, 28, 10, 28);
+        create.configuration = createConfiguration;
+    } else {
+        create.backgroundColor = UIColor.systemBlueColor;
+        create.tintColor = UIColor.whiteColor;
+        create.layer.cornerRadius = 10;
+        create.layer.cornerCurve = kCACornerCurveContinuous;
+        create.contentEdgeInsets = UIEdgeInsetsMake(10, 28, 10, 28);
+    }
     [create addTarget:self action:@selector(addVM:) forControlEvents:UIControlEventTouchUpInside];
     create.translatesAutoresizingMaskIntoConstraints = NO;
     for (UIView *view in @[icon, title, message, create]) [empty addSubview:view];
@@ -1274,9 +1640,9 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         [empty.widthAnchor constraintLessThanOrEqualToConstant:430],
         [icon.topAnchor constraintEqualToAnchor:empty.topAnchor],
         [icon.centerXAnchor constraintEqualToAnchor:empty.centerXAnchor],
-        [icon.widthAnchor constraintEqualToConstant:76],
-        [icon.heightAnchor constraintEqualToConstant:62],
-        [title.topAnchor constraintEqualToAnchor:icon.bottomAnchor constant:18],
+        [icon.widthAnchor constraintEqualToConstant:160],
+        [icon.heightAnchor constraintEqualToConstant:118],
+        [title.topAnchor constraintEqualToAnchor:icon.bottomAnchor constant:10],
         [title.leadingAnchor constraintEqualToAnchor:empty.leadingAnchor],
         [title.trailingAnchor constraintEqualToAnchor:empty.trailingAnchor],
         [message.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:8],
@@ -1284,11 +1650,137 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         [message.trailingAnchor constraintEqualToAnchor:empty.trailingAnchor],
         [create.topAnchor constraintEqualToAnchor:message.bottomAnchor constant:22],
         [create.centerXAnchor constraintEqualToAnchor:empty.centerXAnchor],
+        [create.heightAnchor constraintGreaterThanOrEqualToConstant:44],
         [create.bottomAnchor constraintEqualToAnchor:empty.bottomAnchor],
     ]];
     self.emptyView = empty;
+
+    UIView *noResults = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+    noResults.translatesAutoresizingMaskIntoConstraints = NO;
+    noResults.userInteractionEnabled = NO;
+    noResults.hidden = YES;
+    UIImageView *noResultsIcon = [[[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"magnifyingglass"]] autorelease];
+    noResultsIcon.tintColor = UIColor.secondaryLabelColor;
+    noResultsIcon.translatesAutoresizingMaskIntoConstraints = NO;
+    UILabel *noResultsTitle = [[[UILabel alloc] init] autorelease];
+    noResultsTitle.text = VZL(@"No Results");
+    UIFont *preferredNoResultsFont =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    UIFontDescriptor *boldNoResultsDescriptor =
+        [preferredNoResultsFont.fontDescriptor
+            fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitBold];
+    noResultsTitle.font = boldNoResultsDescriptor
+        ? [UIFont fontWithDescriptor:boldNoResultsDescriptor size:0]
+        : preferredNoResultsFont;
+    noResultsTitle.textAlignment = NSTextAlignmentCenter;
+    noResultsTitle.translatesAutoresizingMaskIntoConstraints = NO;
+    UILabel *noResultsMessage = [[[UILabel alloc] init] autorelease];
+    noResultsMessage.text = VZL(@"No Virtual Macs match your search.");
+    noResultsMessage.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    noResultsMessage.textColor = UIColor.secondaryLabelColor;
+    noResultsMessage.textAlignment = NSTextAlignmentCenter;
+    noResultsMessage.translatesAutoresizingMaskIntoConstraints = NO;
+    [noResults addSubview:noResultsIcon];
+    [noResults addSubview:noResultsTitle];
+    [noResults addSubview:noResultsMessage];
+    [self.view addSubview:noResults];
+    self.noResultsBottomConstraint = [noResults.bottomAnchor
+        constraintEqualToAnchor:self.view.bottomAnchor];
+    [NSLayoutConstraint activateConstraints:@[
+        [noResults.topAnchor constraintEqualToAnchor:
+            self.controlsView.bottomAnchor],
+        [noResults.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [noResults.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        self.noResultsBottomConstraint,
+        [noResultsIcon.centerXAnchor constraintEqualToAnchor:noResults.centerXAnchor],
+        [noResultsIcon.centerYAnchor constraintEqualToAnchor:noResults.centerYAnchor constant:-42],
+        [noResultsIcon.widthAnchor constraintEqualToConstant:44],
+        [noResultsIcon.heightAnchor constraintEqualToConstant:44],
+        [noResultsTitle.topAnchor constraintEqualToAnchor:noResultsIcon.bottomAnchor constant:14],
+        [noResultsTitle.leadingAnchor constraintEqualToAnchor:noResults.leadingAnchor constant:24],
+        [noResultsTitle.trailingAnchor constraintEqualToAnchor:noResults.trailingAnchor constant:-24],
+        [noResultsMessage.topAnchor constraintEqualToAnchor:noResultsTitle.bottomAnchor constant:6],
+        [noResultsMessage.leadingAnchor constraintEqualToAnchor:noResults.leadingAnchor constant:24],
+        [noResultsMessage.trailingAnchor constraintEqualToAnchor:noResults.trailingAnchor constant:-24],
+    ]];
+    self.noResultsView = noResults;
     [NSNotificationCenter.defaultCenter addObserver:self
         selector:@selector(settingsChanged:) name:VZSettingsDidChangeNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+        selector:@selector(keyboardFrameChanged:)
+        name:UIKeyboardWillChangeFrameNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+        selector:@selector(applicationDidBecomeActive:)
+        name:UIApplicationDidBecomeActiveNotification object:nil];
+}
+
+- (void)refreshCollectionLayout
+{
+    // UIKit may restore a scene snapshot while a form sheet covers this view
+    // without laying out the underlying collection at the intermediate size.
+    // Resolve our constraints first, then discard every cached item size. Do
+    // not reload data here: that would replace cells and can end an active
+    // search session.
+    [self.view setNeedsLayout];
+    [self.view layoutIfNeeded];
+    self.lastCollectionWidth = self.collectionView.bounds.size.width;
+    [self.controlsView setNeedsLayout];
+    [self.collectionView.collectionViewLayout invalidateLayout];
+    [self.collectionView setNeedsLayout];
+    [self.collectionView layoutIfNeeded];
+}
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification
+{
+    (void)notification;
+    // The first active notification can arrive before UIKit has restored the
+    // final scene geometry. Run after that transaction has drained.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.view.window)
+            [self refreshCollectionLayout];
+    });
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator
+{
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    [coordinator animateAlongsideTransition:nil completion:
+        ^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            (void)context;
+            [self refreshCollectionLayout];
+        }];
+}
+
+- (void)keyboardFrameChanged:(NSNotification *)notification
+{
+    CGRect screenFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey]
+        CGRectValue];
+    CGRect keyboardFrame = [self.view convertRect:screenFrame fromView:nil];
+    CGRect overlap = CGRectIntersection(self.view.bounds, keyboardFrame);
+    CGFloat coveredHeight = CGRectIsNull(overlap) ? 0.0 :
+        MAX(0.0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(overlap));
+    CGFloat bottomConstant = -coveredHeight;
+    // Reloading the search header can produce duplicate keyboard-frame
+    // notifications even though the keyboard did not move. Reanimating the
+    // same constraint makes the No Results content appear to enter again on
+    // every character.
+    if (ABS(self.noResultsBottomConstraint.constant - bottomConstant) < 0.5)
+        return;
+    self.noResultsBottomConstraint.constant = bottomConstant;
+
+    NSTimeInterval duration =
+        [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey]
+            doubleValue];
+    UIViewAnimationCurve curve =
+        [notification.userInfo[UIKeyboardAnimationCurveUserInfoKey]
+            integerValue];
+    UIViewAnimationOptions options = UIViewAnimationOptionBeginFromCurrentState |
+        ((UIViewAnimationOptions)curve << 16);
+    [UIView animateWithDuration:duration delay:0 options:options animations:^{
+        [self.view layoutIfNeeded];
+    } completion:nil];
 }
 
 - (void)viewDidLayoutSubviews
@@ -1307,25 +1799,32 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [self reloadLibrary];
     if (!self.didCheckInterruptedDownloads) {
         self.didCheckInterruptedDownloads = YES;
-        NSMutableArray *markers = [NSMutableArray array];
-        for (NSString *name in [NSFileManager.defaultManager
-                contentsOfDirectoryAtPath:VZRestoreImagesPath() error:nil])
-            if ([name hasSuffix:@".download.plist"])
-                [markers addObject:[VZRestoreImagesPath() stringByAppendingPathComponent:name]];
-        if (markers.count) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                350 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:markers.count == 1 ? @"Incomplete Download" : @"Incomplete Downloads"
-                             message:@"A previous restore-image download did not finish. You can delete its marker and download it again."
-                      preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Keep"
-                style:UIAlertActionStyleCancel handler:nil]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Delete"
-                style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-                (void)action; VZRemovePaths(markers);
-            }]];
-            [self presentViewController:alert animated:YES completion:nil];
-        });
+        NSFileManager *manager = NSFileManager.defaultManager;
+        NSString *restoreDirectory =
+            VZRestoreImagesPath().stringByStandardizingPath;
+        NSString *restorePrefix = [restoreDirectory stringByAppendingString:@"/"];
+        for (NSString *name in [manager
+                contentsOfDirectoryAtPath:restoreDirectory error:nil]) {
+            if (![name hasSuffix:@".download.plist"])
+                continue;
+            NSString *marker = [restoreDirectory
+                stringByAppendingPathComponent:name];
+            NSDictionary *metadata = [NSDictionary
+                dictionaryWithContentsOfFile:marker];
+            NSString *destination = [metadata[@"Destination"]
+                isKindOfClass:NSString.class]
+                ? [metadata[@"Destination"] stringByStandardizingPath] : nil;
+            unsigned long long expected =
+                [metadata[@"ExpectedSize"] unsignedLongLongValue];
+            unsigned long long actual = destination.length ? [[manager
+                attributesOfItemAtPath:destination error:nil][NSFileSize]
+                unsignedLongLongValue] : 0;
+            BOOL complete = expected > 0 && actual == expected;
+            NSMutableArray *cleanup = [NSMutableArray arrayWithObject:marker];
+            if (!complete && [destination hasPrefix:restorePrefix])
+                [cleanup addObject:destination];
+            VZRemovePaths(cleanup);
+        }
     }
 }
 
@@ -1335,8 +1834,10 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [self applySearchFilter];
     self.emptyView.hidden = self.machines.count > 0;
     self.collectionView.hidden = self.machines.count == 0;
+    self.controlsView.hidden = self.machines.count == 0;
     [self.collectionView.collectionViewLayout invalidateLayout];
     [self.collectionView reloadData];
+    [self updateSearchBackground];
     [self.collectionView.refreshControl endRefreshing];
 }
 
@@ -1355,9 +1856,44 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     }]];
 }
 
+- (BOOL)showsCreateCard
+{
+    return self.searchText.length == 0;
+}
+
+- (NSArray *)searchItemIdentifiers
+{
+    NSMutableArray *identifiers = [NSMutableArray array];
+    if ([self showsCreateCard])
+        [identifiers addObject:@"__VirtualMacCreateCard__"];
+    for (NSDictionary *machine in self.filteredMachines)
+        [identifiers addObject:machine[@"path"] ?: machine];
+    return identifiers;
+}
+
+- (NSUInteger)machineIndexForItem:(NSInteger)item
+{
+    NSInteger index = item - ([self showsCreateCard] ? 1 : 0);
+    return index >= 0 && index < (NSInteger)self.filteredMachines.count
+        ? (NSUInteger)index : NSNotFound;
+}
+
+- (void)updateSearchBackground
+{
+    BOOL visible = self.searchText.length && !self.filteredMachines.count;
+    if (self.noResultsView.hidden == !visible)
+        return;
+    self.noResultsView.hidden = !visible;
+    if (visible)
+        [self.view bringSubviewToFront:self.noResultsView];
+}
+
 - (void)settingsChanged:(NSNotification *)notification
 {
     (void)notification;
+    self.controlsView.layoutControl.selectedSegmentIndex =
+        [[VZAppSettings.sharedSettings stringForKey:VZLibraryLayoutKey]
+            isEqualToString:@"list"] ? 1 : 0;
     [self.collectionView.collectionViewLayout invalidateLayout];
     [self.collectionView reloadData];
 }
@@ -1366,9 +1902,48 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     textDidChange:(NSString *)searchText
 {
     (void)searchBar;
+    NSArray *oldIdentifiers = [self searchItemIdentifiers];
     self.searchText = searchText;
     [self applySearchFilter];
-    [self.collectionView reloadData];
+    NSArray *newIdentifiers = [self searchItemIdentifiers];
+    NSSet *oldSet = [NSSet setWithArray:oldIdentifiers];
+    NSSet *newSet = [NSSet setWithArray:newIdentifiers];
+    NSMutableArray *deletions = [NSMutableArray array];
+    NSMutableArray *insertions = [NSMutableArray array];
+    [oldIdentifiers enumerateObjectsUsingBlock:
+        ^(id identifier, NSUInteger index, BOOL *stop) {
+        (void)stop;
+        if (![newSet containsObject:identifier])
+            [deletions addObject:[NSIndexPath indexPathForItem:index
+                                                     inSection:0]];
+    }];
+    [newIdentifiers enumerateObjectsUsingBlock:
+        ^(id identifier, NSUInteger index, BOOL *stop) {
+        (void)stop;
+        if (![oldSet containsObject:identifier])
+            [insertions addObject:[NSIndexPath indexPathForItem:index
+                                                      inSection:0]];
+    }];
+    [self updateSearchBackground];
+    if (!deletions.count && !insertions.count)
+        return;
+    // Filtering preserves machine order, so unchanged cells naturally shift
+    // around the small set of inserted/deleted identities. Search controls
+    // live outside the collection, so these updates cannot replace or resign
+    // the active text field.
+    [UIView performWithoutAnimation:^{
+        [self.collectionView performBatchUpdates:^{
+            if (deletions.count)
+                [self.collectionView deleteItemsAtIndexPaths:deletions];
+            if (insertions.count)
+                [self.collectionView insertItemsAtIndexPaths:insertions];
+        } completion:nil];
+    }];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar
+{
+    [searchBar resignFirstResponder];
 }
 
 - (void)libraryLayoutChanged:(UISegmentedControl *)sender
@@ -1378,38 +1953,10 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         forKey:VZLibraryLayoutKey];
 }
 
-- (UICollectionReusableView *)collectionView:(UICollectionView *)collectionView
-    viewForSupplementaryElementOfKind:(NSString *)kind
-    atIndexPath:(NSIndexPath *)indexPath
-{
-    (void)indexPath;
-    VZLibraryControlsView *controls = (id)[collectionView
-        dequeueReusableSupplementaryViewOfKind:kind
-        withReuseIdentifier:@"controls" forIndexPath:indexPath];
-    controls.searchBar.delegate = self;
-    controls.searchBar.text = self.searchText;
-    controls.layoutControl.selectedSegmentIndex =
-        [[VZAppSettings.sharedSettings stringForKey:VZLibraryLayoutKey]
-            isEqualToString:@"list"] ? 1 : 0;
-    [controls.layoutControl removeTarget:nil action:NULL
-        forControlEvents:UIControlEventValueChanged];
-    [controls.layoutControl addTarget:self action:@selector(libraryLayoutChanged:)
-        forControlEvents:UIControlEventValueChanged];
-    return controls;
-}
-
-- (CGSize)collectionView:(UICollectionView *)collectionView
-    layout:(UICollectionViewLayout *)layout
-    referenceSizeForHeaderInSection:(NSInteger)section
-{
-    (void)layout; (void)section;
-    return CGSizeMake(collectionView.bounds.size.width, 58);
-}
-
 - (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section
 {
     (void)collectionView; (void)section;
-    return self.filteredMachines.count + 1;
+    return self.filteredMachines.count + ([self showsCreateCard] ? 1 : 0);
 }
 
 - (NSString *)activeVMBundlePath
@@ -1437,13 +1984,13 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             return;
         }
         UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"Another Virtual Mac Is Running"
-            message:@"Switch to the running virtual Mac and shut it down before starting another one."
+            alertControllerWithTitle:VZL(@"Another Virtual Mac Is Running")
+            message:VZL(@"Switch to the running Virtual Mac and shut it down before starting another one.")
             preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
             style:UIAlertActionStyleCancel handler:nil]];
         [alert addAction:[UIAlertAction
-            actionWithTitle:@"Switch to Running Virtual Mac"
+            actionWithTitle:VZL(@"Switch to Running Virtual Mac")
             style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             (void)action;
             if ([self.delegate respondsToSelector:
@@ -1464,14 +2011,14 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     if ([self isMachineActive:machine])
         return;
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Delete Virtual Mac?"
+        alertControllerWithTitle:VZL(@"Delete Virtual Mac?")
         message:[NSString stringWithFormat:
-            @"“%@” and all files stored in it will be permanently deleted.",
+            VZL(@"“%@” and all files stored in it will be permanently deleted."),
             machine[@"name"]]
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Delete"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Delete")
         style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
         VZRemovePaths(@[machine[@"path"]]);
@@ -1515,12 +2062,12 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             @selector(vmLibraryForceShutdownActiveVM:)])
         return;
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Force Shut Down Virtual Mac?"
-        message:@"Unsaved changes in macOS may be lost."
+        alertControllerWithTitle:VZL(@"Force Shut Down Virtual Mac?")
+        message:VZL(@"Unsaved changes in macOS may be lost.")
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Force Shut Down"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Force Shut Down")
         style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
         [self.delegate vmLibraryForceShutdownActiveVM:self];
@@ -1535,27 +2082,27 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     UIAlertController *sheet = [UIAlertController
         alertControllerWithTitle:machine[@"name"] message:nil
         preferredStyle:UIAlertControllerStyleActionSheet];
-    [sheet addAction:[UIAlertAction actionWithTitle:active ? @"Resume" : @"Start"
+    [sheet addAction:[UIAlertAction actionWithTitle:active ? VZL(@"Resume") : VZL(@"Start")
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action; [self startMachine:machine];
     }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Options"
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Options")
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action;
         NSUInteger index = [self.filteredMachines indexOfObject:machine];
         if (index != NSNotFound) [self configureMachineAtIndex:index];
     }]];
     if (active)
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Force Shut Down"
+        [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Force Shut Down")
             style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             (void)action; [self forceShutdownMachine:machine];
         }]];
     else
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Delete"
+        [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Delete")
             style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             (void)action; [self confirmDeleteMachine:machine];
         }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
     sheet.popoverPresentationController.sourceView = source ?: self.view;
     sheet.popoverPresentationController.sourceRect = source ? source.bounds :
@@ -1575,6 +2122,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             [cell removeGestureRecognizer:gesture];
     cell.contentView.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
     cell.contentView.layer.cornerRadius = 14;
+    cell.contentView.layer.cornerCurve = kCACornerCurveContinuous;
     cell.contentView.layer.borderWidth = 0.5;
     cell.contentView.layer.borderColor = UIColor.separatorColor.CGColor;
     cell.contentView.clipsToBounds = YES;
@@ -1582,6 +2130,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     UIView *selected = [[[UIView alloc] initWithFrame:cell.bounds] autorelease];
     selected.backgroundColor = UIColor.tertiarySystemFillColor;
     selected.layer.cornerRadius = 14;
+    selected.layer.cornerCurve = kCACornerCurveContinuous;
     cell.selectedBackgroundView = selected;
     UIImageView *image = [[[UIImageView alloc] init] autorelease];
     image.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1591,6 +2140,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     // image mask leaves a visible seam above solid-color artwork such as the
     // Create card; only standalone list thumbnails need their own rounding.
     image.layer.cornerRadius = list ? 10 : 0;
+    image.layer.cornerCurve = kCACornerCurveContinuous;
     image.layer.maskedCorners = list ?
         (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
          kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner) :
@@ -1610,55 +2160,66 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [cell.contentView addSubview:detail];
     UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem];
     more.translatesAutoresizingMaskIntoConstraints = NO;
-    more.tag = indexPath.item;
+    NSUInteger machineIndex = [self machineIndexForItem:indexPath.item];
+    BOOL createCard = machineIndex == NSNotFound && [self showsCreateCard] && indexPath.item == 0;
+    more.tag = machineIndex == NSNotFound ? 0 : machineIndex + 1;
     [more addTarget:self action:@selector(moreButton:)
         forControlEvents:UIControlEventTouchUpInside];
     [cell.contentView addSubview:more];
-    if (indexPath.item == 0) {
+    if (createCard) {
         NSString *art = [[NSBundle mainBundle] pathForResource:@"new"
             ofType:@"png" inDirectory:@"Wallpapers"];
         image.image = [UIImage imageWithContentsOfFile:art];
-        title.text = @"Create Virtual Mac";
-        detail.text = @"Install macOS";
+        title.text = VZL(@"Create Virtual Mac");
+        detail.text = VZL(@"Install macOS");
         more.hidden = YES;
     } else {
-        NSDictionary *machine = self.filteredMachines[indexPath.item - 1];
+        NSDictionary *machine = self.filteredMachines[machineIndex];
         NSDictionary *options = VZVMOptionsForBundle(machine[@"path"]);
         title.text = machine[@"name"];
-        detail.text = [NSString stringWithFormat:@"%@ CPUs · %@ GB · %@%@",
+        uint64_t storage = VZVMStorageCapacity(machine[@"path"], options);
+        detail.text = [NSString stringWithFormat:
+            VZL(@"%@ CPU · %@ GB RAM · %llu GB · %@%@"),
             options[VZCPUCountKey], @([options[VZMemorySizeKey] unsignedLongLongValue] >> 30),
-            options[VZNetworkModeKey], [machine[@"legacy"] boolValue] ? @" · Legacy" : @""];
+            (unsigned long long)(storage >> 30), VZNetworkModeDisplayName(options),
+            [machine[@"legacy"] boolValue] ? VZL(@" · Legacy") : @""];
         NSString *wallpaperName = [self wallpaperNameForMachineName:machine[@"name"]];
         NSString *art = [[NSBundle mainBundle] pathForResource:wallpaperName
             ofType:@"jpg" inDirectory:@"Wallpapers"];
         image.image = [UIImage imageWithContentsOfFile:art];
-        image.tag = indexPath.item;
+        image.tag = machineIndex + 1;
         image.userInteractionEnabled = YES;
         UITapGestureRecognizer *start = [[[UITapGestureRecognizer alloc]
             initWithTarget:self action:@selector(machineArtworkTapped:)] autorelease];
         [image addGestureRecognizer:start];
         image.isAccessibilityElement = YES;
-        image.accessibilityLabel = [NSString stringWithFormat:@"Start %@", machine[@"name"]];
+        image.accessibilityLabel = [NSString stringWithFormat:VZL(@"Start %@"), machine[@"name"]];
         image.accessibilityTraits = UIAccessibilityTraitButton;
         [more setImage:[UIImage systemImageNamed:@"ellipsis.circle"] forState:UIControlStateNormal];
-        more.accessibilityLabel = [NSString stringWithFormat:@"Configure %@", machine[@"name"]];
-        if (!list) {
+        more.accessibilityLabel = [NSString stringWithFormat:VZL(@"Configure %@"), machine[@"name"]];
+        {
             UIVisualEffectView *playBackground = [[[UIVisualEffectView alloc]
                 initWithEffect:[UIBlurEffect effectWithStyle:
                     UIBlurEffectStyleSystemUltraThinMaterialDark]] autorelease];
             playBackground.translatesAutoresizingMaskIntoConstraints = NO;
             playBackground.userInteractionEnabled = YES;
-            playBackground.layer.cornerRadius = 36;
+            CGFloat playDiameter = list ? 36 : 72;
+            playBackground.layer.cornerRadius = playDiameter / 2.0;
             playBackground.clipsToBounds = YES;
             UIButton *play = [UIButton buttonWithType:UIButtonTypeSystem];
             play.translatesAutoresizingMaskIntoConstraints = NO;
-            play.tag = indexPath.item;
+            play.tag = machineIndex + 1;
             play.tintColor = UIColor.whiteColor;
+            NSString *resumeSymbol = [UIImage systemImageNamed:
+                @"rectangle.portrait.and.arrow.right"]
+                ? @"rectangle.portrait.and.arrow.right"
+                : @"arrow.right";
             NSString *symbolName = [self isMachineActive:machine]
-                ? @"rectangle.portrait.and.arrow.right" : @"play.fill";
+                ? resumeSymbol : @"play.fill";
             UIImage *playImage = [[UIImage systemImageNamed:symbolName]
                 imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration
-                    configurationWithPointSize:24 weight:UIImageSymbolWeightSemibold]];
+                    configurationWithPointSize:list ? 14 : 24
+                    weight:UIImageSymbolWeightSemibold]];
             [play setImage:playImage forState:UIControlStateNormal];
             [play addTarget:self action:@selector(startButton:)
                 forControlEvents:UIControlEventTouchUpInside];
@@ -1667,8 +2228,8 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             [NSLayoutConstraint activateConstraints:@[
                 [playBackground.centerXAnchor constraintEqualToAnchor:image.centerXAnchor],
                 [playBackground.centerYAnchor constraintEqualToAnchor:image.centerYAnchor],
-                [playBackground.widthAnchor constraintEqualToConstant:72],
-                [playBackground.heightAnchor constraintEqualToConstant:72],
+                [playBackground.widthAnchor constraintEqualToConstant:playDiameter],
+                [playBackground.heightAnchor constraintEqualToConstant:playDiameter],
                 [play.centerXAnchor constraintEqualToAnchor:playBackground.contentView.centerXAnchor],
                 [play.centerYAnchor constraintEqualToAnchor:playBackground.contentView.centerYAnchor],
                 [play.widthAnchor constraintEqualToAnchor:playBackground.widthAnchor],
@@ -1677,7 +2238,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         }
     }
     if (list) {
-        cell.tag = indexPath.item;
+        cell.tag = machineIndex == NSNotFound ? 0 : machineIndex + 1;
         UISwipeGestureRecognizer *swipe = [[[UISwipeGestureRecognizer alloc]
             initWithTarget:self action:@selector(handleMachineSwipe:)] autorelease];
         swipe.direction = UISwipeGestureRecognizerDirectionRight;
@@ -1747,9 +2308,12 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath
 {
     [collectionView deselectItemAtIndexPath:indexPath animated:YES];
-    if (indexPath.item == 0) { [self presentNewVMFlow]; return; }
-    if (indexPath.item > self.filteredMachines.count) return;
-    NSDictionary *machine = self.filteredMachines[indexPath.item - 1];
+    NSUInteger index = [self machineIndexForItem:indexPath.item];
+    if (index == NSNotFound) {
+        if ([self showsCreateCard] && indexPath.item == 0) [self presentNewVMFlow];
+        return;
+    }
+    NSDictionary *machine = self.filteredMachines[index];
     UICollectionViewCell *cell = [collectionView cellForItemAtIndexPath:indexPath];
     [self presentActionsForMachine:machine fromView:cell];
 }
@@ -1782,16 +2346,16 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     UIAlertController *sheet = [UIAlertController
         alertControllerWithTitle:machine[@"name"] message:nil
         preferredStyle:UIAlertControllerStyleActionSheet];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Options"
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Options")
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action; [self configureMachineAtIndex:cell.tag - 1];
     }]];
     if (![self isMachineActive:machine])
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Delete"
+        [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Delete")
             style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             (void)action; [self confirmDeleteMachine:machine];
         }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
     sheet.popoverPresentationController.sourceView = cell;
     sheet.popoverPresentationController.sourceRect = cell.bounds;
@@ -1803,19 +2367,21 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     point:(CGPoint)point
 {
     (void)collectionView; (void)point;
-    if (indexPath.item == 0 || indexPath.item > self.filteredMachines.count)
-        return nil;
-    NSDictionary *machine = self.filteredMachines[indexPath.item - 1];
+    NSUInteger index = [self machineIndexForItem:indexPath.item];
+    if (index == NSNotFound) return nil;
+    NSDictionary *machine = self.filteredMachines[index];
     BOOL active = [self isMachineActive:machine];
     return [UIContextMenuConfiguration configurationWithIdentifier:nil
         previewProvider:nil actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
         (void)suggested;
-        UIAction *start = [UIAction actionWithTitle:active ? @"Resume" : @"Start"
-            image:[UIImage systemImageNamed:active ? @"rectangle.portrait.and.arrow.right" : @"play.fill"]
+        UIImage *resumeImage = [UIImage systemImageNamed:
+            @"rectangle.portrait.and.arrow.right"] ?: [UIImage systemImageNamed:@"play.fill"];
+        UIAction *start = [UIAction actionWithTitle:active ? VZL(@"Resume") : VZL(@"Start")
+            image:active ? resumeImage : [UIImage systemImageNamed:@"play.fill"]
             identifier:nil handler:^(__kindof UIAction *action) {
             (void)action; [self startMachine:machine];
         }];
-        UIAction *options = [UIAction actionWithTitle:@"Options"
+        UIAction *options = [UIAction actionWithTitle:VZL(@"Options")
             image:[UIImage systemImageNamed:@"gearshape"] identifier:nil
             handler:^(__kindof UIAction *action) {
             (void)action;
@@ -1823,7 +2389,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             if (index != NSNotFound) [self configureMachineAtIndex:index];
         }];
         UIAction *power = [UIAction actionWithTitle:
-            active ? @"Force Shut Down" : @"Delete"
+            active ? VZL(@"Force Shut Down") : VZL(@"Delete")
             image:[UIImage systemImageNamed:active ? @"power" : @"trash"]
             identifier:nil handler:^(__kindof UIAction *action) {
             (void)action;
@@ -1855,9 +2421,127 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)presentRestoreImagePicker
 {
     UIDocumentPickerViewController *picker = [[[UIDocumentPickerViewController alloc]
-        initForOpeningContentTypes:@[UTTypeItem] asCopy:NO] autorelease];
+        initForOpeningContentTypes:@[UTTypeItem] asCopy:YES] autorelease];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)configureRestoreImageAtURL:(NSURL *)url
+{
+    self.pendingIPSWURL = url;
+    NSString *suggested = VZUniqueVMName(
+        VZMarketingNameForRestoreImage(url));
+    NSMutableDictionary *defaults = [NSMutableDictionary
+        dictionaryWithDictionary:VZVMDefaultOptions()];
+    defaults[VZPointingDeviceKey] = VZDefaultPointingDeviceForPath(url.path);
+    defaults[VZKeyboardDeviceKey] = VZDefaultKeyboardDeviceForPath(url.path);
+    VZVMConfigurationViewController *configuration =
+        [[[VZVMConfigurationViewController alloc]
+          initWithBundlePath:nil options:defaults
+          completion:^(NSDictionary *result) {
+            NSMutableDictionary *options = [NSMutableDictionary
+                dictionaryWithDictionary:result];
+            NSString *name = VZUniqueVMName(options[VZVMNameKey]);
+            [options removeObjectForKey:VZVMNameKey];
+            [self.delegate vmLibrary:self installRestoreImageAtURL:url
+                name:name options:options];
+        }] autorelease];
+    configuration.vmName = suggested;
+    NSDictionary *localImage = @{ @"name": url.lastPathComponent ?: @"" };
+    configuration.showsExperimentalInstallWarning =
+        [VZRestoreCatalog isExperimentalImage:localImage];
+    configuration.showsUnsupportedInstallWarning =
+        [VZRestoreCatalog isUnsupportedImage:localImage];
+    if (configuration.showsExperimentalInstallWarning) {
+        configuration.experimentalMacOSName =
+            [VZRestoreCatalog macOSNameForImage:localImage];
+        configuration.chooseDifferentVersionHandler = ^{
+            [self presentNewVMFlow];
+        };
+    }
+    [self presentConfiguration:configuration];
+}
+
+- (void)copySelectedRestoreImageAtURL:(NSURL *)source
+{
+    NSString *restoreDirectory = VZRestoreImagesPath();
+    NSString *standardSource = source.path.stringByStandardizingPath;
+    if ([standardSource.stringByDeletingLastPathComponent
+            isEqualToString:restoreDirectory.stringByStandardizingPath]) {
+        [source stopAccessingSecurityScopedResource];
+        [self configureRestoreImageAtURL:[NSURL fileURLWithPath:standardSource]];
+        return;
+    }
+    [NSFileManager.defaultManager createDirectoryAtPath:restoreDirectory
+        withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *base = source.lastPathComponent.stringByDeletingPathExtension;
+    NSString *extension = source.pathExtension.lowercaseString;
+    NSString *destination = [restoreDirectory stringByAppendingPathComponent:
+        [base stringByAppendingPathExtension:extension]];
+    for (NSUInteger suffix = 2;
+         [NSFileManager.defaultManager fileExistsAtPath:destination]; suffix++)
+        destination = [restoreDirectory stringByAppendingPathComponent:
+            [[NSString stringWithFormat:@"%@ %lu", base, (unsigned long)suffix]
+                stringByAppendingPathExtension:extension]];
+
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    self.restoreCopyController = [[[VZProgressViewController alloc]
+        initWithTitle:VZL(@"Copying Restore Image")] autorelease];
+    self.restoreCopyController.statusText = source.lastPathComponent;
+    self.restoreCopyController.detailText =
+        VZL(@"Preparing the IPSW for installation. Your iPad will remain awake.");
+    self.restoreCopyController.consoleHidden = YES;
+    self.restoreCopyController.indeterminate = YES;
+    UINavigationController *navigation = [[[UINavigationController alloc]
+        initWithRootViewController:self.restoreCopyController] autorelease];
+    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+    navigation.modalInPresentation = YES;
+    navigation.preferredContentSize = CGSizeMake(620, 280);
+    // A security-scoped file selected with asCopy:YES is commonly an APFS
+    // clone on the same data volume, so this second durable copy completes
+    // almost immediately. Presenting and then immediately dismissing a modal
+    // progress sheet causes a distracting flash between the document picker
+    // and configuration screen. Delay the progress UI; genuinely slow copies
+    // still receive feedback without adding latency to the normal path.
+    __block BOOL copyFinished = NO;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+        (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!copyFinished && self.restoreCopyController &&
+            !navigation.presentingViewController &&
+            !self.presentedViewController)
+            [self presentViewController:navigation animated:YES completion:nil];
+    });
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSError *copyError = nil;
+        BOOL copied = [NSFileManager.defaultManager copyItemAtPath:source.path
+            toPath:destination error:&copyError];
+        [source stopAccessingSecurityScopedResource];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            copyFinished = YES;
+            UIApplication.sharedApplication.idleTimerDisabled = NO;
+            void (^finished)(void) = ^{
+                self.restoreCopyController = nil;
+                if (copied) {
+                    [self configureRestoreImageAtURL:
+                        [NSURL fileURLWithPath:destination]];
+                } else {
+                    UIAlertController *alert = [UIAlertController
+                        alertControllerWithTitle:VZL(@"Could Not Copy IPSW")
+                        message:copyError.localizedDescription
+                        preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+                        style:UIAlertActionStyleDefault handler:nil]];
+                    VZAddFailureSupportActions(alert);
+                    [self presentViewController:alert animated:YES completion:nil];
+                }
+            };
+            if (navigation.presentingViewController)
+                [navigation dismissViewControllerAnimated:YES
+                                                completion:finished];
+            else
+                finished();
+        });
+    });
 }
 
 - (void)newVMControllerChooseLocalRestoreImage:(VZNewVMViewController *)controller
@@ -1870,12 +2554,12 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 - (void)cancelDownload
 {
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Cancel Download?"
-                         message:@"The partial restore image will be deleted."
+        alertControllerWithTitle:VZL(@"Cancel Download?")
+                         message:VZL(@"The partial restore image will be deleted.")
                   preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Keep Downloading"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Keep Downloading")
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel Download"
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel Download")
         style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
         self.downloadCancelled = YES;
@@ -1903,133 +2587,14 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     downloadRestoreImage:(NSDictionary *)image
 {
     NSURL *remoteURL = [NSURL URLWithString:image[@"url"]];
-    if (!remoteURL) return;
-    [controller dismissViewControllerAnimated:YES completion:^{
-        NSString *destination = [VZRestoreImagesPath() stringByAppendingPathComponent:
-            remoteURL.lastPathComponent ?: @"Restore.ipsw"];
-        NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:destination error:nil];
-        uint64_t expected = [image[@"downloadSize"] unsignedLongLongValue];
-        if (attributes && (!expected || [attributes[NSFileSize] unsignedLongLongValue] == expected)) {
-            [self documentPicker:(id)self didPickDocumentsAtURLs:@[[NSURL fileURLWithPath:destination]]];
-            return;
-        }
-        [NSFileManager.defaultManager createDirectoryAtPath:VZRestoreImagesPath()
-            withIntermediateDirectories:YES attributes:nil error:nil];
-        UIApplication.sharedApplication.idleTimerDisabled = YES;
-        self.downloadCancelled = NO;
-        self.downloadDestination = destination;
-        self.downloadMarkerPath = [VZRestoreImagesPath() stringByAppendingPathComponent:
-            [NSString stringWithFormat:@".%@.download.plist", destination.lastPathComponent]];
-        [@{ @"Name": image[@"name"] ?: destination.lastPathComponent,
-             @"URL": remoteURL.absoluteString ?: @"",
-             @"Destination": destination,
-             @"StartedAt": NSDate.date }
-            writeToFile:self.downloadMarkerPath atomically:YES];
-        self.downloadController = [[[VZProgressViewController alloc]
-            initWithTitle:@"Downloading macOS"] autorelease];
-        self.downloadController.statusText = image[@"name"] ?: @"Downloading restore image";
-        self.downloadController.detailText = @"Keep Virtual Mac open. The iPad will remain awake until the download finishes.";
-        self.downloadController.consoleHidden = YES;
-        self.downloadController.indeterminate = expected == 0;
-        self.downloadController.cancellationHandler = ^{ [self cancelDownload]; };
-        UINavigationController *navigation = [[[UINavigationController alloc]
-            initWithRootViewController:self.downloadController] autorelease];
-        navigation.modalPresentationStyle = UIModalPresentationPageSheet;
-        navigation.modalInPresentation = YES;
-        navigation.preferredContentSize = CGSizeMake(620, 300);
-        [self presentViewController:navigation animated:YES completion:nil];
-        self.downloadTask = [NSURLSession.sharedSession downloadTaskWithURL:remoteURL
-            completionHandler:^(NSURL *temporaryURL, NSURLResponse *response, NSError *error) {
-            (void)response;
-            NSError *moveError = nil;
-            if (temporaryURL && !self.downloadCancelled) {
-                [NSFileManager.defaultManager removeItemAtPath:destination error:nil];
-                [NSFileManager.defaultManager moveItemAtURL:temporaryURL
-                    toURL:[NSURL fileURLWithPath:destination] error:&moveError];
-            }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self.downloadTimer invalidate]; self.downloadTimer = nil;
-                self.downloadTask = nil;
-                UIApplication.sharedApplication.idleTimerDisabled = NO;
-                NSError *failure = error ?: moveError;
-                BOOL cancelled = self.downloadCancelled;
-                if (!failure)
-                    [NSFileManager.defaultManager removeItemAtPath:self.downloadMarkerPath error:nil];
-                if (!self.downloadController) return;
-                [self.downloadController.navigationController dismissViewControllerAnimated:YES completion:^{
-                    self.downloadController.cancellationHandler = nil;
-                    self.downloadController = nil;
-                    self.downloadDestination = nil;
-                    self.downloadMarkerPath = nil;
-                    if (failure && !cancelled) {
-                        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Download Failed"
-                            message:failure.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-                        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                        [self presentViewController:alert animated:YES completion:nil];
-                    } else {
-                        [self documentPicker:(id)self didPickDocumentsAtURLs:@[[NSURL fileURLWithPath:destination]]];
-                    }
-                }];
-            });
-        }];
-        [self.downloadTask resume];
-        self.downloadLastBytes = 0;
-        self.downloadLastSample = NSDate.date;
-        self.downloadTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
-            (void)timer;
-            int64_t total = self.downloadTask.countOfBytesExpectedToReceive;
-            int64_t received = self.downloadTask.countOfBytesReceived;
-            if (total > 0) {
-                float progress = (float)received / (float)total;
-                self.downloadController.indeterminate = NO;
-                self.downloadController.progress = progress;
-                NSByteCountFormatter *formatter = [[[NSByteCountFormatter alloc] init] autorelease];
-                formatter.countStyle = NSByteCountFormatterCountStyleFile;
-                NSTimeInterval elapsed = -[self.downloadLastSample timeIntervalSinceNow];
-                int64_t delta = received - self.downloadLastBytes;
-                NSString *speed = elapsed > 0.05 && delta >= 0
-                    ? [NSString stringWithFormat:@"%@/s",
-                        [formatter stringFromByteCount:(int64_t)(delta / elapsed)]] : @"Calculating speed…";
-                self.downloadController.statusText = [NSString stringWithFormat:
-                    @"%.1f%% complete", progress * 100.0];
-                self.downloadController.detailText = [NSString stringWithFormat:
-                    @"%@ of %@ · %@\nKeep Virtual Mac open. The iPad will remain awake until the download finishes.",
-                    [formatter stringFromByteCount:received],
-                    [formatter stringFromByteCount:total], speed];
-                self.downloadLastBytes = received;
-                self.downloadLastSample = NSDate.date;
-            }
-        }];
-    }];
-}
-
-- (void)documentPicker:(UIDocumentPickerViewController *)controller
- didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
-{
-    NSURL *url = urls.firstObject;
-    if (!url)
+    if (!remoteURL)
         return;
-    NSString *extension = url.pathExtension.lowercaseString;
-    if (![extension isEqualToString:@"ipsw"]) {
-        UIAlertController *invalid = [UIAlertController
-            alertControllerWithTitle:@"Unsupported Restore Image"
-            message:@"Choose a macOS IPSW restore image."
-            preferredStyle:UIAlertControllerStyleAlert];
-        [invalid addAction:[UIAlertAction actionWithTitle:@"OK"
-            style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:invalid animated:YES completion:nil];
-        return;
-    }
-    [url startAccessingSecurityScopedResource];
-    self.pendingIPSWURL = url;
-    NSString *suggested = VZUniqueVMName(
-        VZMarketingNameForRestoreImage(url));
     NSMutableDictionary *defaults = [NSMutableDictionary
         dictionaryWithDictionary:VZVMDefaultOptions()];
     defaults[VZPointingDeviceKey] =
-        VZDefaultPointingDeviceForPath(self.pendingIPSWURL.path);
+        VZDefaultPointingDeviceForPath(remoteURL.path);
     defaults[VZKeyboardDeviceKey] =
-        VZDefaultKeyboardDeviceForPath(self.pendingIPSWURL.path);
+        VZDefaultKeyboardDeviceForPath(remoteURL.path);
     VZVMConfigurationViewController *configuration =
         [[[VZVMConfigurationViewController alloc]
           initWithBundlePath:nil options:defaults
@@ -2038,12 +2603,266 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                 dictionaryWithDictionary:result];
             NSString *name = VZUniqueVMName(options[VZVMNameKey]);
             [options removeObjectForKey:VZVMNameKey];
-            [self.delegate vmLibrary:self
-                installRestoreImageAtURL:self.pendingIPSWURL
-                name:name options:options];
+            [controller.navigationController
+                dismissViewControllerAnimated:YES completion:^{
+                [self beginDownloadRestoreImage:image name:name
+                                         options:options];
+            }];
         }] autorelease];
-    configuration.vmName = suggested;
-    [self presentConfiguration:configuration];
+    // Show both the marketing name and any uniqueness suffix while the user
+    // configures the Virtual Mac, before its bundle is created.
+    configuration.vmName = VZUniqueVMName(
+        VZMarketingNameForRestoreImage(remoteURL) ?: image[@"name"]);
+    configuration.showsExperimentalInstallWarning =
+        [VZRestoreCatalog isExperimentalImage:image];
+    configuration.showsUnsupportedInstallWarning =
+        [VZRestoreCatalog isUnsupportedImage:image];
+    configuration.experimentalMacOSName =
+        [VZRestoreCatalog macOSNameForImage:image];
+    [controller.navigationController pushViewController:configuration
+        animated:YES];
+}
+
+- (void)beginDownloadRestoreImage:(NSDictionary *)image
+                             name:(NSString *)name
+                          options:(NSDictionary *)options
+{
+    NSURL *remoteURL = [NSURL URLWithString:image[@"url"]];
+    if (!remoteURL)
+        return;
+    NSString *destination = [VZRestoreImagesPath()
+        stringByAppendingPathComponent:remoteURL.lastPathComponent ?: @"Restore.ipsw"];
+    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:destination
+                                                                              error:nil];
+    uint64_t expected = [image[@"downloadSize"] unsignedLongLongValue];
+    if (attributes && (!expected || [attributes[NSFileSize] unsignedLongLongValue] == expected)) {
+        [self.delegate vmLibrary:self
+            installRestoreImageAtURL:[NSURL fileURLWithPath:destination]
+                                name:name
+                             options:options];
+        return;
+    }
+    [NSFileManager.defaultManager createDirectoryAtPath:VZRestoreImagesPath()
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
+    self.downloadCancelled = NO;
+    self.downloadDestination = destination;
+    self.downloadMarkerPath = [VZRestoreImagesPath()
+        stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.download.plist",
+                                                                  destination.lastPathComponent]];
+    [@{
+        @"Name" : image[@"name"] ?: destination.lastPathComponent,
+        @"URL" : remoteURL.absoluteString ?: @"",
+        @"Destination" : destination,
+        @"ExpectedSize" : @(expected),
+        @"StartedAt" : NSDate.date
+    } writeToFile:self.downloadMarkerPath
+        atomically:YES];
+    self.downloadController =
+        [[[VZProgressViewController alloc] initWithTitle:VZL(@"Downloading macOS")] autorelease];
+    self.downloadController.heroImage = VZInstallerArtworkForImage(image);
+    NSString *macOSName = [VZRestoreCatalog macOSNameForImage:image];
+    NSString *version = [image[@"version"] isKindOfClass:NSString.class]
+        ? image[@"version"] : @"";
+    if ([version hasSuffix:@".0"])
+        version = [version substringToIndex:version.length - 2];
+    BOOL hasKnownArtwork = ![[VZRestoreCatalog artworkNameForImage:image]
+        isEqualToString:@"ipsw"];
+    self.downloadController.heroTitleText = hasKnownArtwork && version.length
+        ? [NSString stringWithFormat:@"%@ %@", macOSName, version]
+        : ([image[@"name"] isKindOfClass:NSString.class]
+            ? image[@"name"] : macOSName);
+    NSByteCountFormatter *initialFormatter =
+        [[[NSByteCountFormatter alloc] init] autorelease];
+    initialFormatter.countStyle = NSByteCountFormatterCountStyleFile;
+    initialFormatter.zeroPadsFractionDigits = YES;
+    self.downloadController.detailText = [NSString stringWithFormat:
+        @"%@ / %@ · — · —",
+        [initialFormatter stringFromByteCount:0],
+        expected > 0 ? [initialFormatter stringFromByteCount:expected] : @"—"];
+    self.downloadController.tipText =
+        VZL(@"Keep Virtual Mac open. Your iPad will remain awake until the download finishes.");
+    self.downloadController.consoleHidden = YES;
+    self.downloadController.indeterminate = expected == 0;
+    self.downloadController.cancellationHandler = ^{
+        [self cancelDownload];
+    };
+    UINavigationController *navigation = [[[UINavigationController alloc]
+        initWithRootViewController:self.downloadController] autorelease];
+    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+    navigation.modalInPresentation = YES;
+    navigation.preferredContentSize = CGSizeMake(620, 560);
+    [self presentViewController:navigation animated:YES completion:nil];
+    self.downloadTask = [NSURLSession.sharedSession
+        downloadTaskWithURL:remoteURL
+          completionHandler:^(NSURL *temporaryURL, NSURLResponse *response, NSError *error) {
+              (void)response;
+              NSError *moveError = nil;
+              if (temporaryURL && !self.downloadCancelled) {
+                  [NSFileManager.defaultManager removeItemAtPath:destination error:nil];
+                  [NSFileManager.defaultManager moveItemAtURL:temporaryURL
+                                                        toURL:[NSURL fileURLWithPath:destination]
+                                                        error:&moveError];
+              }
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [self.downloadTimer invalidate];
+                  self.downloadTimer = nil;
+                  self.downloadTask = nil;
+                  UIApplication.sharedApplication.idleTimerDisabled = NO;
+                  NSError *failure = error ?: moveError;
+                  BOOL cancelled = self.downloadCancelled;
+                  if (!failure) {
+                      [NSFileManager.defaultManager removeItemAtPath:self.downloadMarkerPath
+                                                               error:nil];
+                  } else if (!cancelled) {
+                      // Downloads cannot be resumed. Avoid retaining a stale
+                      // IPSW or marker after an ordinary network failure;
+                      // launch-time cleanup covers abrupt process exits.
+                      [NSFileManager.defaultManager removeItemAtPath:destination
+                                                               error:nil];
+                      [NSFileManager.defaultManager removeItemAtPath:self.downloadMarkerPath
+                                                               error:nil];
+                  }
+                  if (!self.downloadController)
+                      return;
+                  [self.downloadController.navigationController
+                      dismissViewControllerAnimated:YES
+                                         completion:^{
+                                             self.downloadController.cancellationHandler = nil;
+                                             self.downloadController = nil;
+                                             self.downloadDestination = nil;
+                                             self.downloadMarkerPath = nil;
+                                             if (cancelled) {
+                                                 // Cancellation is terminal.
+                                                 // NSURLSession normally
+                                                 // completes with
+                                                 // NSURLErrorCancelled, but
+                                                 // the completion can race
+                                                 // the confirmation UI. Never
+                                                 // turn either outcome into a
+                                                 // restore request.
+                                                 return;
+                                             } else if (failure) {
+                                                 UIAlertController *alert = [UIAlertController
+                                                     alertControllerWithTitle:VZL(@"Download Failed")
+                                                                      message:
+                                                                          failure
+                                                                              .localizedDescription
+                                                               preferredStyle:
+                                                                   UIAlertControllerStyleAlert];
+                                                 [alert
+                                                     addAction:
+                                                         [UIAlertAction
+                                                             actionWithTitle:VZL(@"OK")
+                                                                       style:
+                                                                           UIAlertActionStyleDefault
+                                                                     handler:nil]];
+                                                 VZAddFailureSupportActions(alert);
+                                                 [self presentViewController:alert
+                                                                    animated:YES
+                                                                  completion:nil];
+                                             } else {
+                                                 [self.delegate vmLibrary:self
+                                                     installRestoreImageAtURL:
+                                                         [NSURL fileURLWithPath:destination]
+                                                                         name:name
+                                                                      options:options];
+                                             }
+                                         }];
+              });
+          }];
+    [self.downloadTask resume];
+    self.downloadLastBytes = 0;
+    self.downloadLastSample = NSDate.date;
+    self.downloadStartedAt = self.downloadLastSample;
+    self.downloadTimer = [NSTimer
+        scheduledTimerWithTimeInterval:0.5
+                               repeats:YES
+                                 block:^(NSTimer *timer) {
+                                     (void)timer;
+                                     int64_t total =
+                                         self.downloadTask.countOfBytesExpectedToReceive;
+                                     int64_t received = self.downloadTask.countOfBytesReceived;
+                                     if (total > 0) {
+                                         float progress = (float)received / (float)total;
+                                         self.downloadController.indeterminate = NO;
+                                         self.downloadController.progress = progress;
+                                         NSByteCountFormatter *formatter =
+                                             [[[NSByteCountFormatter alloc] init] autorelease];
+                                         formatter.countStyle = NSByteCountFormatterCountStyleFile;
+                                         formatter.zeroPadsFractionDigits = YES;
+                                         NSTimeInterval elapsed =
+                                             -[self.downloadLastSample timeIntervalSinceNow];
+                                         int64_t delta = received - self.downloadLastBytes;
+                                         NSString *speed =
+                                             elapsed > 0.05 && delta >= 0
+                                                 ? [NSString
+                                                       stringWithFormat:@"%@/s",
+                                                                        [formatter
+                                                                            stringFromByteCount:
+                                                                                (int64_t)(delta /
+                                                                                          elapsed)]]
+                                                 : VZL(@"Calculating speed…");
+                                         NSTimeInterval averageElapsed =
+                                             -[self.downloadStartedAt timeIntervalSinceNow];
+                                         double averageSpeed = averageElapsed > 1.0
+                                             ? received / averageElapsed : 0.0;
+                                         NSString *remaining = nil;
+                                         if (averageSpeed > 0.0 && received < total) {
+                                             NSTimeInterval seconds =
+                                                 (total - received) / averageSpeed;
+                                             seconds = MAX(60.0,
+                                                 ceil(seconds / 60.0) * 60.0);
+                                             NSDateComponentsFormatter *duration =
+                                                 [[[NSDateComponentsFormatter alloc] init]
+                                                     autorelease];
+                                             duration.allowedUnits =
+                                                 NSCalendarUnitHour | NSCalendarUnitMinute;
+                                             duration.unitsStyle =
+                                                 NSDateComponentsFormatterUnitsStyleFull;
+                                             duration.maximumUnitCount = 2;
+                                             remaining = [duration
+                                                 stringFromTimeInterval:seconds];
+                                             if (remaining.length)
+                                                 remaining = [NSString stringWithFormat:
+                                                     VZL(@"%@ remaining"), remaining];
+                                         }
+                                         self.downloadController.detailText = [NSString
+                                             stringWithFormat:remaining.length
+                                                 ? @"%@ / %@ · %@ · %@"
+                                                 : @"%@ / %@ · %@",
+                                                              [formatter
+                                                                  stringFromByteCount:received],
+                                                              [formatter stringFromByteCount:total],
+                                                              speed, remaining];
+                                         self.downloadLastBytes = received;
+                                         self.downloadLastSample = NSDate.date;
+                                     }
+                                 }];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+  NSURL *url = urls.firstObject;
+  if (!url)
+    return;
+  NSString *extension = url.pathExtension.lowercaseString;
+  if (![extension isEqualToString:@"ipsw"]) {
+    UIAlertController *invalid = [UIAlertController
+        alertControllerWithTitle:VZL(@"Unsupported Restore Image")
+                         message:VZL(@"Choose a macOS IPSW restore image.")
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [invalid addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+                                                style:UIAlertActionStyleDefault
+                                              handler:nil]];
+    VZAddFailureSupportActions(invalid);
+    [self presentViewController:invalid animated:YES completion:nil];
+    return;
+  }
+  [url startAccessingSecurityScopedResource];
+  [self copySelectedRestoreImageAtURL:url];
 }
 
 - (void)dealloc
@@ -2053,17 +2872,22 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [_filteredMachines release];
     [_searchText release];
     [_pendingIPSWURL release];
+    [_controlsView release];
     [_collectionView release];
     [_emptyView release];
+    [_noResultsView release];
+    [_noResultsBottomConstraint release];
     [_downloadTask cancel];
     [_downloadTask release];
     [_downloadTimer invalidate];
     [_downloadTimer release];
     _downloadController.cancellationHandler = nil;
     [_downloadController release];
+    [_restoreCopyController release];
     [_downloadDestination release];
     [_downloadMarkerPath release];
     [_downloadLastSample release];
+    [_downloadStartedAt release];
     [super dealloc];
 }
 @end

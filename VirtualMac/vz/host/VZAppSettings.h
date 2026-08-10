@@ -15,6 +15,14 @@ FOUNDATION_EXPORT NSString * const VZAutoDeleteRestoreImageKey;
 FOUNDATION_EXPORT NSString * const VZHUDVisibilityKey;
 FOUNDATION_EXPORT NSString * const VZHUDCornerKey;
 FOUNDATION_EXPORT NSString * const VZDisplayScalingKey;
+FOUNDATION_EXPORT NSString * const VZTouchDoubleTapAccommodationKey;
+FOUNDATION_EXPORT NSString * const VZTouchTwoFingerScrollingKey;
+FOUNDATION_EXPORT NSString * const VZTouchTwoFingerRightClickKey;
+FOUNDATION_EXPORT NSString * const VZTouchLongPressRightClickKey;
+FOUNDATION_EXPORT NSString * const VZIPadOS162KeyboardWorkaroundKey;
+FOUNDATION_EXPORT NSString * const VZNetworkResumeRecoveryKey;
+FOUNDATION_EXPORT NSString * const VZHUDOpacityKey;
+FOUNDATION_EXPORT NSString * const VZDebugLoggingKey;
 
 @interface VZAppSettings : NSObject
 + (instancetype)sharedSettings;
@@ -22,6 +30,7 @@ FOUNDATION_EXPORT NSString * const VZDisplayScalingKey;
 - (nullable NSString *)stringForKey:(NSString *)key;
 - (void)setBool:(BOOL)value forKey:(NSString *)key;
 - (void)setString:(nullable NSString *)value forKey:(NSString *)key;
+- (void)resetToDefaults;
 - (NSDictionary *)dictionaryRepresentation;
 @end
 

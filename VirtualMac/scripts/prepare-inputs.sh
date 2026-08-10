@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 : "${VZ_MACOS_IPSW:?set VZ_MACOS_IPSW to the 13.2.1 22D68 restore image}"
+: "${VZ_BIG_SUR_IPSW:?set VZ_BIG_SUR_IPSW to the 11.6 20G165 restore image}"
+: "${VZ_IPADOS14_IPSW:?set VZ_IPADOS14_IPSW to the 14.5 18E199 restore image}"
 INCLUDE_IPADOS_AUDIT="${VZ_INCLUDE_IPADOS_AUDIT:-0}"
 if [[ -n "${VZ_IPADOS_IPSW:-}" ]]; then
     INCLUDE_IPADOS_AUDIT=1
@@ -18,8 +20,17 @@ fi
 IPSW="$VZ_BUILD_ROOT/toolchain/bin/ipsw-a2sb"
 MAC_OUT="$VZ_BUILD_ROOT/inputs/macos"
 IPAD_OUT="$VZ_BUILD_ROOT/inputs/ipados"
+IPAD14_OUT="$VZ_BUILD_ROOT/inputs/ipados14"
 MAC_ROOT="$MAC_OUT/22D68__MacOS"
+BIG_SUR_ROOT="$VZ_BUILD_ROOT/inputs/macos11/20G165__MacOS"
 DSC="$MAC_ROOT/dyld_shared_cache_arm64e"
+BIG_SUR_DSC="$BIG_SUR_ROOT/dyld_shared_cache_arm64e"
+BIG_SUR_INTERNET_SHARING="$BIG_SUR_ROOT/usr/libexec/InternetSharing"
+BIG_SUR_RTADVD="$BIG_SUR_ROOT/usr/sbin/rtadvd"
+BIG_SUR_NETWORK_SHARING_PLIST="$BIG_SUR_ROOT/System/Library/LaunchDaemons/com.apple.NetworkSharing.plist"
+BIG_SUR_BOOTPD_PLIST="$BIG_SUR_ROOT/System/Library/LaunchDaemons/bootps.plist"
+IPAD14_ROOT="$IPAD14_OUT/18E199__iPad13,4_5_6_7"
+IPAD14_BOOTPD="$IPAD14_ROOT/usr/libexec/bootpd"
 IPAD_DSC="$IPAD_OUT/20D67__iPad14,3_4_5_6/dyld_shared_cache_arm64e"
 VZ_ROOT="$MAC_ROOT/System/Library/Frameworks/Virtualization.framework/Versions/A"
 VMM="$VZ_ROOT/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
@@ -28,6 +39,7 @@ RES="$VZ_ROOT/Resources"
 HV_INFO="$MAC_ROOT/System/Library/Frameworks/Hypervisor.framework/Versions/A/Resources/Info.plist"
 PVG_INFO="$MAC_ROOT/System/Library/Frameworks/ParavirtualizedGraphics.framework/Versions/A/Resources/Info.plist"
 METAL_SERIALIZER_INFO="$MAC_ROOT/System/Library/PrivateFrameworks/MetalSerializer.framework/Versions/A/Resources/Info.plist"
+DISKIMAGES2_INFO="$MAC_ROOT/System/Library/PrivateFrameworks/DiskImages2.framework/Versions/A/Resources/Info.plist"
 VZ_LOCALIZABLE="$RES/Localizable.loctable"
 THIN="$MAC_OUT/VirtualMachine.arm64e"
 MANIFEST="$VZ_BUILD_ROOT/inputs/manifest.txt"
@@ -38,6 +50,8 @@ NETWORK_SHARING_PLIST="$MAC_ROOT/System/Library/LaunchDaemons/com.apple.NetworkS
 BOOTPD_PLIST="$MAC_ROOT/System/Library/LaunchDaemons/bootps.plist"
 
 need_file "$VZ_MACOS_IPSW"
+need_file "$VZ_BIG_SUR_IPSW"
+need_file "$VZ_IPADOS14_IPSW"
 if [[ "$INCLUDE_IPADOS_AUDIT" == 1 ]]; then
     need_file "$VZ_IPADOS_IPSW"
 fi
@@ -47,17 +61,42 @@ need_command lipo
 need_command shasum
 
 mkdir -p "$MAC_OUT" "$IPAD_OUT"
+mkdir -p "$IPAD14_OUT"
 
 if [[ ! -f "$DSC" || ! -f "$DSC.01" ]]; then
     "$IPSW" extract --dyld --dyld-arch arm64e \
         --output "$MAC_OUT" "$VZ_MACOS_IPSW"
 fi
 
+# XNU 20 on iPadOS 14 uses the matching Big Sur Hypervisor userspace ABI.
+# Only its dyld cache is needed; Ventura remains authoritative on iPadOS 15/16.
+if [[ ! -f "$BIG_SUR_DSC" ]]; then
+    "$IPSW" extract --dyld --dyld-arch arm64e \
+        --output "$VZ_BUILD_ROOT/inputs/macos11" "$VZ_BIG_SUR_IPSW"
+fi
+
+if [[ ! -f "$BIG_SUR_INTERNET_SHARING" || ! -f "$BIG_SUR_RTADVD" ||
+      ! -f "$BIG_SUR_NETWORK_SHARING_PLIST" ||
+      ! -f "$BIG_SUR_BOOTPD_PLIST" ]]; then
+    "$IPSW" extract --files \
+        --pattern '^(usr/libexec/InternetSharing|usr/sbin/rtadvd|System/Library/LaunchDaemons/(com\.apple\.NetworkSharing\.plist|bootps\.plist))$' \
+        --output "$VZ_BUILD_ROOT/inputs/macos11" "$VZ_BIG_SUR_IPSW"
+fi
+
+# The iPadOS 14 DHCP executable has authenticated pointers and socket-launch
+# behavior specific to that release. Extract it from the matching restore
+# image, but deploy it only under Virtual Mac's private runtime directory.
+if [[ ! -f "$IPAD14_BOOTPD" ]]; then
+    "$IPSW" extract --files \
+        --pattern '^usr/libexec/bootpd$' \
+        --output "$IPAD14_OUT" "$VZ_IPADOS14_IPSW"
+fi
+
 if [[ ! -f "$VMM" || ! -f "$EVENT_TAP" || ! -f "$VZ_LOCALIZABLE" ||
       ! -f "$HV_INFO" || ! -f "$PVG_INFO" ||
-      ! -f "$METAL_SERIALIZER_INFO" ]]; then
+      ! -f "$METAL_SERIALIZER_INFO" || ! -f "$DISKIMAGES2_INFO" ]]; then
     "$IPSW" extract --files \
-        --pattern '^(System/Library/Frameworks/(Hypervisor|ParavirtualizedGraphics|Virtualization)\.framework/Versions/A/(Resources/.*|XPCServices/.*)|System/Library/PrivateFrameworks/MetalSerializer\.framework/Versions/A/Resources/.*)$' \
+        --pattern '^(System/Library/Frameworks/(Hypervisor|ParavirtualizedGraphics|Virtualization)\.framework/Versions/A/(Resources/.*|XPCServices/.*)|System/Library/PrivateFrameworks/(MetalSerializer|DiskImages2)\.framework/Versions/A/Resources/.*)$' \
         --output "$MAC_OUT" "$VZ_MACOS_IPSW"
 fi
 
@@ -140,6 +179,9 @@ hash_line() {
     printf 'python\t%s\n' "$("$VZ_BUILD_ROOT/toolchain/venv/bin/python3" --version 2>&1)"
     printf 'dyldextractor\t2.2.2+VirtualMac-arm64e\n'
     hash_line macos_ipsw "$VZ_MACOS_IPSW"
+    hash_line big_sur_ipsw "$VZ_BIG_SUR_IPSW"
+    hash_line ipados14_ipsw "$VZ_IPADOS14_IPSW"
+    hash_line big_sur_dsc "$BIG_SUR_DSC"
     hash_line macos_dsc "$DSC"
     hash_line macos_dsc_01 "$DSC.01"
     if [[ "$INCLUDE_IPADOS_AUDIT" == 1 ]]; then
@@ -159,6 +201,7 @@ hash_line() {
     fi
     hash_line internet_sharing "$INTERNET_SHARING"
     hash_line bootpd "$BOOTPD"
+    hash_line ipados14_bootpd "$IPAD14_BOOTPD"
     hash_line rtadvd "$RTADVD"
     hash_line metal_serializer_info "$METAL_SERIALIZER_INFO"
     printf 'macos_kernel_version\t%s\n' \

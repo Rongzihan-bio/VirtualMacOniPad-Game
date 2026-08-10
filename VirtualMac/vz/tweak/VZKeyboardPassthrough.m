@@ -35,7 +35,12 @@ static NSDictionary *gSettings;
 static BOOL VZSettingEnabled(NSString *key)
 {
     id value = gSettings[key];
-    return value ? [value boolValue] : YES;
+    if (value)
+        return [value boolValue];
+    // Match the app's defaults exactly. Shortcut capture is the only
+    // SpringBoard behavior enabled until the user opts in; edge and
+    // multitasking gesture suppression remain off.
+    return [key isEqualToString:@"KeyboardShortcutCapture"];
 }
 
 static void VZReloadSettings(void)
@@ -74,6 +79,12 @@ static void Log(const char *message)
     fclose(file);
 }
 
+static void DebugLog(const char *message)
+{
+    if (VZSettingEnabled(@"DebugLogging"))
+        Log(message);
+}
+
 static BOOL VirtualMacIsFrontmost(id springBoard)
 {
     // _accessibilityFrontMostApplication builds SpringBoard's app-switcher
@@ -95,21 +106,40 @@ static BOOL VirtualMacIsFrontmost(id springBoard)
     SEL frontSelector = sel_registerName("_accessibilityFrontMostApplication");
     if (![springBoard respondsToSelector:frontSelector])
         return NO;
-    id application = ((id (*)(id, SEL))objc_msgSend)(
-        springBoard, frontSelector);
-    SEL bundleSelector = sel_registerName("bundleIdentifier");
-    if (![application respondsToSelector:bundleSelector])
+    @try {
+        id application = ((id (*)(id, SEL))objc_msgSend)(
+            springBoard, frontSelector);
+        SEL bundleSelector = sel_registerName("bundleIdentifier");
+        if (![application respondsToSelector:bundleSelector])
+            return NO;
+        NSString *bundleIdentifier = ((id (*)(id, SEL))objc_msgSend)(
+            application, bundleSelector);
+        return [bundleIdentifier isEqualToString:
+            [NSString stringWithUTF8String:gTargetBundleID]];
+    } @catch (NSException *exception) {
+        Log("frontmost application lookup raised; leaving system input enabled");
         return NO;
-    NSString *bundleIdentifier = ((id (*)(id, SEL))objc_msgSend)(
-        application, bundleSelector);
-    return [bundleIdentifier isEqualToString:
-        [NSString stringWithUTF8String:gTargetBundleID]];
+    }
 }
 
 static BOOL VirtualMacVMIsActive(id springBoard)
 {
-    return access(gVMActiveMarker, F_OK) == 0 &&
-        VirtualMacIsFrontmost(springBoard);
+    if (access(gVMActiveMarker, F_OK) != 0 ||
+        !VirtualMacIsFrontmost(springBoard))
+        return NO;
+    // While the display is asleep, SpringBoard can continue reporting the VM
+    // app as frontmost. Suppressing every system gesture in that state also
+    // suppresses iPadOS 16.1's tap-to-wake recognizer. The lock screen must
+    // always retain its native input path.
+    Class lockClass = objc_getClass("SBLockScreenManager");
+    id lockManager = lockClass ? ((id (*)(id, SEL))objc_msgSend)(
+        lockClass, sel_registerName("sharedInstance")) : nil;
+    if (lockManager && [lockManager respondsToSelector:
+            sel_registerName("isUILocked")] &&
+        ((BOOL (*)(id, SEL))objc_msgSend)(
+            lockManager, sel_registerName("isUILocked")))
+        return NO;
+    return YES;
 }
 
 static BOOL VZSharedApplicationIsTarget(void)
@@ -202,8 +232,8 @@ static void VZPostCommandShortcut(int64_t usage, BOOL pressed)
     CFNotificationCenterPostNotification(
         CFNotificationCenterGetDarwinNotifyCenter(),
         (CFStringRef)name, NULL, NULL, YES);
-    Log(pressed ? "relayed consumed Command shortcut down to Virtual Mac"
-                : "relayed consumed Command shortcut up to Virtual Mac");
+    DebugLog(pressed ? "relayed consumed Command shortcut down to Virtual Mac"
+                     : "relayed consumed Command shortcut up to Virtual Mac");
 }
 
 static void VZPostShortcut(const char *name, BOOL pressed)
@@ -216,7 +246,7 @@ static void VZPostShortcut(const char *name, BOOL pressed)
     char buffer[128];
     snprintf(buffer, sizeof(buffer),
              "relayed %s %s to Virtual Mac", name, pressed ? "down" : "up");
-    Log(buffer);
+    DebugLog(buffer);
 }
 
 static BOOL VZIsGlobeUsage(int64_t usagePage, int64_t usage)
@@ -429,6 +459,7 @@ static void VZObserveSpringBoardFinishedLaunching(void)
             addObserverForName:name object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *note) {
                 gSpringBoardReady = YES;
+                Log("SpringBoard finished launching; frontmost checks enabled");
             }] retain];
     });
 }

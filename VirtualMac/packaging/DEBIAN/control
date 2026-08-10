@@ -1,15 +1,16 @@
 Package: com.mac.virtual
 Name: Virtual Mac
 Version: @VERSION@
-Architecture: iphoneos-arm64
+Architecture: all
 Description: People have dreamed of running macOS on iPad for more than a decade.
  Today, that dream comes true. With Virtual Mac, iPad finally breaks free from
  iPadOS, enabling pro apps like Xcode and Terminal to run directly on device.
- Requires iPad Pro (M1, M2) or iPad Air (M1) running iPadOS 16 up to 16.3.1.
+ Requires iPad Pro (M1, M2) or iPad Air (M1) running iPadOS 14 up to 16.3.1.
 Maintainer: Virtual Mac
 Author: Virtual Mac
+Icon: https://raw.githubusercontent.com/nfzerox/VirtualMacOniPad/main/VirtualMac/assets/VirtualMac.png
 Section: Utilities
 Priority: optional
 Installed-Size: @INSTALLED_SIZE@
-Depends: firmware (>= 16.0), firmware (<< 16.4), dopamine-basebin-link, ellekit
+Depends: firmware (>= @MIN_IOS@), firmware (<< 16.4), ellekit | org.coolstar.libhooker
 Tag: role::enduser

@@ -21,6 +21,7 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -80,6 +81,21 @@ static dispatch_queue_t gVZConnectionQueue;
 static uint64_t gHostEventCount;
 static uint64_t gInputSendCount;
 static uint64_t gFrameAckCount;
+static bool gDebugLogging;
+
+static uint64_t diagnostic_sequence(uint64_t *counter, uint64_t limit) {
+    if (gDebugLogging)
+        return __atomic_add_fetch(counter, 1, __ATOMIC_RELAXED);
+    uint64_t current = __atomic_load_n(counter, __ATOMIC_RELAXED);
+    while (current < limit) {
+        uint64_t next = current + 1;
+        if (__atomic_compare_exchange_n(
+                counter, &current, next, false,
+                __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return next;
+    }
+    return 0;
+}
 // A launchd-backed XPC service is a single listener process.  Virtualization
 // opens several peer connections to that listener during one installation;
 // spawning a fresh helper for every xpc_connection_create call split the DFU
@@ -183,6 +199,9 @@ static void cleanup_installation_child(void) {
 }
 
 __attribute__((constructor)) static void _init(void) {
+    const char *debugValue = getenv("VZ_DEBUG_LOGGING");
+    gDebugLogging = debugValue && debugValue[0] &&
+        strcmp(debugValue, "0") != 0;
     L("[vzxpchook] loaded pid %d", getpid());
     atexit(cleanup_installation_child);
 }
@@ -259,24 +278,58 @@ static xo_t spawn_vmm_and_connect(dispatch_queue_t cq) {
     const char *stderrPath = getenv("VZ_VMM_STDERR_LOG");
     if (!stderrPath || !stderrPath[0])
         stderrPath = "/tmp/vmm.stderr.log";
-    char **envp = child_env();
     // propagate VMMHOOK_DEBUG_SLEEP to the child by NOT stripping it (child_env keeps everything
     // except DYLD_INSERT_LIBRARIES; getenv VMMHOOK_DEBUG_SLEEP set on host inherits to child)
+    // A Taurine restore enters through the setuid launcher rather than the
+    // app's already-jailbroken process tree. Reproduce jbexec's preflight:
+    // stage2 prepares a suspended target for jailbreakd, after which we resume
+    // that same child instead of killing it as the standalone preflight tool
+    // does. Dopamine has no stage2 image and keeps the direct-spawn path.
+    BOOL taurinePreflight = access(
+        "/usr/lib/pspawn_payload-stg2.dylib", R_OK) == 0;
+    const char *oldPreflight = getenv("PREFLIGHT");
+    char *savedPreflight = oldPreflight ? strdup(oldPreflight) : NULL;
+    if (taurinePreflight) {
+        setenv("PREFLIGHT", "1", 1);
+        if (!dlopen("/usr/lib/pspawn_payload-stg2.dylib",
+                    RTLD_NOW | RTLD_GLOBAL)) {
+            L("[vzxpchook] Taurine stage2 load failed: %s", dlerror());
+            taurinePreflight = NO;
+        }
+    }
     char *argv[] = { (char *)vmm_bin, NULL };
+    char **envp = child_env();
     // Redirect the VMM's stdout and stderr so launch failures remain visible.
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addopen(&fa, 1, stderrPath, O_WRONLY|O_CREAT|O_TRUNC, 0644);
     posix_spawn_file_actions_addopen(&fa, 2, stderrPath, O_WRONLY|O_CREAT|O_APPEND, 0644);
+    posix_spawnattr_t attributes;
+    posix_spawnattr_init(&attributes);
+    if (taurinePreflight)
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_START_SUSPENDED);
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, vmm_bin, &fa, NULL, argv, envp);
+    int rc = posix_spawn(&pid, vmm_bin, &fa, &attributes, argv, envp);
+    posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&fa);
     free(envp);
-    L("[vzxpchook] posix_spawn rc=%d pid=%d stderr=%s",
-      rc, pid, stderrPath);
+    if (savedPreflight) {
+        setenv("PREFLIGHT", savedPreflight, 1);
+        free(savedPreflight);
+    } else {
+        unsetenv("PREFLIGHT");
+    }
+    L("[vzxpchook] posix_spawn rc=%d pid=%d taurine-preflight=%d "
+      "target=%s stderr=%s", rc, pid, taurinePreflight, vmm_bin,
+      stderrPath);
     if (rc != 0) return NULL;
     task_t ctask = MACH_PORT_NULL;
     kern_return_t kr = task_for_pid(mach_task_self(), pid, &ctask);
     L("[vzxpchook] early task_for_pid kr=%d ctask=0x%x", kr, ctask);
+    if (taurinePreflight) {
+        int resumeResult = kill(pid, SIGCONT);
+        L("[vzxpchook] Taurine prepared child resume result=%d errno=%d",
+          resumeResult, resumeResult == 0 ? 0 : errno);
+    }
     useconds_t factorySettleUsec = 2000000;
     useconds_t factoryLongSettleUsec = 0;
     int factoryLongStop = 0;
@@ -584,8 +637,8 @@ static void vz_xpc_connection_send_message_with_reply(
     }
     if (name && (strstr(name, "keyboard") || strstr(name, "digitizer") ||
                  strstr(name, "pointing") || strstr(name, "trackpad"))) {
-        uint64_t count = __sync_add_and_fetch(&gInputSendCount, 1);
-        if (count <= 12) {
+        uint64_t count = diagnostic_sequence(&gInputSendCount, 12);
+        if (count && count <= 12) {
             char *description = xpc_copy_description(message);
             L("[vzxpchook] input %llu send-with-reply %s %s",
               (unsigned long long)count, name,
@@ -655,8 +708,8 @@ static void vz_xpc_connection_send_message(xo_t connection, xo_t message) {
     const char *name = xpc_dictionary_get_string(message, "name");
     if (name && (strstr(name, "keyboard") || strstr(name, "digitizer") ||
                  strstr(name, "pointing") || strstr(name, "trackpad"))) {
-        uint64_t count = __sync_add_and_fetch(&gInputSendCount, 1);
-        if (count <= 12) {
+        uint64_t count = diagnostic_sequence(&gInputSendCount, 12);
+        if (count && count <= 12) {
             char *description = xpc_copy_description(message);
             L("[vzxpchook] input %llu send %s %s",
               (unsigned long long)count, name,
@@ -685,8 +738,9 @@ static void vz_xpc_connection_send_message(xo_t connection, xo_t message) {
             // return synchronously to XPC.
             xpc_release(retainedMessage);
             xpc_release(retainedConnection);
-            uint64_t count = __sync_add_and_fetch(&gFrameAckCount, 1);
-            if (count <= 8 || count % 300 == 0)
+            uint64_t count = diagnostic_sequence(&gFrameAckCount, 8);
+            if (count && (count <= 8 ||
+                          (gDebugLogging && count % 300 == 0)))
                 L("[vzxpchook] framebuffer ACK %llu %s immediate",
                   (unsigned long long)count, name);
             xpc_connection_send_message(connection, message);
@@ -700,12 +754,13 @@ static void vz_xpc_connection_set_event_handler(
     xo_t connection, void (^handler)(xo_t)) {
     xpc_connection_set_event_handler(connection, ^(xo_t event) {
         const char *name = xpc_dictionary_get_string(event, "name");
-        uint64_t count = __sync_add_and_fetch(&gHostEventCount, 1);
+        uint64_t count = diagnostic_sequence(&gHostEventCount, 12);
         BOOL important = name &&
             (strcmp(name, "guest_did_panic") == 0 ||
              strcmp(name, "guest_did_stop_virtual_machine") == 0 ||
              strcmp(name, "guest_did_reset_virtual_machine") == 0);
-        if (important || count <= 12 || count % 300 == 0) {
+        if (important || (count && (count <= 12 ||
+            (gDebugLogging && count % 300 == 0)))) {
             char *description = xpc_copy_description(event);
             L("[vzxpchook] host event %llu name=%s %s",
               (unsigned long long)count, name ?: "(null)",
@@ -852,27 +907,44 @@ static int vz_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
 // address as its discriminator.
 int vz_rebind_virtualization(void *imageBase) {
 #if __has_feature(ptrauth_calls)
+    char productVersion[32] = {0};
+    size_t productVersionSize = sizeof(productVersion);
+    bool isPreIOS16 = vz_sysctlbyname(
+        "kern.osproductversion", productVersion, &productVersionSize,
+        NULL, 0) == 0 && strtol(productVersion, NULL, 10) < 16;
+    void *objcRelease = isPreIOS16
+        ? dlsym(RTLD_DEFAULT, "objc_release") : NULL;
+    void *objcRetain = isPreIOS16
+        ? dlsym(RTLD_DEFAULT, "objc_retain") : NULL;
     struct Rebind {
         uintptr_t offset;
         void *replacement;
         const char *name;
+        bool preIOS16Only;
     } rebinds[] = {
         {0x147288, (void *)&vz_IOSurfaceLookupFromXPCObject,
-                   "IOSurfaceLookupFromXPCObject"},
-        {0x147648, (void *)&confstr, "confstr"},
-        {0x147ae0, (void *)&vz_sysctlbyname, "sysctlbyname"},
+                   "IOSurfaceLookupFromXPCObject", false},
+        {0x147648, (void *)&confstr, "confstr", false},
+        // Ventura's compiler emits the register-specialized retain/release
+        // entry points added after iPadOS 15. Their ordinary libobjc forms
+        // have the same x0 argument/return contract needed at these call
+        // sites. Repair only the absent iPadOS 15 slots; iPadOS 16's native
+        // optimized bindings are never read or overwritten here.
+        {0x147970, objcRelease, "objc_release_x0 -> objc_release", true},
+        {0x147978, objcRetain, "objc_retain_x0 -> objc_retain", true},
+        {0x147ae0, (void *)&vz_sysctlbyname, "sysctlbyname", false},
         {0x147a80, (void *)&sandbox_extension_issue_generic_to_process,
-                   "sandbox_extension_issue_generic_to_process"},
+                   "sandbox_extension_issue_generic_to_process", false},
         {0x147a88, (void *)&sandbox_extension_release,
-                   "sandbox_extension_release"},
+                   "sandbox_extension_release", false},
         {0x147b98, (void *)&xpc_connection_create,
-                   "xpc_connection_create"},
+                   "xpc_connection_create", false},
         {0x147bb8, (void *)&vz_xpc_connection_send_message,
-                   "xpc_connection_send_message"},
+                   "xpc_connection_send_message", false},
         {0x147bc0, (void *)&vz_xpc_connection_send_message_with_reply,
-                   "xpc_connection_send_message_with_reply"},
+                   "xpc_connection_send_message_with_reply", false},
         {0x147bc8, (void *)&vz_xpc_connection_set_event_handler,
-                   "xpc_connection_set_event_handler"},
+                   "xpc_connection_set_event_handler", false},
     };
     uintptr_t base = (uintptr_t)imageBase;
     uintptr_t page = (base + rebinds[0].offset) & ~(uintptr_t)0x3fff;
@@ -889,6 +961,13 @@ int vz_rebind_virtualization(void *imageBase) {
         return (int)kr;
 
     for (size_t i = 0; i < sizeof(rebinds) / sizeof(rebinds[0]); i++) {
+        if (rebinds[i].preIOS16Only && !isPreIOS16)
+            continue;
+        if (!rebinds[i].replacement) {
+            L("[vzxpchook] missing iPadOS 15 replacement for %s",
+              rebinds[i].name);
+            return -1;
+        }
         void **slot = (void **)(base + rebinds[i].offset);
         void *old = *slot;
         void *raw = ptrauth_strip(

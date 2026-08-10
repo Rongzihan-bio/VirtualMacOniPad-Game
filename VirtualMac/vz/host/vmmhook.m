@@ -33,7 +33,9 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include "usb_restore_bridge.h"
@@ -59,6 +61,211 @@ extern char  _xpc_type_connection[]; // XPC_TYPE_CONNECTION
 extern char  _xpc_type_dictionary[]; // XPC_TYPE_DICTIONARY
 extern char  _xpc_type_error[];      // XPC_TYPE_ERROR
 extern int   sandbox_init(const char *profile, uint64_t flags, char **errorbuf);
+
+static void logf_(const char *fmt, ...);
+static NSInteger host_ipados_major_version(void);
+static BOOL host_is_ipados14(void);
+
+// Big Sur vmnet lacks Ventura's checksum-offload contract. Compile this hot
+// data-plane interposer only into the iPadOS 14-selected hook. The common
+// iPadOS 15/16 hook has no vmnet interposition, branch, or packet-path cost.
+#if VZ_IPADOS14_NETWORK_COMPAT
+typedef void *vmnet_interface_ref;
+typedef uint32_t vmnet_return_t;
+struct vmpktdesc {
+    size_t vm_pkt_size;
+    struct iovec *vm_pkt_iov;
+    uint32_t vm_pkt_iovcnt;
+    uint32_t vm_flags;
+};
+
+extern vmnet_interface_ref vmnet_start_interface(
+    xo_t interface_desc, dispatch_queue_t queue,
+    void (^handler)(vmnet_return_t status, xo_t interface_param));
+extern vmnet_return_t vmnet_write(vmnet_interface_ref interface,
+                                  struct vmpktdesc *packets, int *packetCount);
+
+static uint32_t checksum_add(const uint8_t *bytes, size_t length,
+                             uint32_t sum) {
+    while (length >= 2) {
+        sum += ((uint32_t)bytes[0] << 8) | bytes[1];
+        bytes += 2;
+        length -= 2;
+    }
+    if (length)
+        sum += (uint32_t)bytes[0] << 8;
+    return sum;
+}
+
+static uint16_t checksum_finish(uint32_t sum) {
+    while (sum >> 16)
+        sum = (sum & 0xffffU) + (sum >> 16);
+    uint16_t result = (uint16_t)~sum;
+    return result ?: 0xffffU;
+}
+
+static void store_network_u16(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)(value >> 8);
+    bytes[1] = (uint8_t)value;
+}
+
+static bool complete_ipv4_frame_checksums(uint8_t *frame,
+                                          size_t frameLength) {
+    if (frameLength < 14)
+        return false;
+
+    size_t ipOffset = 14;
+    uint16_t etherType = ((uint16_t)frame[12] << 8) | frame[13];
+    while ((etherType == 0x8100 || etherType == 0x88a8) &&
+           frameLength >= ipOffset + 4) {
+        etherType = ((uint16_t)frame[ipOffset + 2] << 8) |
+                    frame[ipOffset + 3];
+        ipOffset += 4;
+    }
+    if (etherType != 0x0800 || frameLength < ipOffset + 20)
+        return false;
+
+    uint8_t *ip = frame + ipOffset;
+    size_t ipHeaderLength = (size_t)(ip[0] & 0x0fU) * 4;
+    uint16_t ipLength = ((uint16_t)ip[2] << 8) | ip[3];
+    if ((ip[0] >> 4) != 4 || ipHeaderLength < 20 ||
+        ipLength < ipHeaderLength || frameLength < ipOffset + ipLength)
+        return false;
+
+    ip[10] = ip[11] = 0;
+    store_network_u16(ip + 10,
+                      checksum_finish(checksum_add(ip, ipHeaderLength, 0)));
+
+    // Non-initial fragments do not contain a transport header. The guest must
+    // checksum fragmented transports itself, matching Apple's vmnet contract.
+    uint16_t fragment = ((uint16_t)ip[6] << 8) | ip[7];
+    if (fragment & 0x1fffU)
+        return true;
+    uint8_t protocol = ip[9];
+    if (protocol != 6 && protocol != 17)
+        return true;
+
+    uint8_t *transport = ip + ipHeaderLength;
+    size_t transportLength = ipLength - ipHeaderLength;
+    size_t checksumOffset = protocol == 6 ? 16 : 6;
+    if (transportLength < checksumOffset + 2)
+        return true;
+    if (protocol == 17) {
+        uint16_t udpLength = ((uint16_t)transport[4] << 8) | transport[5];
+        if (udpLength < 8 || udpLength > transportLength)
+            return true;
+        transportLength = udpLength;
+    }
+
+    transport[checksumOffset] = transport[checksumOffset + 1] = 0;
+    uint32_t sum = 0;
+    sum = checksum_add(ip + 12, 8, sum);
+    sum += protocol;
+    sum += (uint16_t)transportLength;
+    sum = checksum_add(transport, transportLength, sum);
+    store_network_u16(transport + checksumOffset, checksum_finish(sum));
+    return true;
+}
+
+static bool complete_ipv4_checksums(struct vmpktdesc *packet) {
+    if (!packet || !packet->vm_pkt_iov || packet->vm_pkt_iovcnt == 0 ||
+        packet->vm_pkt_iovcnt > 64 || packet->vm_pkt_size < 14 ||
+        packet->vm_pkt_size > (1U << 20))
+        return false;
+
+    if (packet->vm_pkt_iovcnt == 1) {
+        if (!packet->vm_pkt_iov[0].iov_base)
+            return false;
+        size_t length = packet->vm_pkt_iov[0].iov_len;
+        if (length > packet->vm_pkt_size)
+            length = packet->vm_pkt_size;
+        return complete_ipv4_frame_checksums(
+            packet->vm_pkt_iov[0].iov_base, length);
+    }
+
+    // Ventura's VMM commonly submits one Ethernet frame as separate link,
+    // network, transport, and payload iovecs. Big Sur vmnet does not provide
+    // Ventura's checksum-offload contract, so coalesce only long enough to
+    // complete the checksums, then copy the unchanged frame layout back.
+    size_t frameLength = packet->vm_pkt_size;
+    uint8_t stackFrame[2048];
+    uint8_t *frame = frameLength <= sizeof(stackFrame)
+        ? stackFrame : malloc(frameLength);
+    if (!frame)
+        return false;
+    size_t copied = 0;
+    for (uint32_t index = 0;
+         index < packet->vm_pkt_iovcnt && copied < frameLength; index++) {
+        struct iovec *iov = &packet->vm_pkt_iov[index];
+        if (!iov->iov_base || iov->iov_len == 0)
+            continue;
+        size_t length = iov->iov_len;
+        if (length > frameLength - copied)
+            length = frameLength - copied;
+        memcpy(frame + copied, iov->iov_base, length);
+        copied += length;
+    }
+    bool completed = copied == frameLength &&
+        complete_ipv4_frame_checksums(frame, frameLength);
+    if (completed) {
+        copied = 0;
+        for (uint32_t index = 0;
+             index < packet->vm_pkt_iovcnt && copied < frameLength; index++) {
+            struct iovec *iov = &packet->vm_pkt_iov[index];
+            if (!iov->iov_base || iov->iov_len == 0)
+                continue;
+            size_t length = iov->iov_len;
+            if (length > frameLength - copied)
+                length = frameLength - copied;
+            memcpy(iov->iov_base, frame + copied, length);
+            copied += length;
+        }
+    }
+    if (frame != stackFrame)
+        free(frame);
+    return completed;
+}
+
+static vmnet_return_t vmm_vmnet_write(vmnet_interface_ref interface,
+                                      struct vmpktdesc *packets,
+                                      int *packetCount) {
+    if (host_is_ipados14() && packets && packetCount && *packetCount > 0) {
+        static uint64_t completed;
+        static bool loggedCompletion;
+        int count = *packetCount;
+        for (int index = 0; index < count; index++) {
+            if (complete_ipv4_checksums(&packets[index]))
+                completed++;
+        }
+        if (!loggedCompletion && completed) {
+            logf_("[vmmhook] iPadOS 14 completed vmnet checksums total=%llu",
+                  (unsigned long long)completed);
+            loggedCompletion = true;
+        }
+    }
+    return vmnet_write(interface, packets, packetCount);
+}
+
+static vmnet_interface_ref vmm_vmnet_start_interface(
+    xo_t interface_desc, dispatch_queue_t queue,
+    void (^handler)(vmnet_return_t status, xo_t interface_param)) {
+    if (host_is_ipados14()) {
+        xpc_dictionary_set_bool(interface_desc, "vmnet_enable_tso", false);
+        xpc_dictionary_set_bool(interface_desc,
+                                "vmnet_enable_checksum_offload", false);
+    }
+    return vmnet_start_interface(interface_desc, queue, handler);
+}
+
+__attribute__((used)) static struct {
+    const void *replacement;
+    const void *replacee;
+} _ip_vmnet_interposes[] __attribute__((section("__DATA,__interpose"))) = {
+    { (const void *)&vmm_vmnet_start_interface,
+      (const void *)&vmnet_start_interface },
+    { (const void *)&vmm_vmnet_write, (const void *)&vmnet_write },
+};
+#endif
 
 // xpc_endpoint object layout: the backing mach send-right is a uint32 at +0x18
 // (confirmed on iPadOS 16.3.1 via vz/development/probes/epprobe.m). iPad hands the host's
@@ -93,6 +300,29 @@ static void log_address(const char *label, void *address) {
     }
 }
 
+static NSInteger host_ipados_major_version(void) {
+    static NSInteger majorVersion;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // Preserve the previous safe behavior if the host version cannot be
+        // queried: do not activate an older-host compatibility path.
+        majorVersion = 16;
+        char version[32] = {0};
+        size_t size = sizeof(version);
+        if (sysctlbyname("kern.osproductversion", version, &size, NULL, 0) == 0)
+            majorVersion = strtol(version, NULL, 10);
+    });
+    return majorVersion;
+}
+
+static BOOL host_predates_ipados16(void) {
+    return host_ipados_major_version() < 16;
+}
+
+static BOOL host_is_ipados14(void) {
+    return host_ipados_major_version() == 14;
+}
+
 static uint64_t xpc_trace_count;
 static uint64_t xpc_digitizer_received;
 static uint64_t xpc_digitizer_processed;
@@ -112,7 +342,35 @@ static uint64_t vmm_vtimer_last_mask[64];
 static uint64_t vmm_vtimer_offset_calls[64];
 static uint64_t vmm_vtimer_last_offset[64];
 static uint64_t vmm_vcpus_exit_calls;
+static uint64_t vmm_vm_map_calls;
+static uint64_t vmm_vm_protect_calls;
 static xo_t fake_usb_location_reply_connection;
+static bool runtime_debug_logging;
+static bool runtime_trace_all_vcpu;
+static uint64_t runtime_xpc_trace_limit = 8;
+static uint64_t runtime_vcpu_trace_limit = 8;
+
+static bool environment_flag_enabled(const char *name) {
+    const char *value = getenv(name);
+    return value && value[0] && strcmp(value, "0") != 0;
+}
+
+// In normal operation counters saturate after the small diagnostic envelope,
+// leaving only one relaxed load and a predictable branch in the hot path.
+// Debug Logging keeps full counters for periodic health reports.
+static uint64_t diagnostic_sequence(uint64_t *counter, uint64_t limit) {
+    if (runtime_debug_logging)
+        return __atomic_add_fetch(counter, 1, __ATOMIC_RELAXED);
+    uint64_t current = __atomic_load_n(counter, __ATOMIC_RELAXED);
+    while (current < limit) {
+        uint64_t next = current + 1;
+        if (__atomic_compare_exchange_n(
+                counter, &current, next, false,
+                __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return next;
+    }
+    return 0;
+}
 
 static bool fake_usb_hci_enabled(void);
 
@@ -137,7 +395,7 @@ static const char *xpc_message_name(xo_t message) {
 }
 
 static void count_received_xpc(const char *name) {
-    if (!name)
+    if (!runtime_debug_logging || !name)
         return;
     if (strcmp(name, "process_digitizer_events") == 0)
         __atomic_add_fetch(&xpc_digitizer_received, 1, __ATOMIC_RELAXED);
@@ -146,7 +404,7 @@ static void count_received_xpc(const char *name) {
 }
 
 static void count_processed_xpc(const char *name) {
-    if (!name)
+    if (!runtime_debug_logging || !name)
         return;
     if (strcmp(name, "process_digitizer_events") == 0)
         __atomic_add_fetch(&xpc_digitizer_processed, 1, __ATOMIC_RELAXED);
@@ -155,7 +413,7 @@ static void count_processed_xpc(const char *name) {
 }
 
 static void count_sent_xpc(const char *name) {
-    if (!name)
+    if (!runtime_debug_logging || !name)
         return;
     if (strcmp(name, "process_frame_update") == 0)
         __atomic_add_fetch(&xpc_frame_updates, 1, __ATOMIC_RELAXED);
@@ -176,9 +434,9 @@ static iosurface_ref_t vmm_IOSurfaceCreate(CFDictionaryRef properties) {
         globalProperties, CFSTR("IOSurfaceIsGlobal"), kCFBooleanTrue);
     iosurface_ref_t surface = IOSurfaceCreate(globalProperties);
     uint32_t identifier = surface ? IOSurfaceGetID(surface) : 0;
-    uint64_t count = __atomic_add_fetch(
-        &iosurface_create_count, 1, __ATOMIC_RELAXED);
-    if (count <= 12 || count % 300 == 0) {
+    uint64_t count = diagnostic_sequence(&iosurface_create_count, 12);
+    if (count && (count <= 12 ||
+                  (runtime_debug_logging && count % 300 == 0))) {
         logf_("[vmmhook] IOSurfaceCreate #%llu requested-global=1 "
               "-> %p id=%u",
               (unsigned long long)count, surface, identifier);
@@ -196,10 +454,9 @@ __attribute__((used)) static struct {
 };
 
 static bool should_trace_xpc(uint64_t *sequence) {
-    const char *limit_text = getenv("VMMHOOK_TRACE_XPC_LIMIT");
-    uint64_t limit = limit_text ? strtoull(limit_text, NULL, 0) : 0;
-    *sequence = __atomic_add_fetch(&xpc_trace_count, 1, __ATOMIC_RELAXED);
-    return *sequence <= limit;
+    *sequence = diagnostic_sequence(
+        &xpc_trace_count, runtime_xpc_trace_limit);
+    return *sequence != 0 && *sequence <= runtime_xpc_trace_limit;
 }
 
 static void trace_xpc_message(const char *operation, xo_t connection,
@@ -1653,8 +1910,21 @@ static id traced_usb_hci_init(id self, SEL command, id capabilities, id queue,
             self, sel_registerName("setCommandHandler:"), command_handler);
         ((void (*)(id, SEL, id))objc_msgSend)(
             self, sel_registerName("setDoorbellHandler:"), doorbell_handler);
-        ((void (*)(id, SEL, void *))objc_msgSend)(
-            self, sel_registerName("setInterestHandler:"), interest_handler);
+        SEL interest_selector = sel_registerName("setInterestHandler:");
+        if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(
+                self, sel_registerName("respondsToSelector:"),
+                interest_selector)) {
+            ((void (*)(id, SEL, id))objc_msgSend)(
+                self, interest_selector, interest_handler);
+        } else if (interest_handler) {
+            // iPadOS 14's IOUSBHostControllerInterface predates this setter.
+            // The Ventura argument is authenticated for its newer ABI and is
+            // not a valid iPadOS 14 Objective-C block.  The fake userspace
+            // bridge drives controller interest transitions directly, so the
+            // older interface correctly leaves this optional callback unused.
+            logf_("[vmmhook] ignored unsupported iPadOS 14 USB interest "
+                  "handler");
+        }
 
         id controller_state_class =
             (id)objc_getClass("IOUSBHostCIControllerStateMachine");
@@ -1963,6 +2233,15 @@ static void start_health_timer(void) {
 }
 
 __attribute__((constructor)) static void hook_init(void) {
+    runtime_debug_logging = environment_flag_enabled("VZ_DEBUG_LOGGING");
+    runtime_trace_all_vcpu = runtime_debug_logging &&
+        environment_flag_enabled("VMMHOOK_TRACE_VCPU");
+    const char *xpcLimit = getenv("VMMHOOK_TRACE_XPC_LIMIT");
+    const char *vcpuLimit = getenv("VMMHOOK_TRACE_VCPU_LIMIT");
+    if (xpcLimit && xpcLimit[0])
+        runtime_xpc_trace_limit = strtoull(xpcLimit, NULL, 0);
+    if (vcpuLimit && vcpuLimit[0])
+        runtime_vcpu_trace_limit = strtoull(vcpuLimit, NULL, 0);
     logf_("[vmmhook] loaded pid %d", getpid());
     // macOS configures its host audio endpoint through CoreAudio HAL. On iOS,
     // the same endpoint needs an explicit per-process AVAudioSession before
@@ -1971,6 +2250,16 @@ __attribute__((constructor)) static void hook_init(void) {
     // Resolve this dynamically: including AVFAudio's header also pulls
     // in modern typed XPC declarations, which conflict with this Ventura
     // binary-ABI shim's intentionally opaque XPC declarations above.
+    // The VMM does not link AVFAudio itself, and this constructor runs before
+    // Virtualization creates its CoreAudio endpoint.  Looking up the class at
+    // this point without loading the framework silently leaves the child with
+    // no AVAudioSession: sound then escapes through the low-level endpoint at
+    // a quiet, fixed level that does not follow the iPad media volume.
+    void *avfAudio = dlopen(
+        "/System/Library/Frameworks/AVFAudio.framework/AVFAudio",
+        RTLD_NOW | RTLD_GLOBAL);
+    if (!avfAudio)
+        logf_("[vmmhook] AVFAudio load failed: %s", dlerror());
     Class audioSessionClass = objc_getClass("AVAudioSession");
     id audioSession = audioSessionClass
         ? ((id(*)(id, SEL))objc_msgSend)(
@@ -2007,10 +2296,11 @@ __attribute__((constructor)) static void hook_init(void) {
         ? ((const char *(*)(id, SEL))objc_msgSend)(
               errorDescription, sel_registerName("UTF8String")) : "none";
     logf_("[vmmhook] audio session category=%d rate=%d active=%d "
-          "permission=%lu sample-rate=%.0f error=%s",
+          "permission=%lu sample-rate=%.0f framework=%p error=%s",
           categoryOK, rateOK, activeOK,
-          (unsigned long)permission, sampleRate, errorText);
-    start_health_timer();
+          (unsigned long)permission, sampleRate, avfAudio, errorText);
+    if (runtime_debug_logging)
+        start_health_timer();
     install_usb_hci_trace();
     // Optional debug delay: set VMMHOOK_DEBUG_SLEEP=N to give lldb time to attach
     // before the VMM accepts the host's connection (catch breakpoints in the open/hv path).
@@ -2108,7 +2398,45 @@ _ip_open __attribute__((section("__DATA,__interpose"))) =
 // vCPU and aborts (hv_vm_destroy) if any returns non-zero. We log reg-index, return value,
 // and the out-value to identify which one triggers the abort.
 extern int hv_vcpu_config_get_feature_reg(void *config, uint64_t reg, uint64_t *value);
+static pthread_mutex_t gLegacyHVCapabilityLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void initialize_legacy_hv_capabilities_if_needed(void) {
+    // The fixed offsets below belong only to the Ventura 22D68 Hypervisor
+    // selected on iPadOS 15. iPadOS 14 selects the Big Sur implementation,
+    // whose native dispatch_once path matches XNU 20 and must not be patched
+    // using Ventura image offsets.
+    if (!host_predates_ipados16() || host_is_ipados14())
+        return;
+    Dl_info hypervisor = {0};
+    if (!dladdr((const void *)&hv_vcpu_config_get_feature_reg, &hypervisor) ||
+        !hypervisor.dli_fbase || !hypervisor.dli_fname ||
+        !strstr(hypervisor.dli_fname, "Hypervisor.framework"))
+        return;
+
+    // Exact offsets in the reproducibly extracted Ventura 22D68 Hypervisor:
+    // its shared capability dispatch_once token and the block invoke that
+    // performs the underlying hv syscall.  iPadOS 15 libdispatch reports the
+    // otherwise-clean token as recursively owned.  Execute Apple's invoke
+    // once under a mutex, then publish the normal completed-token value.
+    uint8_t *base = (uint8_t *)hypervisor.dli_fbase;
+    uint64_t *token = (uint64_t *)(base + 0x1c1c0);
+    if (__atomic_load_n(token, __ATOMIC_ACQUIRE) == UINT64_MAX)
+        return;
+    pthread_mutex_lock(&gLegacyHVCapabilityLock);
+    if (__atomic_load_n(token, __ATOMIC_RELAXED) != UINT64_MAX) {
+        void (*initializer)(void) = (void (*)(void))
+            ptrauth_sign_unauthenticated(
+                base + 0x4938, ptrauth_key_function_pointer, 0);
+        logf_("[vmmhook] iPadOS 15 Hypervisor capability initializer base=%p token=0x%llx",
+              base, (unsigned long long)*token);
+        initializer();
+        __atomic_store_n(token, UINT64_MAX, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&gLegacyHVCapabilityLock);
+}
+
 static int vmm_hv_vcpu_config_get_feature_reg(void *config, uint64_t reg, uint64_t *value) {
+    initialize_legacy_hv_capabilities_if_needed();
     int rc = hv_vcpu_config_get_feature_reg(config, reg, value);
     uint64_t v = (rc == 0 && value) ? *value : 0;
     logf_("[vmmhook] hv_vcpu_config_get_feature_reg(reg=%llu) -> rc=%d *out=0x%llx",
@@ -2119,6 +2447,38 @@ __attribute__((used)) static struct { const void *replacement; const void *repla
 _ip_hv_feat __attribute__((section("__DATA,__interpose"))) =
     { (const void *)&vmm_hv_vcpu_config_get_feature_reg,
       (const void *)&hv_vcpu_config_get_feature_reg };
+
+extern int hv_vm_config_set_ipa_size(void *config, uint32_t ipaBitLength);
+static int vmm_hv_vm_config_set_ipa_size(void *config,
+                                         uint32_t ipaBitLength) {
+    if (host_is_ipados14()) {
+        // The iPadOS 14 package selects Apple's Big Sur (XNU 20)
+        // Hypervisor. Its private vm-config layout predates Ventura's
+        // ipa_bit_length field and the kernel chooses the correct 36-bit
+        // default when that object remains untouched.
+        int rc = (config && ipaBitLength == 36) ? 0 : (int)0xfae94003U;
+        logf_("[vmmhook] iPadOS 14 keep kernel-default Hypervisor IPA bits=%u rc=%d",
+              ipaBitLength, rc);
+        return rc;
+    }
+    if (host_predates_ipados16() && config &&
+        ipaBitLength >= 32 && ipaBitLength <= 48) {
+        // Ventura 22D68 stores ipa_bit_length at +0x10 in its hv_vm_config_t.
+        // Its validation helper reads newer capability fields that are absent
+        // from the iPadOS 15 kernel response and returns HV_ERROR.  The XNU 21
+        // create ABI consumes this same field and supports the requested 36
+        // bits, so bypass only that mismatched userspace validation.
+        *(uint32_t *)((uint8_t *)config + 0x10) = ipaBitLength;
+        logf_("[vmmhook] iPadOS 15 set Hypervisor IPA bits=%u directly",
+              ipaBitLength);
+        return 0;
+    }
+    return hv_vm_config_set_ipa_size(config, ipaBitLength);
+}
+__attribute__((used)) static struct { const void *replacement; const void *replacee; }
+_ip_hv_ipa_size __attribute__((section("__DATA,__interpose"))) =
+    { (const void *)&vmm_hv_vm_config_set_ipa_size,
+      (const void *)&hv_vm_config_set_ipa_size };
 
 // Trace the post-AVPBooter startup path: pin down whether teardown fires, whether
 // vCPU creation is reached, and whether guest execution begins. Signatures match
@@ -2152,8 +2512,12 @@ _ip_hv_vm_create __attribute__((section("__DATA,__interpose"))) =
 extern int hv_vm_map(void *addr, uint64_t ipa, size_t size, uint64_t flags);
 static int vmm_hv_vm_map(void *addr, uint64_t ipa, size_t size, uint64_t flags) {
     int rc = hv_vm_map(addr, ipa, size, flags);
-    logf_("[vmmhook] hv_vm_map(addr=%p ipa=0x%llx size=0x%zx flags=0x%llx) -> rc=%d",
-          addr, (unsigned long long)ipa, size, (unsigned long long)flags, rc);
+    uint64_t count = diagnostic_sequence(&vmm_vm_map_calls, 8);
+    if (count || rc != 0) {
+        logf_("[vmmhook] hv_vm_map #%llu addr=%p ipa=0x%llx size=0x%zx flags=0x%llx -> rc=%d",
+              (unsigned long long)count, addr, (unsigned long long)ipa,
+              size, (unsigned long long)flags, rc);
+    }
     if (rc != 0) log_address("hv_vm_map caller", __builtin_return_address(0));
     return rc;
 }
@@ -2164,8 +2528,12 @@ _ip_hv_vm_map __attribute__((section("__DATA,__interpose"))) =
 extern int hv_vm_protect(uint64_t ipa, size_t size, uint64_t flags);
 static int vmm_hv_vm_protect(uint64_t ipa, size_t size, uint64_t flags) {
     int rc = hv_vm_protect(ipa, size, flags);
-    logf_("[vmmhook] hv_vm_protect(ipa=0x%llx size=0x%zx flags=0x%llx) -> rc=%d",
-          (unsigned long long)ipa, size, (unsigned long long)flags, rc);
+    uint64_t count = diagnostic_sequence(&vmm_vm_protect_calls, 8);
+    if (count || rc != 0) {
+        logf_("[vmmhook] hv_vm_protect #%llu ipa=0x%llx size=0x%zx flags=0x%llx -> rc=%d",
+              (unsigned long long)count, (unsigned long long)ipa,
+              size, (unsigned long long)flags, rc);
+    }
     if (rc != 0) log_address("hv_vm_protect caller", __builtin_return_address(0));
     return rc;
 }
@@ -2202,21 +2570,20 @@ extern int hv_vcpu_get_sys_reg(uint64_t vcpu, uint32_t reg, uint64_t *value);
 static int vmm_hv_vcpu_run(uint64_t vcpu) {
     static uint64_t seen_vcpus;
     uint64_t bit = vcpu < 64 ? (1ULL << vcpu) : 0;
-    bool trace_all = getenv("VMMHOOK_TRACE_VCPU") != NULL;
-    bool first_run = bit && !(__atomic_fetch_or(
-        &seen_vcpus, bit, __ATOMIC_RELAXED) & bit);
-    if (trace_all || first_run)
+    bool first_run = false;
+    if (bit && !(__atomic_load_n(&seen_vcpus, __ATOMIC_RELAXED) & bit))
+        first_run = !(__atomic_fetch_or(
+            &seen_vcpus, bit, __ATOMIC_RELAXED) & bit);
+    if (runtime_trace_all_vcpu || first_run)
         logf_("[vmmhook] hv_vcpu_run CALLED vcpu=0x%llx%s",
               (unsigned long long)vcpu, first_run ? " (first)" : "");
     int rc = hv_vcpu_run(vcpu);
-    const char *limit_text = getenv("VMMHOOK_TRACE_VCPU_LIMIT");
-    uint64_t trace_limit = limit_text ? strtoull(limit_text, NULL, 0) : 0;
     uint64_t exit_count = vcpu < 64
-        ? __atomic_add_fetch(&vmm_vcpu_exit_counts[vcpu], 1,
-                             __ATOMIC_RELAXED)
+        ? diagnostic_sequence(
+              &vmm_vcpu_exit_counts[vcpu], runtime_vcpu_trace_limit)
         : 0;
     vmm_hv_vcpu_exit_t *exit = vcpu < 64 ? vmm_vcpu_exits[vcpu] : NULL;
-    if (vcpu < 64 && exit) {
+    if (runtime_debug_logging && vcpu < 64 && exit) {
         uint32_t reason_bucket = exit->reason < 3 ? exit->reason : 3;
         __atomic_add_fetch(
             &vmm_vcpu_exit_reason_counts[vcpu][reason_bucket], 1,
@@ -2241,7 +2608,8 @@ static int vmm_hv_vcpu_run(uint64_t vcpu) {
             }
         }
     }
-    if (vcpu < 64 && exit_count <= trace_limit) {
+    if (vcpu < 64 && exit_count != 0 &&
+        exit_count <= runtime_vcpu_trace_limit) {
         uint64_t pc = 0;
         int pc_rc = hv_vcpu_get_reg(vcpu, 31 /* HV_REG_PC */, &pc);
         logf_("[vmmhook] vcpu=0x%llx exit#%llu rc=%d reason=%u "
@@ -2253,7 +2621,7 @@ static int vmm_hv_vcpu_run(uint64_t vcpu) {
               (unsigned long long)(exit ? exit->virtual_address : 0),
               (unsigned long long)(exit ? exit->physical_address : 0));
     }
-    if (trace_all || rc != 0)
+    if (runtime_trace_all_vcpu || rc != 0)
         logf_("[vmmhook] hv_vcpu_run -> rc=%d vcpu=0x%llx",
               rc, (unsigned long long)vcpu);
     return rc;
@@ -2266,13 +2634,14 @@ extern int hv_vcpu_set_vtimer_mask(uint64_t vcpu, bool masked);
 static int vmm_hv_vcpu_set_vtimer_mask(uint64_t vcpu, bool masked) {
     int rc = hv_vcpu_set_vtimer_mask(vcpu, masked);
     uint64_t count = 0;
-    if (vcpu < 64) {
+    if (runtime_debug_logging && vcpu < 64) {
         __atomic_store_n(&vmm_vtimer_last_mask[vcpu], masked,
                          __ATOMIC_RELAXED);
         count = __atomic_add_fetch(&vmm_vtimer_mask_calls[vcpu], 1,
                                    __ATOMIC_RELAXED);
     }
-    if (count <= 12 || (count && count % 1000000 == 0) || rc != 0)
+    if ((runtime_debug_logging && count &&
+         (count <= 12 || count % 1000000 == 0)) || rc != 0)
         logf_("[vmmhook] hv_vcpu_set_vtimer_mask vcpu=0x%llx "
               "masked=%d call=%llu -> rc=%d",
               (unsigned long long)vcpu, masked,
@@ -2288,13 +2657,14 @@ extern int hv_vcpu_set_vtimer_offset(uint64_t vcpu, uint64_t offset);
 static int vmm_hv_vcpu_set_vtimer_offset(uint64_t vcpu, uint64_t offset) {
     int rc = hv_vcpu_set_vtimer_offset(vcpu, offset);
     uint64_t count = 0;
-    if (vcpu < 64) {
+    if (runtime_debug_logging && vcpu < 64) {
         __atomic_store_n(&vmm_vtimer_last_offset[vcpu], offset,
                          __ATOMIC_RELAXED);
         count = __atomic_add_fetch(&vmm_vtimer_offset_calls[vcpu], 1,
                                    __ATOMIC_RELAXED);
     }
-    if (count <= 12 || (count && count % 1000000 == 0) || rc != 0)
+    if ((runtime_debug_logging && count &&
+         (count <= 12 || count % 1000000 == 0)) || rc != 0)
         logf_("[vmmhook] hv_vcpu_set_vtimer_offset vcpu=0x%llx "
               "offset=0x%llx call=%llu -> rc=%d",
               (unsigned long long)vcpu, (unsigned long long)offset,
@@ -2309,9 +2679,11 @@ _ip_hv_vcpu_set_vtimer_offset __attribute__((section("__DATA,__interpose"))) =
 extern int hv_vcpus_exit(uint64_t *vcpus, uint32_t vcpu_count);
 static int vmm_hv_vcpus_exit(uint64_t *vcpus, uint32_t vcpu_count) {
     int rc = hv_vcpus_exit(vcpus, vcpu_count);
-    uint64_t count = __atomic_add_fetch(&vmm_vcpus_exit_calls, 1,
-                                        __ATOMIC_RELAXED);
-    if (count <= 12 || count % 100000 == 0 || rc != 0)
+    uint64_t count = runtime_debug_logging
+        ? __atomic_add_fetch(&vmm_vcpus_exit_calls, 1, __ATOMIC_RELAXED)
+        : 0;
+    if ((runtime_debug_logging &&
+         (count <= 12 || count % 100000 == 0)) || rc != 0)
         logf_("[vmmhook] hv_vcpus_exit vcpus=%p count=%u call=%llu -> rc=%d",
               vcpus, vcpu_count, (unsigned long long)count, rc);
     return rc;

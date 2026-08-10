@@ -72,6 +72,7 @@ fi
 ipad_ssh "
 set -eu
 app=/var/jb/Applications/VirtualMac.app/VirtualMac
+test -x "\$app" || app=/Applications/VirtualMac.app/VirtualMac
 host_pattern=/VirtualMac.app/VirtualMac
 vmm_pattern=/payload/VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
 find_pids() {

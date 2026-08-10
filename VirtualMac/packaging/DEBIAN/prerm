@@ -1,17 +1,47 @@
-#!/var/jb/bin/sh
+#!/bin/sh
 
 set -eu
 export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 
+# dpkg owns the package's /var/root/VirtualMac subtree but must never attempt
+# to remove the /var/root mount point after deleting it. A temporary unowned
+# entry makes the parent non-empty during dpkg's directory-removal pass;
+# postrm removes the marker after that pass has completed.
+touch /var/root/.virtualmac-preserve-root 2>/dev/null || true
+
 killall VirtualMac 2>/dev/null || true
 killall com.apple.Virtualization.VirtualMachine 2>/dev/null || true
 killall com.apple.Virtualization.Installation 2>/dev/null || true
+launchctl=/usr/bin/launchctl
+app=/Applications/VirtualMac.app
+if test -x /var/jb/usr/bin/launchctl; then
+    launchctl=/var/jb/usr/bin/launchctl
+    app=/var/jb/Applications/VirtualMac.app
+fi
 for domain in system user/501; do
-    /var/jb/usr/bin/launchctl bootout "$domain/vzi.apple.bootpd" \
+    "$launchctl" bootout "$domain/vzi.apple.bootpd-controller" \
         2>/dev/null || true
-    /var/jb/usr/bin/launchctl bootout "$domain/com.apple.NetworkSharing" \
+    "$launchctl" bootout "$domain/vzi.apple.bootpd" \
+        2>/dev/null || true
+    "$launchctl" bootout "$domain/com.apple.NetworkSharing" \
         2>/dev/null || true
 done
-/var/jb/usr/bin/uicache -u /var/jb/Applications/VirtualMac.app \
-    2>/dev/null || true
+uicache -u "$app" 2>/dev/null || true
+prefix=/var/jb
+if test ! -x /var/jb/usr/bin/jbctl && test ! -x /var/jb/basebin/jbctl; then
+    prefix=
+fi
+rm -f "$prefix/usr/lib/TweakInject/VZKeyboardPassthrough.dylib" \
+    "$prefix/usr/lib/TweakInject/VZKeyboardPassthrough.plist"
+if test ! -x /var/jb/usr/bin/jbctl && test ! -x /var/jb/basebin/jbctl; then
+    rm -rf /Applications/VirtualMac.app
+    # Remove only files copied by this package. Networking helpers live below
+    # /var/root/VirtualMac and are removed as package payload; never touch an
+    # Apple executable or daemon plist under /usr or /System.
+    rm -f /Library/LaunchDaemons/com.apple.bootpd.plist \
+        /Library/LaunchDaemons/com.apple.NetworkSharing.plist \
+        /usr/bin/virtualmac-diagnostics
+    rm -rf /usr/lib/VirtualMac /usr/libexec/VirtualMac \
+        /usr/sbin/VirtualMac
+fi
 exit 0

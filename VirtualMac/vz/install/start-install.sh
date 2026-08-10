@@ -1,4 +1,4 @@
-#!/var/jb/bin/sh
+#!/bin/sh
 
 # On-device launcher shared by the UIKit app and SSH automation. It prewarms
 # DeviceSupport's usbmuxd before VZMacOSInstaller reaches the RestoreOS USB
@@ -8,6 +8,9 @@ set -eu
 # System applications do not inherit the interactive jailbreak shell PATH.
 # Keep every utility used below resolvable when this script is exec'd by the
 # setuid install-launcher from UIKit.
+jb_prefix=/var/jb
+test -x /var/jb/usr/bin/launchctl || jb_prefix=
+launchctl="$jb_prefix/usr/bin/launchctl"
 PATH=/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 trap 'status=$?; if [ "$status" -ne 0 ] && { [ -z "${log:-}" ] || ! grep -q "INSTALL_FAILED" "$log" 2>/dev/null; }; then echo "INSTALL_FAILED launcher status=$status"; fi' EXIT
@@ -18,6 +21,7 @@ if [ "$#" -ne 7 ]; then
 fi
 
 remote=/var/root/VirtualMac
+host_version=$(sw_vers -productVersion)
 ipsw=$1
 staging=$2
 final=$3
@@ -26,6 +30,7 @@ cpu=$5
 memory=$6
 disk=$7
 usbmuxd="$remote/payload/Installation.xpc/Contents/Frameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd"
+third_party_usbmux_jobs=/tmp/virtualmac-third-party-usbmuxd.jobs
 
 test -f "$ipsw"
 test ! -e "$staging"
@@ -39,6 +44,77 @@ test "${final%/*}" = /var/mobile/Media/VirtualMac || {
     echo "final bundle must be directly in /var/mobile/Media/VirtualMac" >&2
     exit 2
 }
+
+# Procursus/libimobiledevice can install its own launchd-managed usbmuxd. It
+# races the matching DeviceSupport daemon below for /var/run/usbmuxd and forces
+# the virtual restore device back into DFU (MobileRestore error 4014). Unload
+# only jailbreak-provided jobs whose plist explicitly runs usbmuxd. A monitor
+# restores each original job after this installer process exits.
+: >"$third_party_usbmux_jobs"
+for plist in "$jb_prefix"/Library/LaunchDaemons/*.plist; do
+    test -f "$plist" || continue
+    grep -q '/usbmuxd\|>usbmuxd<' "$plist" 2>/dev/null || continue
+    # iPadOS 16.0/16.1 do not ship /usr/bin/plutil, and a fresh Dopamine
+    # bootstrap does not necessarily provide another copy. These jailbreak
+    # launchd plists are XML (the grep above intentionally only matches XML),
+    # so read the Label without introducing a package dependency. The old
+    # plutil call returned an empty label on 16.1, leaving a KeepAlive
+    # libimobiledevice usbmuxd job active throughout restore.
+    label=$(sed -n '/<key>Label<\/key>/{
+        n
+        s/.*<string>\([^<]*\)<\/string>.*/\1/p
+        q
+    }' "$plist" 2>/dev/null || true)
+    test -n "$label" || continue
+    # Dopamine rootless LaunchDaemons normally live in user/501. Query it
+    # first because launchctl also accepts system/<label> as an alias while
+    # warning that the service belongs to the user domain; recording that
+    # alias would later restore the job into the wrong domain.
+    for domain in user/501 system; do
+        if "$launchctl" print "$domain/$label" >/dev/null 2>&1; then
+            bootout_status=0
+            "$launchctl" bootout "$domain/$label" \
+                >/dev/null 2>&1 || bootout_status=$?
+            # iPadOS 14's launchctl can return an error after it has already
+            # removed a rootful system job. This is reproducible with
+            # Procursus org.libimobiledevice.usbmuxd: the command is nonzero,
+            # but a subsequent print reports that the service no longer
+            # exists. Accept only that proven 14.x state; keep the established
+            # strict result handling on iPadOS 15 and 16.
+            bootout_succeeded=0
+            if test "$bootout_status" -eq 0; then
+                bootout_succeeded=1
+            elif test "$host_version" != "${host_version#14.}" &&
+                    ! "$launchctl" print "$domain/$label" \
+                        >/dev/null 2>&1; then
+                bootout_succeeded=1
+                echo "INSTALL_USB_CONFLICT_BOOTOUT_STATUS_IGNORED host=$host_version status=$bootout_status domain=$domain label=$label"
+            fi
+            if test "$bootout_succeeded" -eq 1; then
+                printf '%s\t%s\t%s\n' "$domain" "$label" "$plist" \
+                    >>"$third_party_usbmux_jobs"
+                echo "INSTALL_USB_CONFLICT_DISABLED domain=$domain label=$label"
+            else
+                echo "INSTALL_FAILED could not disable conflicting usbmuxd job $domain/$label"
+                exit 1
+            fi
+            break
+        fi
+    done
+done
+installer_pid=$$
+if test -s "$third_party_usbmux_jobs"; then
+    (
+        while kill -0 "$installer_pid" 2>/dev/null; do sleep 1; done
+        while IFS="$(printf '\t')" read -r domain label plist; do
+            "$launchctl" bootstrap "$domain" "$plist" \
+                >/dev/null 2>&1 || true
+            "$launchctl" kickstart "$domain/$label" \
+                >/dev/null 2>&1 || true
+        done <"$third_party_usbmux_jobs"
+        rm -f "$third_party_usbmux_jobs"
+    ) >/tmp/virtualmac-usbmuxd-restore.log 2>&1 &
+fi
 case "$final" in
     *.bundle) ;;
     *) echo "final bundle must have a .bundle suffix" >&2; exit 2 ;;
@@ -81,6 +157,33 @@ INSTALL_USB_ENABLE_FILE=/tmp/vz-usbmuxd-enable \
     "$usbmuxd" -debug 5 >/tmp/vz-usbmuxd.log 2>&1 &
 echo $! >/tmp/vz-usbmuxd.pid
 
+# DeviceSupport's private usbmuxd is needed only for the restore transport.
+# The shell is replaced by install-macos below, so a small watcher owns helper
+# cleanup after that process exits. Without this, successful restores leave a
+# polling usbmuxd consuming CPU until the next restore or reboot.
+restore_process_pid=$$
+(
+    while kill -0 "$restore_process_pid" 2>/dev/null; do sleep 1; done
+    helper_pid=$(cat /tmp/vz-usbmuxd.pid 2>/dev/null || true)
+    if test -n "$helper_pid"; then
+        kill "$helper_pid" 2>/dev/null || true
+        attempt=0
+        while kill -0 "$helper_pid" 2>/dev/null; do
+            attempt=$((attempt + 1))
+            test "$attempt" -lt 20 || {
+                kill -9 "$helper_pid" 2>/dev/null || true
+                break
+            }
+            sleep 0.1
+        done
+    fi
+    if test -L /var/run/usbmuxd &&
+            test "$(readlink /var/run/usbmuxd 2>/dev/null || true)" = /tmp/vzusbmuxd; then
+        rm -f /var/run/usbmuxd
+    fi
+    rm -f /tmp/vzusbmuxd /tmp/vz-usbmuxd.pid /tmp/vz-usbmuxd-enable
+) >/tmp/vz-usbmuxd-cleanup.log 2>&1 &
+
 attempt=0
 while ! test -S /tmp/vzusbmuxd; do
     attempt=$((attempt + 1))
@@ -91,7 +194,7 @@ while ! test -S /tmp/vzusbmuxd; do
     sleep 0.1
 done
 
-installer_pid=$$
+# Coordinate the fake RestoreOS device with the matching bundled usbmuxd.
 (
     while ! grep -q 'fake USB device descriptor: .* ac 05 ac 12' \
         /tmp/vmmhook.log 2>/dev/null; do
@@ -122,6 +225,7 @@ unset VZ_VMM_ENDPOINT_FILE VZ_INSTALLATION_ENDPOINT_FILE
 export VMMHOOK_TRACE_USB="${VMMHOOK_TRACE_USB:-0}"
 export VMMHOOK_TRACE_IOKIT="${VMMHOOK_TRACE_IOKIT:-1}"
 export VMMHOOK_TRACE_XPC_LIMIT="${VMMHOOK_TRACE_XPC_LIMIT:-200}"
+export VZ_DEBUG_LOGGING=1
 export VMMHOOK_FAKE_USB="${VMMHOOK_FAKE_USB:-1}"
 export INSTALL_USB_DEBUG_DELAY_MS="${INSTALL_USB_DEBUG_DELAY_MS:-}"
 export INSTALL_USB_TRACE_TRANSFERS="${INSTALL_USB_TRACE_TRANSFERS:-0}"

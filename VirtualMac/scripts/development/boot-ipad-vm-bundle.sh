@@ -32,7 +32,9 @@ chown mobile:mobile /tmp/VirtualMac.log /tmp/vzxpchook.log /tmp/vmmhook.log \
   /tmp/vmm.stderr.log /tmp/vmm_ep.txt /tmp/pvg-trace.log
 printf '%s\\n' \"\$bundle\" >/tmp/vz-autoboot-path
 chown mobile:mobile /tmp/vz-autoboot-path
-/var/jb/usr/bin/uiopen --bundleid com.mac.virtual
+uiopen_path=/var/jb/usr/bin/uiopen
+test -x "\$uiopen_path" || uiopen_path=/usr/bin/uiopen
+"\$uiopen_path" --bundleid com.mac.virtual
 "
 
 for ((elapsed = 0; elapsed < TIMEOUT; elapsed++)); do
@@ -50,6 +52,24 @@ fi
 ")"
     case "$result" in
         started)
+            # A VMM can publish state=1 and then crash while its first device
+            # queues are coming online. Require a short healthy window so this
+            # harness cannot report that failure as a successful boot.
+            sleep 5
+            health="$(ipad_ssh "
+if grep -q 'VM start failed:\|Virtual Mac stopped:' /tmp/VirtualMac.log; then
+  echo failed
+elif ps ax | grep -F '$REMOTE_APP_PATTERN' | grep -v grep >/dev/null 2>&1 &&
+     ps ax | grep -F '/payload/VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine' | grep -v grep >/dev/null 2>&1; then
+  echo healthy
+else
+  echo stopped
+fi
+")"
+            if [[ "$health" != healthy ]]; then
+                ipad_ssh "tail -n 80 /tmp/VirtualMac.log; tail -n 80 /tmp/vmmhook.log"
+                die "iPad VM $health during post-start stability check"
+            fi
             ipad_ssh "tail -n 20 /tmp/VirtualMac.log"
             printf 'IPAD_VM_BUNDLE_STARTED\t%s\n' "$BUNDLE"
             exit 0

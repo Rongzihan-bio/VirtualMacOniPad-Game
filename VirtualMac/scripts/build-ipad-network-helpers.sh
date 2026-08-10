@@ -7,14 +7,18 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 SOURCE_ROOT="$VZ_BUILD_ROOT/inputs/macos/22D68__MacOS"
 SOURCE_BOOTPD="$SOURCE_ROOT/usr/libexec/bootpd"
+SOURCE_IPADOS14_BOOTPD="$VZ_BUILD_ROOT/inputs/ipados14/18E199__iPad13,4_5_6_7/usr/libexec/bootpd"
 SOURCE_RTADVD="$SOURCE_ROOT/usr/sbin/rtadvd"
 SOURCE_BOOTPD_PLIST="$SOURCE_ROOT/System/Library/LaunchDaemons/bootps.plist"
 ENTS="$VZ_REPO_ROOT/vz/patches/network-helper.ents.xml"
 COMPAT_PATCH="$VZ_REPO_ROOT/vz/patches/patch_network_helper.py"
+IPADOS14_PATCH="$VZ_REPO_ROOT/vz/patches/patch_ipados14_bootpd.py"
 OUT="$VZ_BUILD_ROOT/ipad-network-helpers"
 BOOTPD="$OUT/bootpd"
+BOOTPD_IPADOS14="$OUT/bootpd.ipados14"
 RTADVD="$OUT/rtadvd"
 OD_COMPAT="$OUT/OpenDirectoryCompat.dylib"
+IOKIT14_COMPAT="$OUT/IOKit14Compat.dylib"
 BOOTPD_PLIST="$OUT/com.apple.bootpd.plist"
 
 need_command codesign
@@ -23,21 +27,33 @@ need_command ldid
 need_command lipo
 need_command plutil
 need_file "$SOURCE_BOOTPD"
+need_file "$SOURCE_IPADOS14_BOOTPD"
 need_file "$SOURCE_RTADVD"
 need_file "$SOURCE_BOOTPD_PLIST"
 need_file "$ENTS"
 need_file "$COMPAT_PATCH"
+need_file "$IPADOS14_PATCH"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" \
+    -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
     -dynamiclib -framework CoreFoundation \
     -install_name @loader_path/../lib/OpenDirectoryCompat.dylib \
     "$VZ_REPO_ROOT/vz/host/open_directory_compat.c" \
     -o "$OD_COMPAT"
 codesign --force --sign - "$OD_COMPAT"
+xcrun --sdk iphoneos clang \
+    -arch arm64e -miphoneos-version-min=14.5 \
+    -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+    -dynamiclib -framework CoreFoundation -framework IOKit \
+    -Wl,-reexport_framework,IOKit \
+    -install_name @loader_path/../lib/IOKit14Compat.dylib \
+    "$VZ_REPO_ROOT/vz/host/iokit14_compat.c" \
+    -o "$IOKIT14_COMPAT"
+codesign --force --sign - "$IOKIT14_COMPAT"
 
 for source in "$SOURCE_BOOTPD" "$SOURCE_RTADVD"; do
     name="$(basename "$source")"
@@ -57,7 +73,8 @@ install_name_tool \
 
 for name in bootpd rtadvd; do
     "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" \
-        "$VZ_REPO_ROOT/vz/stamp_ios.py" "$OUT/$name.macos" "$OUT/$name" 16.0
+        "$VZ_REPO_ROOT/vz/stamp_ios.py" "$OUT/$name.macos" "$OUT/$name" \
+        "$VZ_IPADOS_MIN_VERSION"
     codesign --force --sign - --entitlements "$ENTS" \
         --generate-entitlement-der "$OUT/$name"
     codesign --verify --strict "$OUT/$name"
@@ -68,11 +85,23 @@ done
 codesign --force --sign - --entitlements "$ENTS" \
     --generate-entitlement-der "$BOOTPD"
 codesign --verify --strict "$BOOTPD"
+
+# Preserve the matching iPadOS 14 implementation and modify only its writable
+# configuration pathname. Never install this file over /usr/libexec/bootpd.
+cp "$SOURCE_IPADOS14_BOOTPD" "$BOOTPD_IPADOS14"
+"$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$IPADOS14_PATCH" \
+    "$BOOTPD_IPADOS14"
+codesign --force --sign - --entitlements "$ENTS" \
+    --generate-entitlement-der "$BOOTPD_IPADOS14"
+codesign --verify --strict "$BOOTPD_IPADOS14"
 codesign --verify --strict "$OD_COMPAT"
+codesign --verify --strict "$IOKIT14_COMPAT"
 python3 "$VZ_REPO_ROOT/scripts/audit-entitlements.py" \
     "$ENTS" "$BOOTPD" \
+    "$ENTS" "$BOOTPD_IPADOS14" \
     "$ENTS" "$RTADVD" \
-    - "$OD_COMPAT"
+    - "$OD_COMPAT" \
+    - "$IOKIT14_COMPAT"
 
 cp "$SOURCE_BOOTPD_PLIST" "$BOOTPD_PLIST"
 plutil -replace Label -string vzi.apple.bootpd "$BOOTPD_PLIST"

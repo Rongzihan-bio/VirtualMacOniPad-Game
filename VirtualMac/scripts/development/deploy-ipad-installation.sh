@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/../lib/common.sh"
 
 OUT="$VZ_BUILD_ROOT/ipad-installation"
 REMOTE="${VZ_IPAD_WORK:-/var/root/VirtualMac}"
-ARCHIVE="$(mktemp -t VirtualMac-installation.XXXXXX.tar.gz)"
+ARCHIVE="$(mktemp -t VirtualMac-installation.XXXXXX.tar)"
 trap 'rm -f "$ARCHIVE"' EXIT
 
 need_command ldid
@@ -19,12 +19,12 @@ need_file "$OUT/install/install-macos"
 need_file "$OUT/install/start-install.sh"
 need_file "$OUT/install/install-launcher"
 need_file "$OUT/install/usb-bridge-probe"
-need_file "$OUT/payload/Frameworks/LaunchServicesCompat.dylib"
 need_file "$OUT/trustcache.txt"
 
-tar -C "$OUT" -czf "$ARCHIVE" payload install trustcache.txt manifest.txt
+tar -C "$OUT" -cf "$ARCHIVE" payload/Installation.xpc install \
+    trustcache.txt manifest.txt
 ensure_ipad_usb
-ipad_scp "$ARCHIVE" "$IPAD_TARGET:/tmp/vz-installation.tar.gz"
+ipad_scp "$ARCHIVE" "$IPAD_TARGET:/tmp/vz-installation.tar"
 
 ipad_ssh "
 set -eu
@@ -40,13 +40,43 @@ launchctl bootout system/com.mac.virtual.installer 2>/dev/null || true
 rm -f /var/jb/Library/LaunchDaemons/com.mac.virtual.installer.plist
 rm -rf '$REMOTE/payload/Installation.xpc' '$REMOTE/install'
 mkdir -p '$REMOTE'
-tar -xzf /tmp/vz-installation.tar.gz -C '$REMOTE'
-rm -f /tmp/vz-installation.tar.gz
+tar -xf /tmp/vz-installation.tar -C '$REMOTE'
+rm -f /tmp/vz-installation.tar
+replace_file() {
+  source_path="\$1"
+  destination_path="\$2"
+  cp "\$source_path" "\$destination_path.virtualmac-new"
+  chmod 755 "\$destination_path.virtualmac-new"
+  mv -f "\$destination_path.virtualmac-new" "\$destination_path"
+}
+host_version=\$(sw_vers -productVersion)
+installation_macos='$REMOTE/payload/Installation.xpc/Contents/MacOS'
+installation_frameworks='$REMOTE/payload/Installation.xpc/Contents/Frameworks'
+installation_variant="\$installation_macos/com.apple.Virtualization.Installation.ipados16"
+compat_variant="\$installation_frameworks/InstallationCompat.dylib.ipados16"
+mobile_device_dir="\$installation_frameworks/MobileDevice.framework/Versions/A"
+mobile_device_variant="\$mobile_device_dir/MobileDevice.ipados16"
+case "\$host_version" in
+  14.*)
+    installation_variant="\$installation_macos/com.apple.Virtualization.Installation.ipados14"
+    compat_variant="\$installation_frameworks/InstallationCompat.dylib.ipados14"
+    mobile_device_variant="\$mobile_device_dir/MobileDevice.ipados14"
+    ;;
+  15.*)
+    installation_variant="\$installation_macos/com.apple.Virtualization.Installation.ipados15"
+    compat_variant="\$installation_frameworks/InstallationCompat.dylib.ipados15"
+    mobile_device_variant="\$mobile_device_dir/MobileDevice.ipados15"
+    ;;
+esac
+replace_file "\$installation_variant" \
+  "\$installation_macos/com.apple.Virtualization.Installation"
+replace_file "\$compat_variant" \
+  "\$installation_frameworks/InstallationCompat.dylib"
+replace_file "\$mobile_device_variant" "\$mobile_device_dir/MobileDevice"
 chmod 755 \
   '$REMOTE/payload/Installation.xpc/Contents/MacOS/com.apple.Virtualization.Installation' \
   '$REMOTE/payload/Installation.xpc/Contents/Frameworks/InstallationCompat.dylib' \
   '$REMOTE/payload/Installation.xpc/Contents/Frameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd' \
-  '$REMOTE/payload/Frameworks/LaunchServicesCompat.dylib' \
   '$REMOTE/install/VZHostCompat.dylib' \
   '$REMOTE/install/restore-image-probe' \
   '$REMOTE/install/install-macos' \
@@ -59,11 +89,20 @@ export PATH
 for utility in cat rm killall grep sleep touch ln; do
   command -v "\$utility" >/dev/null
 done
-while IFS=\$(printf '\\t') read -r hash file; do
-  test -n \"\$hash\"
-  test -f '$REMOTE/'\"\$file\"
-  jbctl trustcache add \"\$hash\"
-done <'$REMOTE/trustcache.txt'
+if command -v jbctl >/dev/null 2>&1; then
+  while IFS=\$(printf '\\t') read -r hash file; do
+    test -n \"\$hash\"
+    test -f '$REMOTE/'\"\$file\"
+    jbctl trustcache add \"\$hash\"
+  done <'$REMOTE/trustcache.txt'
+elif test -x /taurine/jbexec; then
+  while IFS=\$(printf '\\t') read -r hash file; do
+    target='$REMOTE/'\"\$file\"
+    test -f \"\$target\" || continue
+    PREFLIGHT=1 /bin/bash -c \
+      'exec -a \"\$1\" /taurine/jbexec' _ \"\$target\" >/dev/null || true
+  done <'$REMOTE/trustcache.txt'
+fi
 rm -f /tmp/installation_ep.txt /tmp/installation.stderr.log \
   /tmp/restore-vmm.stderr.log \
   /tmp/installationhook.log /tmp/restore-image-probe.log

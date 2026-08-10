@@ -15,10 +15,21 @@ VMM_COMPAT="$PAYLOAD/Frameworks/LaunchServicesCompat.dylib"
 INSTALL_ROOT="$OUT/install"
 XPC="$PAYLOAD/Installation.xpc"
 INSTALLER="$XPC/Contents/MacOS/com.apple.Virtualization.Installation"
+INSTALLER_IPADOS14="$INSTALLER.ipados14"
+INSTALLER_IPADOS15="$INSTALLER.ipados15"
+INSTALLER_IPADOS15_AUTH="$INSTALLER.ipados15-auth"
+INSTALLER_IPADOS16="$INSTALLER.ipados16"
 XPC_FRAMEWORKS="$XPC/Contents/Frameworks"
 COMPAT="$XPC_FRAMEWORKS/InstallationCompat.dylib"
+COMPAT_IPADOS14="$COMPAT.ipados14"
+COMPAT_IPADOS15="$COMPAT.ipados15"
+COMPAT_IPADOS16="$COMPAT.ipados16"
 MOBILE_DEVICE_FRAMEWORK="$XPC_FRAMEWORKS/MobileDevice.framework"
 MOBILE_DEVICE="$MOBILE_DEVICE_FRAMEWORK/Versions/A/MobileDevice"
+MOBILE_DEVICE_IPADOS14="$MOBILE_DEVICE.ipados14"
+MOBILE_DEVICE_IPADOS15="$MOBILE_DEVICE.ipados15"
+MOBILE_DEVICE_IPADOS15_AUTH="$MOBILE_DEVICE.ipados15-auth"
+MOBILE_DEVICE_IPADOS16="$MOBILE_DEVICE.ipados16"
 USBMUXD="$MOBILE_DEVICE_FRAMEWORK/Versions/A/Resources/usbmuxd"
 CRYPTO="$XPC_FRAMEWORKS/crypto.dylib"
 SSL="$XPC_FRAMEWORKS/ssl.dylib"
@@ -29,6 +40,9 @@ CRASHREPORTER_COMPAT="$XPC_FRAMEWORKS/CrashReporterCompat.dylib"
 DISKIMAGES_COMPAT="$XPC_FRAMEWORKS/DiskImagesCompat.dylib"
 CORESERVICES_COMPAT="$XPC_FRAMEWORKS/CoreServicesCompat.dylib"
 SECURITY_COMPAT="$XPC_FRAMEWORKS/SecurityCompat.dylib"
+FOUNDATION14_COMPAT="$XPC_FRAMEWORKS/Foundation14Compat.dylib"
+IOKIT14_COMPAT="$XPC_FRAMEWORKS/IOKit14Compat.dylib"
+SOFTLINKING14_COMPAT="$XPC_FRAMEWORKS/SoftLinking14Compat.dylib"
 HOST_HOOK="$INSTALL_ROOT/VZHostCompat.dylib"
 PROBE="$INSTALL_ROOT/restore-image-probe"
 INSTALL_TOOL="$INSTALL_ROOT/install-macos"
@@ -47,6 +61,8 @@ PYTHON="$VZ_BUILD_ROOT/toolchain/venv/bin/python3"
 DYLDEX="$VZ_BUILD_ROOT/toolchain/venv/bin/dyldex"
 IPSW_TOOL="$VZ_BUILD_ROOT/toolchain/bin/ipsw-a2sb"
 CACHE="$VZ_BUILD_ROOT/cache/device-support-runtime"
+IPADOS15_OBJC_PATCH="$VZ_REPO_ROOT/vz/patches/patch_ipados15_objc_class_data.py"
+IPADOS15_OBJC_IMPORT_PATCH="$VZ_REPO_ROOT/vz/patches/patch_ipados15_objc_imports.py"
 
 need_command codesign
 need_command ditto
@@ -90,6 +106,12 @@ need_file "$VZ_REPO_ROOT/vz/host/crashreporter_compat.c"
 need_file "$VZ_REPO_ROOT/vz/host/diskimages_compat.c"
 need_file "$VZ_REPO_ROOT/vz/host/coreservices_compat.c"
 need_file "$VZ_REPO_ROOT/vz/host/security_compat.c"
+need_file "$VZ_REPO_ROOT/vz/host/diskarbitration15_compat.c"
+need_file "$VZ_REPO_ROOT/vz/host/foundation14_compat.c"
+need_file "$VZ_REPO_ROOT/vz/host/iokit14_compat.c"
+need_file "$VZ_REPO_ROOT/vz/host/softlinking14_compat.c"
+need_file "$IPADOS15_OBJC_PATCH"
+need_file "$IPADOS15_OBJC_IMPORT_PATCH"
 
 # Installation launches the same VirtualMachine.xpc used by ordinary boots.
 # Rebuild and package its compatibility library too so USB-controller bridge
@@ -113,7 +135,7 @@ lipo -thin arm64e \
     -output "$INSTALLER.macos"
 "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" \
     "$VZ_REPO_ROOT/vz/stamp_ios.py" \
-    "$INSTALLER.macos" "$INSTALLER" 16.0
+    "$INSTALLER.macos" "$INSTALLER" "$VZ_IPADOS_MIN_VERSION"
 rm -f "$INSTALLER.macos"
 
 # Installation.xpc soft-loads the installed DeviceSupport MobileDevice. Keep
@@ -135,7 +157,7 @@ mkdir -p "$MOBILE_DEVICE_FRAMEWORK/Versions/A"
 lipo -thin arm64e "$SOURCE_MOBILE_DEVICE/Versions/A/MobileDevice" \
     -output "$CACHE/MobileDevice.macos"
 "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
-    "$CACHE/MobileDevice.macos" "$MOBILE_DEVICE" 16.0
+    "$CACHE/MobileDevice.macos" "$MOBILE_DEVICE" "$VZ_IPADOS_MIN_VERSION"
 if [[ -d "$SOURCE_MOBILE_DEVICE/Versions/A/Resources" ]]; then
     ditto "$SOURCE_MOBILE_DEVICE/Versions/A/Resources" \
         "$MOBILE_DEVICE_FRAMEWORK/Versions/A/Resources"
@@ -155,7 +177,7 @@ ln -sfn Versions/Current/Resources "$MOBILE_DEVICE_FRAMEWORK/Resources"
 lipo -thin arm64e "$SOURCE_MOBILE_DEVICE/Versions/A/Resources/usbmuxd" \
     -output "$CACHE/usbmuxd.macos"
 "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
-    "$CACHE/usbmuxd.macos" "$USBMUXD" 16.0
+    "$CACHE/usbmuxd.macos" "$USBMUXD" "$VZ_IPADOS_MIN_VERSION"
 install_name_tool \
     -change /System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/MobileDevice \
     @loader_path/../MobileDevice \
@@ -229,7 +251,7 @@ for spec in 'libcrypto.35.dylib|crypto.dylib' \
             @loader_path/crypto.dylib
     fi
     "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
-        "$proto" "$output" 16.0
+        "$proto" "$output" "$VZ_IPADOS_MIN_VERSION"
 done
 
 trustImage="TrustEvaluationAgent.framework/Versions/A/TrustEvaluationAgent"
@@ -242,10 +264,10 @@ VZ_IPSW="$IPSW_TOOL" "$PYTHON" "$VZ_REPO_ROOT/vz/uncache.py" \
     "$DSC" "$trustImage" "$trustRaw" "$trustProto" compact
 mkdir -p "$TRUST_EVALUATION_FRAMEWORK"
 "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
-    "$trustProto" "$TRUST_EVALUATION" 16.0
+    "$trustProto" "$TRUST_EVALUATION" "$VZ_IPADOS_MIN_VERSION"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib \
     -Wl,-reexport_library,"$COREUTILS_TBD" \
     -install_name "@rpath/CoreUtilsCompat.dylib" \
@@ -253,14 +275,14 @@ xcrun --sdk iphoneos clang \
     -o "$COREUTILS_COMPAT"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib \
     -install_name "@rpath/CrashReporterCompat.dylib" \
     "$VZ_REPO_ROOT/vz/host/crashreporter_compat.c" \
     -o "$CRASHREPORTER_COMPAT"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib \
     -Wl,-reexport_library,"$DISKIMAGES_TBD" \
     -install_name "@rpath/DiskImagesCompat.dylib" \
@@ -268,14 +290,14 @@ xcrun --sdk iphoneos clang \
     -o "$DISKIMAGES_COMPAT"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib \
     -install_name "@rpath/CoreServicesCompat.dylib" \
     "$VZ_REPO_ROOT/vz/host/coreservices_compat.c" \
     -o "$CORESERVICES_COMPAT"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib \
     -Wl,-reexport_library,"$SECURITY_TBD" \
     -install_name "@rpath/SecurityCompat.dylib" \
@@ -283,7 +305,31 @@ xcrun --sdk iphoneos clang \
     -o "$SECURITY_COMPAT"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min=14.5 -isysroot "$SDK" \
+    -dynamiclib -framework Foundation -framework CFNetwork \
+    -Wl,-reexport_framework,Foundation -Wl,-reexport_framework,CFNetwork \
+    -install_name "@rpath/Foundation14Compat.dylib" \
+    "$VZ_REPO_ROOT/vz/host/foundation14_compat.c" \
+    -o "$FOUNDATION14_COMPAT"
+xcrun --sdk iphoneos clang \
+    -arch arm64e -miphoneos-version-min=14.5 -isysroot "$SDK" \
+    -dynamiclib -framework CoreFoundation -framework IOKit \
+    -Wl,-reexport_framework,IOKit \
+    -install_name "@rpath/IOKit14Compat.dylib" \
+    "$VZ_REPO_ROOT/vz/host/iokit14_compat.c" \
+    -o "$IOKIT14_COMPAT"
+xcrun --sdk iphoneos clang \
+    -arch arm64e -miphoneos-version-min=14.5 -isysroot "$SDK" \
+    -dynamiclib -lc++ \
+    -install_name "@rpath/SoftLinking14Compat.dylib" \
+    "$VZ_REPO_ROOT/vz/host/softlinking14_compat.c" \
+    -o "$SOFTLINKING14_COMPAT"
+nm -gU "$SOFTLINKING14_COMPAT" | awk '{print $NF}' | \
+    grep -Fxq __sl_dlopen ||
+    die "SoftLinking14Compat does not export __sl_dlopen"
+
+xcrun --sdk iphoneos clang \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib -fblocks -Wl,-undefined,dynamic_lookup \
     -framework CoreFoundation -framework IOKit \
     -Wl,-reexport_library,"$DA_TBD" \
@@ -291,6 +337,41 @@ xcrun --sdk iphoneos clang \
     "$VZ_REPO_ROOT/vz/host/installationhook.m" \
     "$VZ_REPO_ROOT/vz/host/installation_usb_shim.m" \
     -o "$COMPAT"
+
+# iPadOS 15 has no DiskArbitration image.  Build a legacy-only variant that
+# provides the narrow MobileDevice surface locally; the normal iPadOS 16
+# variant continues to re-export Apple's system framework unchanged.
+xcrun --sdk iphoneos clang \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
+    -dynamiclib -fblocks -Wl,-undefined,dynamic_lookup \
+    -framework CoreFoundation -framework IOKit \
+    -install_name "@rpath/InstallationCompat.dylib" \
+    "$VZ_REPO_ROOT/vz/host/installationhook.m" \
+    "$VZ_REPO_ROOT/vz/host/installation_usb_shim.m" \
+    "$VZ_REPO_ROOT/vz/host/diskarbitration15_compat.c" \
+    -o "$COMPAT_IPADOS15"
+
+cp "$MOBILE_DEVICE" "$MOBILE_DEVICE_IPADOS16"
+cp "$MOBILE_DEVICE" "$MOBILE_DEVICE_IPADOS15_AUTH"
+install_name_tool -change \
+    /System/Library/PrivateFrameworks/DiskArbitration.framework/DiskArbitration \
+    @loader_path/../../../InstallationCompat.dylib \
+    "$MOBILE_DEVICE_IPADOS15_AUTH"
+"$PYTHON" "$IPADOS15_OBJC_IMPORT_PATCH" "$MOBILE_DEVICE_IPADOS15_AUTH"
+# iPadOS 15.4 adopted the newer Objective-C class-data authentication used by
+# Ventura. Preserve that signed image, then strip only the older 15.x copy.
+cp "$MOBILE_DEVICE_IPADOS15_AUTH" "$MOBILE_DEVICE_IPADOS15"
+"$PYTHON" "$IPADOS15_OBJC_PATCH" "$MOBILE_DEVICE_IPADOS15"
+cp "$MOBILE_DEVICE_IPADOS15" "$MOBILE_DEVICE_IPADOS14"
+install_name_tool -change \
+    /System/Library/Frameworks/Foundation.framework/Foundation \
+    @loader_path/../../../Foundation14Compat.dylib \
+    "$MOBILE_DEVICE_IPADOS14"
+"$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
+    "$MOBILE_DEVICE_IPADOS14" "$MOBILE_DEVICE_IPADOS14.restamped" 14.5
+mv -f "$MOBILE_DEVICE_IPADOS14.restamped" "$MOBILE_DEVICE_IPADOS14"
+"$PYTHON" "$VZ_REPO_ROOT/vz/patches/patch_ipados14_mobiledevice.py" \
+    "$MOBILE_DEVICE_IPADOS14"
 
 install_name_tool \
     -change \
@@ -313,47 +394,88 @@ install_name_tool \
     /System/Library/PrivateFrameworks/SoftLinking.framework/SoftLinking \
     "$INSTALLER"
 
+# Ventura's arm64e Objective-C class metadata uses an ABI that iPadOS 15's
+# runtime cannot authenticate. Keep the established iPadOS 16 executable
+# unchanged and adapt only the copy selected by postinst on older hosts.
+cp "$INSTALLER" "$INSTALLER_IPADOS16"
+cp "$INSTALLER" "$INSTALLER_IPADOS15_AUTH"
+"$PYTHON" "$IPADOS15_OBJC_IMPORT_PATCH" "$INSTALLER_IPADOS15_AUTH"
+cp "$INSTALLER_IPADOS15_AUTH" "$INSTALLER_IPADOS15"
+"$PYTHON" "$IPADOS15_OBJC_PATCH" "$INSTALLER_IPADOS15"
+cp "$INSTALLER_IPADOS15" "$INSTALLER_IPADOS14"
+install_name_tool \
+    -change /System/Library/Frameworks/Foundation.framework/Foundation \
+    @loader_path/../Frameworks/Foundation14Compat.dylib \
+    -change /System/Library/PrivateFrameworks/SoftLinking.framework/SoftLinking \
+    @loader_path/../Frameworks/SoftLinking14Compat.dylib \
+    "$INSTALLER_IPADOS14"
+"$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
+    "$INSTALLER_IPADOS14" "$INSTALLER_IPADOS14.restamped" 14.5
+mv -f "$INSTALLER_IPADOS14.restamped" "$INSTALLER_IPADOS14"
+
+cp "$COMPAT_IPADOS15" "$COMPAT_IPADOS14"
+install_name_tool -change \
+    /System/Library/Frameworks/IOKit.framework/IOKit \
+    @loader_path/IOKit14Compat.dylib \
+    "$COMPAT_IPADOS14"
+"$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
+    "$COMPAT_IPADOS14" "$COMPAT_IPADOS14.restamped" 14.5
+mv -f "$COMPAT_IPADOS14.restamped" "$COMPAT_IPADOS14"
+
 INFO="$XPC/Contents/Info.plist"
 plutil -replace CFBundleSupportedPlatforms -json '["iPhoneOS"]' "$INFO"
 plutil -replace DTPlatformName -string iphoneos "$INFO"
-plutil -replace DTPlatformVersion -string 16.0 "$INFO"
-plutil -replace DTSDKName -string iphoneos16.0.internal "$INFO"
+plutil -replace DTPlatformVersion -string "$VZ_IPADOS_MIN_VERSION" "$INFO"
+plutil -replace DTSDKName -string \
+    "iphoneos${VZ_IPADOS_MIN_VERSION}.internal" "$INFO"
 plutil -remove LSMinimumSystemVersion "$INFO" 2>/dev/null || true
-plutil -replace MinimumOSVersion -string 16.0 "$INFO" 2>/dev/null || \
-    plutil -insert MinimumOSVersion -string 16.0 "$INFO"
+plutil -replace MinimumOSVersion -string "$VZ_IPADOS_MIN_VERSION" \
+    "$INFO" 2>/dev/null || \
+    plutil -insert MinimumOSVersion -string "$VZ_IPADOS_MIN_VERSION" "$INFO"
 
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib -fblocks -Wl,-undefined,dynamic_lookup \
     -install_name "@rpath/VZHostCompat.dylib" \
     "$VZ_REPO_ROOT/vz/host/vzxpchook.m" \
     -o "$HOST_HOOK"
 xcrun --sdk iphoneos clang \
-    -arch arm64 -miphoneos-version-min=16.0 -isysroot "$SDK" -fblocks \
+    -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" -fblocks \
     -framework Foundation -framework Metal -framework UIKit \
     -Wl,-export_dynamic \
     "$VZ_REPO_ROOT/vz/host/NSViewShim.m" \
     "$VZ_REPO_ROOT/vz/development/probes/restore_image_probe.m" \
     -o "$PROBE"
 xcrun --sdk iphoneos clang \
-    -arch arm64 -miphoneos-version-min=16.0 -isysroot "$SDK" -fblocks \
+    -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" -fblocks \
     -framework Foundation -framework Metal -framework UIKit \
     -Wl,-export_dynamic \
     "$VZ_REPO_ROOT/vz/host/NSViewShim.m" \
     "$VZ_REPO_ROOT/vz/install/install_macos.m" \
     -o "$INSTALL_TOOL"
 xcrun --sdk iphoneos clang \
-    -arch arm64 -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     "$VZ_REPO_ROOT/vz/development/probes/usb_bridge_probe.c" \
     -o "$USB_BRIDGE_PROBE"
 xcrun --sdk iphoneos clang \
-    -arch arm64 -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     "$VZ_REPO_ROOT/vz/install/install_launcher.c" \
     -o "$INSTALL_LAUNCHER"
 
 ldid -S"$ENTS" "$INSTALLER"
+ldid -Icom.apple.Virtualization.Installation -S"$ENTS" "$INSTALLER_IPADOS14"
+ldid -Icom.apple.Virtualization.Installation -S"$ENTS" "$INSTALLER_IPADOS15"
+ldid -Icom.apple.Virtualization.Installation -S"$ENTS" "$INSTALLER_IPADOS15_AUTH"
+ldid -Icom.apple.Virtualization.Installation -S"$ENTS" "$INSTALLER_IPADOS16"
 ldid -S"$ENTS" "$COMPAT"
+cp "$COMPAT" "$COMPAT_IPADOS16"
+ldid -IInstallationCompat.dylib -S"$ENTS" "$COMPAT_IPADOS15"
+ldid -IInstallationCompat.dylib -S"$ENTS" "$COMPAT_IPADOS14"
 ldid -S"$ENTS" "$MOBILE_DEVICE"
+ldid -IMobileDevice -S"$ENTS" "$MOBILE_DEVICE_IPADOS14"
+ldid -IMobileDevice -S"$ENTS" "$MOBILE_DEVICE_IPADOS15"
+ldid -IMobileDevice -S"$ENTS" "$MOBILE_DEVICE_IPADOS15_AUTH"
+ldid -IMobileDevice -S"$ENTS" "$MOBILE_DEVICE_IPADOS16"
 ldid -S"$ENTS" "$USBMUXD"
 codesign --force --sign - \
     --preserve-metadata=entitlements,requirements,flags,runtime "$CRYPTO"
@@ -367,6 +489,9 @@ ldid -S"$ENTS" "$CRASHREPORTER_COMPAT"
 ldid -S"$ENTS" "$DISKIMAGES_COMPAT"
 ldid -S"$ENTS" "$CORESERVICES_COMPAT"
 ldid -S"$ENTS" "$SECURITY_COMPAT"
+ldid -S"$ENTS" "$FOUNDATION14_COMPAT"
+ldid -S"$ENTS" "$IOKIT14_COMPAT"
+ldid -S"$ENTS" "$SOFTLINKING14_COMPAT"
 ldid -S"$HOST_ENTS" "$HOST_HOOK"
 ldid -S"$HOST_ENTS" "$PROBE"
 ldid -S"$HOST_ENTS" "$INSTALL_TOOL"
@@ -375,14 +500,28 @@ ldid -S"$HOST_ENTS" "$INSTALL_LAUNCHER"
 
 "$PYTHON" "$VZ_REPO_ROOT/scripts/audit-entitlements.py" \
     "$ENTS" "$INSTALLER" \
+    "$ENTS" "$INSTALLER_IPADOS14" \
+    "$ENTS" "$INSTALLER_IPADOS15" \
+    "$ENTS" "$INSTALLER_IPADOS15_AUTH" \
+    "$ENTS" "$INSTALLER_IPADOS16" \
     "$ENTS" "$COMPAT" \
+    "$ENTS" "$COMPAT_IPADOS14" \
+    "$ENTS" "$COMPAT_IPADOS15" \
+    "$ENTS" "$COMPAT_IPADOS16" \
     "$ENTS" "$MOBILE_DEVICE" \
+    "$ENTS" "$MOBILE_DEVICE_IPADOS14" \
+    "$ENTS" "$MOBILE_DEVICE_IPADOS15" \
+    "$ENTS" "$MOBILE_DEVICE_IPADOS15_AUTH" \
+    "$ENTS" "$MOBILE_DEVICE_IPADOS16" \
     "$ENTS" "$USBMUXD" \
     "$ENTS" "$COREUTILS_COMPAT" \
     "$ENTS" "$CRASHREPORTER_COMPAT" \
     "$ENTS" "$DISKIMAGES_COMPAT" \
     "$ENTS" "$CORESERVICES_COMPAT" \
     "$ENTS" "$SECURITY_COMPAT" \
+    "$ENTS" "$FOUNDATION14_COMPAT" \
+    "$ENTS" "$IOKIT14_COMPAT" \
+    "$ENTS" "$SOFTLINKING14_COMPAT" \
     "$HOST_ENTS" "$HOST_HOOK" \
     "$HOST_ENTS" "$PROBE" \
     "$HOST_ENTS" "$INSTALL_TOOL" \
@@ -401,6 +540,12 @@ otool -L "$INSTALLER" | grep -Fq \
 otool -L "$COMPAT" | grep -Fq \
     '/System/Library/PrivateFrameworks/DiskArbitration.framework/DiskArbitration' ||
     die "InstallationCompat does not re-export iPad DiskArbitration"
+otool -L "$COMPAT_IPADOS15" | grep -Fq \
+    '/System/Library/PrivateFrameworks/DiskArbitration.framework/DiskArbitration' &&
+    die "iPadOS 15 InstallationCompat still loads DiskArbitration"
+otool -L "$MOBILE_DEVICE_IPADOS15" | grep -Fq \
+    '@loader_path/../../../InstallationCompat.dylib' ||
+    die "iPadOS 15 MobileDevice does not use InstallationCompat for DiskArbitration"
 otool -L "$MOBILE_DEVICE" | grep -Fq \
     '@loader_path/../../../crypto.dylib' ||
     die "MobileDevice does not load bundled libcrypto"
@@ -420,7 +565,12 @@ otool -L "$USBMUXD" | grep -Fq '@loader_path/../MobileDevice' ||
     die "usbmuxd does not load bundled MobileDevice"
 
 {
-    for file in "$INSTALLER" "$COMPAT" "$MOBILE_DEVICE" "$USBMUXD" \
+    for file in "$INSTALLER" "$INSTALLER_IPADOS15_AUTH" \
+                "$COMPAT" "$COMPAT_IPADOS15" \
+                "$COMPAT_IPADOS16" "$MOBILE_DEVICE" \
+                "$MOBILE_DEVICE_IPADOS15" "$MOBILE_DEVICE_IPADOS15_AUTH" \
+                "$MOBILE_DEVICE_IPADOS16" \
+                "$USBMUXD" \
                 "$CRYPTO" "$SSL" "$TRUST_EVALUATION" \
                 "$COREUTILS_COMPAT" \
                 "$CRASHREPORTER_COMPAT" \

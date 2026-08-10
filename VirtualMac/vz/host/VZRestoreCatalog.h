@@ -7,6 +7,10 @@ NS_ASSUME_NONNULL_BEGIN
                                      NSError *_Nullable error))completion;
 + (nullable NSDictionary *)recommendedImageFromImages:(NSArray<NSDictionary *> *)images;
 + (NSArray<NSString *> *)orderedGroupsForImages:(NSArray<NSDictionary *> *)images;
++ (BOOL)isExperimentalImage:(NSDictionary *)image;
++ (BOOL)isUnsupportedImage:(NSDictionary *)image;
++ (NSString *)macOSNameForImage:(NSDictionary *)image;
++ (NSString *)artworkNameForImage:(NSDictionary *)image;
 @end
 
 NS_ASSUME_NONNULL_END

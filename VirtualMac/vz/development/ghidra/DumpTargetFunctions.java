@@ -56,11 +56,18 @@ public class DumpTargetFunctions extends GhidraScript {
         targets.put("pvg_map_memory_callback", 0x10011e8c0L);
         targets.put("pvg_read_memory_callback", 0x10011eac8L);
         targets.put("pvg_destroy_task_callback", 0x10011eba0L);
+        targets.put("vm_event_send", 0x100005f14L);
+        targets.put("vm_reset_enqueue", 0x1000d5e70L);
+        targets.put("vm_reset_dispatch", 0x1000d5ed8L);
+        targets.put("vm_reset", 0x1000d5f74L);
         return targets;
     }
 
     private Map<String, Long> pvgTargets() {
         Map<String, Long> targets = new LinkedHashMap<>();
+        targets.put("PGNewDeviceWithDescriptor", 0x1000137a4L);
+        targets.put("PGDevice_initWithDescriptor", 0x10000e94cL);
+        targets.put("PGDevice_setupBlitPipelines", 0x10000ecd4L);
         // The first address is the helper which raises "Invalid task".  The
         // second is the recovered NSException catch site observed in the VMM.
         targets.put("invalid_task_throw", 0x100010a00L);

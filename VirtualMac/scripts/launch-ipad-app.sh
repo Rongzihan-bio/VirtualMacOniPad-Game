@@ -9,7 +9,7 @@ ATTEMPTS="${1:-5}"
 START_WAIT="${VZ_IPAD_START_WAIT:-12}"
 INPUT_SELF_TEST="${VZ_IPAD_INPUT_SELF_TEST:-0}"
 DISMISS_RESTART_ALERT="${VZ_IPAD_DISMISS_RESTART_ALERT:-0}"
-REMOTE_APP="/var/jb/Applications/VirtualMac.app"
+BUNDLE="${VZ_IPAD_VM_BUNDLE:-/var/mobile/Media/VirtualMac/VM_Sequoia.bundle}"
 
 [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]] ||
     die "attempt count must be a positive integer"
@@ -28,7 +28,17 @@ for ((attempt = 1; attempt <= ATTEMPTS; attempt++)); do
     VZ_STOP_HOST=1 "$SCRIPT_DIR/development/stop-ipad-vm.sh"
     ipad_ssh "
 set -eu
-test -x '$REMOTE_APP/VirtualMac'
+app=/var/jb/Applications/VirtualMac.app
+uiopen=/var/jb/usr/bin/uiopen
+if test ! -x \"\$app/VirtualMac\"; then
+  app=/Applications/VirtualMac.app
+  uiopen=/usr/bin/uiopen
+fi
+test -x \"\$app/VirtualMac\"
+test -x \"\$uiopen\"
+test -d '$BUNDLE'
+printf '%s\n' '$BUNDLE' >/tmp/vz-autoboot-path
+chown mobile:mobile /tmp/vz-autoboot-path
 rm -f /tmp/VirtualMac.log /tmp/vzxpchook.log /tmp/vmmhook.log \
   /tmp/vmm.stderr.log /tmp/vmm_ep.txt /tmp/pvg-trace.log
 touch /tmp/VirtualMac.log /tmp/vzxpchook.log /tmp/vmmhook.log \
@@ -47,7 +57,7 @@ if test '$DISMISS_RESTART_ALERT' = 1; then
 else
   rm -f /tmp/vz-dismiss-restart-alert
 fi
-/var/jb/usr/bin/uiopen --bundleid com.mac.virtual
+\"\$uiopen\" --bundleid com.mac.virtual
 "
     sleep "$START_WAIT"
     result="$(ipad_ssh "

@@ -41,6 +41,11 @@ static int is_direct_child(const char *value, const char *parent)
         strchr(value + parent_length + 1, '/') == NULL;
 }
 
+static const char *bootstrap_tool(const char *rootless, const char *rootful)
+{
+    return access(rootless, X_OK) == 0 ? rootless : rootful;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 4 && strcmp(argv[1], "--cancel-install") == 0) {
@@ -62,7 +67,8 @@ int main(int argc, char **argv)
         if (process > 1)
             kill(-process, SIGTERM);
         usleep(500000);
-        execl("/var/jb/bin/rm", "rm", "-rf", "--", attempt,
+        execl(bootstrap_tool("/var/jb/bin/rm", "/bin/rm"),
+              "rm", "-rf", "--", attempt,
               (char *)NULL);
         return 1;
     }
@@ -86,7 +92,8 @@ int main(int argc, char **argv)
                     strerror(errno));
             return 1;
         }
-        execl("/var/jb/bin/rm", "rm", "-rf", "--", path,
+        execl(bootstrap_tool("/var/jb/bin/rm", "/bin/rm"),
+              "rm", "-rf", "--", path,
               (char *)NULL);
         fprintf(stderr, "install-launcher: cleanup exec failed: %s\n",
                 strerror(errno));
@@ -152,7 +159,7 @@ int main(int argc, char **argv)
                 strerror(errno));
         return 1;
     }
-    execl("/var/jb/bin/sh", "sh",
+    execl(bootstrap_tool("/var/jb/bin/sh", "/bin/sh"), "sh",
           "/var/root/VirtualMac/install/start-install.sh", argv[1],
           argv[2], argv[3], argv[4], argv[5], argv[6], argv[7],
           (char *)NULL);

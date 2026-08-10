@@ -8,11 +8,20 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 MACOS_NAME="UniversalMac_13.2.1_22D68_Restore.ipsw"
+BIG_SUR_NAME="UniversalMac_11.6_20G165_Restore.ipsw"
 IPADOS_NAME="iPad14,3,iPad14,4,iPad14,5,iPad14,6_16.3.1_20D67_Restore.ipsw"
+IPADOS14_NAME="iPad_Spring_2021_14.5_18E199_Restore.ipsw"
+IPADOS15_NAME="iPad_Pro_Spring_2021_15.0_19A346_Restore.ipsw"
 MACOS_URL="https://updates.cdn-apple.com/2023WinterFCS/fullrestores/032-48346/EFF99C1E-C408-4E7A-A448-12E1468AF06C/$MACOS_NAME"
+BIG_SUR_URL="https://updates.cdn-apple.com/2021FallFCS/fullrestores/071-97388/C361BF5E-0E01-47E5-8D30-5990BC3C9E29/$BIG_SUR_NAME"
 IPADOS_URL="https://updates.cdn-apple.com/2023WinterFCS/fullrestores/032-50028/ACF197BE-D22C-49EC-94C5-C1B58D7708AC/$IPADOS_NAME"
+IPADOS14_URL="https://updates.cdn-apple.com/2021SpringFCS/fullrestores/071-17692/4BB409F6-D860-416B-A0EF-BDC941C74F3E/$IPADOS14_NAME"
+IPADOS15_URL="https://updates.cdn-apple.com/2021FallFCS/fullrestores/002-02897/6B63FC96-3F0A-4DC4-B065-BFA88F2EF7AF/$IPADOS15_NAME"
 MACOS_SHA256="0310220c8a540dc53a92ec9f9e0894db627d8f97fd18c3275eb96865a6e5fe04"
+BIG_SUR_SHA256="9bc6b9e0d42bb892ee139a8d88fc5e8ce2931d57743d8e3ed1ce45aa5da8add6"
 IPADOS_SHA256="a4d922f3fdc960fd5714b5d46c13b928c1249e072cb93301bd1f7bb66ec29cc0"
+IPADOS14_SHA256="11023b65bc2f08eabbb141fa494873d41a1d4a43fca09904480d8e55e8065dc4"
+IPADOS15_SHA256="f678d0c061c1dd8a3afdf4a3aee12123b95c47607a2fe5a8accc4b608ccf7344"
 DEVICE_SUPPORT_NAME="DeviceSupport_macOS_27_beta.dmg"
 DEVICE_SUPPORT_URL="https://github.com/nfzerox/DeviceSupportMirror/releases/download/1.0/$DEVICE_SUPPORT_NAME"
 DEVICE_SUPPORT_SHA256="d02e14429a02a78d8bf9d84df8ae55f5a03f2a00dbf58767f451b68eda417ca1"
@@ -20,7 +29,10 @@ DEVICE_SUPPORT_SHA256="d02e14429a02a78d8bf9d84df8ae55f5a03f2a00dbf58767f451b68ed
 BUILD_ROOT="${VZ_BUILD_ROOT:-$REPO_ROOT/build}"
 DOWNLOAD_ROOT="${VZ_DOWNLOAD_ROOT:-$BUILD_ROOT/downloads}"
 MACOS_IPSW="${VZ_MACOS_IPSW:-}"
+BIG_SUR_IPSW="${VZ_BIG_SUR_IPSW:-}"
 IPADOS_IPSW="${VZ_IPADOS_IPSW:-}"
+IPADOS14_IPSW="${VZ_IPADOS14_IPSW:-}"
+IPADOS15_IPSW="${VZ_IPADOS15_IPSW:-}"
 DEVICE_SUPPORT_DMG="${VZ_DEVICE_SUPPORT_DMG:-}"
 XCODE_PATH="${DEVELOPER_DIR:-${VZ_XCODE_PATH:-}}"
 IPAD_UDID="${VZ_IPAD_UDID:-}"
@@ -40,8 +52,11 @@ Build options:
   --build-dir PATH       Generated files (default: ./build)
   --download-dir PATH    Downloaded restore images (default: BUILD/downloads)
   --macos-ipsw PATH      Reuse macOS 13.2.1 (22D68) restore image
-  --full-ipados-audit    Extract 16.3.1 and 16.1 iPadOS caches and audit ABIs
+  --big-sur-ipsw PATH    Reuse macOS 11.6 (20G165) restore image for iPadOS 14
+  --ipados14-ipsw PATH   Reuse iPadOS 14.5 (18E199) matching helper image
+  --full-ipados-audit    Audit the built payload against iPadOS 14, 15, and 16
   --ipados-ipsw PATH     Reuse 16.3.1 image for --full-ipados-audit
+  --ipados15-ipsw PATH   Reuse 15.0 image for --full-ipados-audit
   --device-support-dmg P Reuse the macOS 27 DeviceSupport disk image
   --xcode PATH           Xcode.app or its Contents/Developer directory
   --skip-dependencies    Do not install Homebrew or Brewfile dependencies
@@ -69,6 +84,9 @@ while (($#)); do
         --build-dir) BUILD_ROOT="${2:?missing path}"; shift 2 ;;
         --download-dir) DOWNLOAD_ROOT="${2:?missing path}"; shift 2 ;;
         --macos-ipsw) MACOS_IPSW="${2:?missing path}"; shift 2 ;;
+        --big-sur-ipsw) BIG_SUR_IPSW="${2:?missing path}"; shift 2 ;;
+        --ipados14-ipsw) IPADOS14_IPSW="${2:?missing path}"; shift 2 ;;
+        --ipados15-ipsw) IPADOS15_IPSW="${2:?missing path}"; FULL_IPADOS_AUDIT=1; shift 2 ;;
         --ipados-ipsw) IPADOS_IPSW="${2:?missing path}"; FULL_IPADOS_AUDIT=1; shift 2 ;;
         --device-support-dmg) DEVICE_SUPPORT_DMG="${2:?missing path}"; shift 2 ;;
         --full-ipados-audit) FULL_IPADOS_AUDIT=1; shift ;;
@@ -221,24 +239,39 @@ command -v shasum >/dev/null 2>&1 || die "missing command: shasum"
 select_xcode
 
 MACOS_IPSW="$(obtain_verified_file macOS "$MACOS_IPSW" "$MACOS_NAME" "$MACOS_URL" "$MACOS_SHA256")"
+BIG_SUR_IPSW="$(obtain_verified_file 'macOS Big Sur' "$BIG_SUR_IPSW" \
+    "$BIG_SUR_NAME" "$BIG_SUR_URL" "$BIG_SUR_SHA256")"
+IPADOS14_IPSW="$(obtain_verified_file 'iPadOS 14.5' "$IPADOS14_IPSW" \
+    "$IPADOS14_NAME" "$IPADOS14_URL" "$IPADOS14_SHA256")"
 DEVICE_SUPPORT_DMG="$(obtain_verified_file DeviceSupport "$DEVICE_SUPPORT_DMG" \
     "$DEVICE_SUPPORT_NAME" "$DEVICE_SUPPORT_URL" "$DEVICE_SUPPORT_SHA256")"
 if [[ "$FULL_IPADOS_AUDIT" == 1 ]]; then
+    IPADOS15_IPSW="$(obtain_verified_file 'iPadOS 15.0' "$IPADOS15_IPSW" \
+        "$IPADOS15_NAME" "$IPADOS15_URL" "$IPADOS15_SHA256")"
     IPADOS_IPSW="$(obtain_verified_file iPadOS "$IPADOS_IPSW" "$IPADOS_NAME" "$IPADOS_URL" "$IPADOS_SHA256")"
 fi
 
 export VZ_BUILD_ROOT="$BUILD_ROOT"
 export VZ_MACOS_IPSW="$MACOS_IPSW"
+export VZ_BIG_SUR_IPSW="$BIG_SUR_IPSW"
+export VZ_IPADOS14_IPSW="$IPADOS14_IPSW"
+export VZ_IPADOS15_IPSW="$IPADOS15_IPSW"
 export VZ_IPADOS_IPSW="$IPADOS_IPSW"
 export VZ_DEVICE_SUPPORT_DMG="$DEVICE_SUPPORT_DMG"
 export VZ_INCLUDE_IPADOS_AUDIT="$FULL_IPADOS_AUDIT"
 export VZ_REQUIRE_IPADOS_COMPAT_DSC="$FULL_IPADOS_AUDIT"
+if [[ "$FULL_IPADOS_AUDIT" == 1 ]]; then
+    export VZ_AUDIT_HOST_VERSIONS="14.5 15.0 16.3.1"
+fi
 export VZ_IGNORE_ENV_FILE=1
 
 "$REPO_ROOT/scripts/bootstrap.sh"
 "$REPO_ROOT/scripts/prepare-inputs.sh"
 if [[ "$FULL_IPADOS_AUDIT" == 1 ]]; then
-    "$REPO_ROOT/scripts/fetch-ipados-compat-cache.sh"
+    VZ_IPADOS_COMPAT_IPSW="$IPADOS14_IPSW" \
+        "$REPO_ROOT/scripts/fetch-ipados-compat-cache.sh" --version 14.5
+    VZ_IPADOS_COMPAT_IPSW="$IPADOS15_IPSW" \
+        "$REPO_ROOT/scripts/fetch-ipados-compat-cache.sh" --version 15.0
 fi
 "$REPO_ROOT/scripts/build-frameworks.sh"
 "$REPO_ROOT/scripts/build-ipad-deb.sh"

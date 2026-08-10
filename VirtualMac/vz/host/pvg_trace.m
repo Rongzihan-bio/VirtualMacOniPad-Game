@@ -10,6 +10,7 @@
 #import <stdint.h>
 #import <stdlib.h>
 #import <string.h>
+#import <sys/sysctl.h>
 #import <sys/mman.h>
 #import <time.h>
 #import <unistd.h>
@@ -31,7 +32,6 @@ static dispatch_source_t gMetalHealthTimer;
 static uint64_t gMetalCommandBufferCommits;
 static uint64_t gMetalCommandBufferCompletions;
 static uint64_t gMetalCommandBufferErrors;
-static uint64_t gPVGCaughtExceptions;
 static id (*gOriginalGetTaskID)(id, SEL, uint32_t);
 static void (*gOriginalCreateTaskID)(
     id, SEL, uint32_t, uint32_t, uint64_t, BOOL);
@@ -41,6 +41,7 @@ static uint64_t gTaskLookupMissCount;
 static uint64_t gTaskMapCount;
 static uint64_t gTaskMapHighWater;
 static uint64_t gManagedTextureTranslations;
+static BOOL gDebugLogging;
 static pthread_mutex_t gLargeTaskLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t gTaskCreateLock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t gLargeTaskIDs[8];
@@ -50,6 +51,32 @@ static uint64_t gCreatingTaskReservationGB;
 static id (*gOriginalGetBufferForReferenceNonNull)(id, SEL, uint32_t);
 
 extern id PGNewDeviceWithDescriptor(id descriptor);
+static void InstallMetalLibraryFallback(id<MTLDevice> device);
+
+static NSInteger HostIPadOSMajorVersion(void) {
+    static NSInteger majorVersion;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        majorVersion = 16;
+        char version[32] = {0};
+        size_t size = sizeof(version);
+        if (sysctlbyname("kern.osproductversion", version, &size, NULL, 0) == 0)
+            majorVersion = strtol(version, NULL, 10);
+    });
+    return majorVersion;
+}
+
+static BOOL HostPredatesIPadOS16(void) {
+    return HostIPadOSMajorVersion() < 16;
+}
+
+static NSString *HostMetalLibraryResourceName(void) {
+    if (HostIPadOSMajorVersion() == 14)
+        return @"default.ipados14";
+    if (HostPredatesIPadOS16())
+        return @"default.ipados15";
+    return @"default";
+}
 
 typedef void *(^PVGCreateTaskBlock)(uint64_t length, void **baseAddress);
 typedef BOOL (^PVGMapMemoryBlock)(void *task, uint32_t segmentCount,
@@ -64,6 +91,8 @@ static const char *TracePath(void) {
 static void Trace(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 
 static void Trace(NSString *format, ...) {
+    if (!gDebugLogging)
+        return;
     va_list args;
     va_start(args, format);
     NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
@@ -79,43 +108,6 @@ static void Trace(NSString *format, ...) {
         close(fd);
     }
 }
-
-extern void *objc_begin_catch(void *exceptionStorage);
-
-static void *TraceObjCBeginCatch(void *exceptionStorage) {
-    void *result = objc_begin_catch(exceptionStorage);
-    Dl_info caller = {0};
-    void *returnAddress = __builtin_return_address(0);
-    if (result != NULL &&
-        dladdr(returnAddress, &caller) != 0 &&
-        caller.dli_fname != NULL &&
-        strstr(caller.dli_fname, "ParavirtualizedGraphics") != NULL) {
-        uint64_t count = __atomic_add_fetch(
-            &gPVGCaughtExceptions, 1, __ATOMIC_RELAXED);
-        id exception = (id)result;
-        NSString *name = [exception isKindOfClass:[NSException class]]
-            ? [(NSException *)exception name] : nil;
-        NSString *reason = [exception isKindOfClass:[NSException class]]
-            ? [(NSException *)exception reason] : nil;
-        Trace(@"PVG_EXCEPTION\tcount=%llu\tclass=%s\tname=%@\treason=%@"
-              "\tcaller=%p\toffset=0x%llx",
-              (unsigned long long)count,
-              object_getClassName(exception), name, reason,
-              returnAddress,
-              (unsigned long long)((uintptr_t)returnAddress -
-                                   (uintptr_t)caller.dli_fbase));
-    }
-    return result;
-}
-
-__attribute__((used)) static struct {
-    const void *replacement;
-    const void *replacee;
-} gInterposeObjCBeginCatch
-    __attribute__((section("__DATA,__interpose"))) = {
-        (const void *)&TraceObjCBeginCatch,
-        (const void *)&objc_begin_catch,
-    };
 
 static void TraceMethod(Class cls, SEL selector) {
     Method method = class_getInstanceMethod(cls, selector);
@@ -232,11 +224,12 @@ static void TraceCreateTaskID(id self, SEL selector, uint32_t taskID,
                               uint32_t taskRoot, uint64_t length,
                               BOOL restoring) {
     BOOL largeTask = ReserveLargeTaskSlot(taskID, length);
-    Trace(@"TASK_CREATE\tbegin\tid=%u\troot=%u\tlength=%llu"
-          "\trestoring=%d\tlarge=%d\ttasks=%@",
-          taskID, taskRoot, (unsigned long long)length, restoring,
-          largeTask,
-          TaskDictionary(self));
+    if (gDebugLogging) {
+        Trace(@"TASK_CREATE\tbegin\tid=%u\troot=%u\tlength=%llu"
+              "\trestoring=%d\tlarge=%d\ttasks=%@",
+              taskID, taskRoot, (unsigned long long)length, restoring,
+              largeTask, TaskDictionary(self));
+    }
     // The extracted framework invokes createTask on another thread while the
     // createTaskWithID: call is in flight. Serialize creations and publish the
     // selected tier process-wide so that callback sees it.
@@ -254,18 +247,22 @@ static void TraceCreateTaskID(id self, SEL selector, uint32_t taskID,
     id createdTask = [TaskDictionary(self) objectForKey:@(taskID)];
     if (largeTask && createdTask == nil)
         ReleaseLargeTaskSlot(taskID);
-    Trace(@"TASK_CREATE\tend\tid=%u\ttasks=%@",
-          taskID, TaskDictionary(self));
+    if (gDebugLogging)
+        Trace(@"TASK_CREATE\tend\tid=%u\ttasks=%@",
+              taskID, TaskDictionary(self));
 }
 
 static BOOL TraceDeleteTaskID(id self, SEL selector, uint32_t taskID) {
-    Trace(@"TASK_DELETE\tbegin\tid=%u\ttasks=%@",
-          taskID, TaskDictionary(self));
+    if (gDebugLogging)
+        Trace(@"TASK_DELETE\tbegin\tid=%u\ttasks=%@",
+              taskID, TaskDictionary(self));
     BOOL result = gOriginalDeleteTaskID(self, selector, taskID);
     if (result || [TaskDictionary(self) objectForKey:@(taskID)] == nil)
         ReleaseLargeTaskSlot(taskID);
-    Trace(@"TASK_DELETE\tend\tid=%u\tresult=%d\ttasks=%@",
-          taskID, result, TaskDictionary(self));
+    if (gDebugLogging) {
+        Trace(@"TASK_DELETE\tend\tid=%u\tresult=%d\ttasks=%@",
+              taskID, result, TaskDictionary(self));
+    }
     return result;
 }
 
@@ -339,11 +336,13 @@ static BOOL ValidateTextureDescriptorForIOS(id self, SEL selector,
     if (storageMode == (MTLStorageMode)1) {
         ((void (*)(id, SEL, MTLStorageMode))objc_msgSend)(
             self, @selector(setStorageMode:), MTLStorageModeShared);
-        uint64_t count = __atomic_add_fetch(
-            &gManagedTextureTranslations, 1, __ATOMIC_RELAXED);
-        if (count <= 12 || count % 100 == 0) {
-            Trace(@"METAL_TEXTURE\tmanaged-to-shared=%llu\tdescriptor=%@",
-                  (unsigned long long)count, self);
+        if (gDebugLogging) {
+            uint64_t count = __atomic_add_fetch(
+                &gManagedTextureTranslations, 1, __ATOMIC_RELAXED);
+            if (count <= 12 || count % 100 == 0) {
+                Trace(@"METAL_TEXTURE\tmanaged-to-shared=%llu\tdescriptor=%@",
+                      (unsigned long long)count, self);
+            }
         }
     }
     return gOriginalTextureValidate(self, selector, device);
@@ -479,6 +478,18 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
           "\tdevice=%@\tusingIOSurfaceMapper=%@\tmmioLength=%@"
           "\tdisplayPortCount=%@",
           descriptor, device, mapper, mmioLength, displayPortCount);
+    static bool installedIPadOS15MetalFallback;
+    if (device != nil && HostIPadOSMajorVersion() == 15 &&
+        !__atomic_exchange_n(&installedIPadOS15MetalFallback, true,
+                             __ATOMIC_ACQ_REL)) {
+        // On iPadOS 15 the VMM loads this interposer before
+        // ParavirtualizedGraphics, so its constructor cannot patch the
+        // concrete Metal device class yet. Do it at the first factory call,
+        // after both the framework and MTLDevice exist but before _PGDevice
+        // compiles its required blit pipelines. iPadOS 14 and 16 retain their
+        // established, independent paths.
+        InstallMetalLibraryFallback(device);
+    }
     NSDictionary *blocks = @{
         @"createTask": createTask ?: [NSNull null],
         @"destroyTask": destroyTask ?: [NSNull null],
@@ -562,8 +573,6 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
             uint64_t reserved = task ? ((const uint64_t *)task)[1] : 0;
             uint64_t end = UINT64_MAX - offset < mappedLength
                 ? UINT64_MAX : offset + mappedLength;
-            uint64_t count = __atomic_add_fetch(
-                &gTaskMapCount, 1, __ATOMIC_RELAXED);
             // Never let a fixed remap escape the sparse reservation. The VM
             // allocator may happen to leave a gap after it, which made the
             // old 1 GiB limit appear to work until a graphics-heavy UI such
@@ -573,34 +582,38 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
             BOOL withinReservation = task && end <= reserved;
             BOOL result = withinReservation && originalMap(
                 task, segmentCount, offset, readonly, ranges);
-            uint64_t previousHighWater = __atomic_load_n(
-                &gTaskMapHighWater, __ATOMIC_RELAXED);
-            BOOL raisedHighWater = NO;
-            while (end > previousHighWater) {
-                if (__atomic_compare_exchange_n(
-                        &gTaskMapHighWater, &previousHighWater, end, NO,
-                        __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-                    raisedHighWater = YES;
-                    break;
+            if (gDebugLogging) {
+                uint64_t count = __atomic_add_fetch(
+                    &gTaskMapCount, 1, __ATOMIC_RELAXED);
+                uint64_t previousHighWater = __atomic_load_n(
+                    &gTaskMapHighWater, __ATOMIC_RELAXED);
+                BOOL raisedHighWater = NO;
+                while (end > previousHighWater) {
+                    if (__atomic_compare_exchange_n(
+                            &gTaskMapHighWater, &previousHighWater, end, NO,
+                            __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                        raisedHighWater = YES;
+                        break;
+                    }
                 }
-            }
-            BOOL crossedHighWaterBucket = raisedHighWater &&
-                ((end >> 24) != (previousHighWater >> 24));
-            if (count <= 16 || !result || !withinReservation ||
-                crossedHighWaterBucket) {
-                Trace(@"TASK_MAP\tcount=%llu\ttask=%p\tbase=0x%llx"
-                      "\treserved=%llu\toffset=%llu\tlength=%llu"
-                      "\tend=%llu\twithin=%d\thighwater=%d\tsegments=%u"
-                      "\treadonly=%d\tresult=%d",
-                      (unsigned long long)count, task,
-                      (unsigned long long)base,
-                      (unsigned long long)reserved,
-                      (unsigned long long)offset,
-                      (unsigned long long)mappedLength,
-                      (unsigned long long)end,
-                      withinReservation,
-                      crossedHighWaterBucket,
-                      segmentCount, readonly, result);
+                BOOL crossedHighWaterBucket = raisedHighWater &&
+                    ((end >> 24) != (previousHighWater >> 24));
+                if (count <= 16 || !result || !withinReservation ||
+                    crossedHighWaterBucket) {
+                    Trace(@"TASK_MAP\tcount=%llu\ttask=%p\tbase=0x%llx"
+                          "\treserved=%llu\toffset=%llu\tlength=%llu"
+                          "\tend=%llu\twithin=%d\thighwater=%d\tsegments=%u"
+                          "\treadonly=%d\tresult=%d",
+                          (unsigned long long)count, task,
+                          (unsigned long long)base,
+                          (unsigned long long)reserved,
+                          (unsigned long long)offset,
+                          (unsigned long long)mappedLength,
+                          (unsigned long long)end,
+                          withinReservation,
+                          crossedHighWaterBucket,
+                          segmentCount, readonly, result);
+                }
             }
             return result;
         };
@@ -608,6 +621,16 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
     }
     id result = PGNewDeviceWithDescriptor(descriptor);
     Trace(@"CALL\tPGNewDeviceWithDescriptor\tresult=%@", result);
+    if (result != nil && HostPredatesIPadOS16()) {
+        // The iPadOS 15 Objective-C runtime cannot safely round-trip Ventura
+        // IMPs through method_setImplementation, so its per-IOSurface settle
+        // hook is intentionally disabled.  Settle once at the enclosing PVG
+        // factory boundary instead.  Without this, the guest's first
+        // WindowServer reaches __WSSystemCanCompositeWithMetal before PVG's
+        // asynchronous Metal setup is ready, aborts, and only its retry works.
+        Trace(@"CALL\tPGNewDeviceWithDescriptor\tpre-iPadOS16-settle-usec=1000000");
+        usleep(1000000);
+    }
     return result;
 }
 
@@ -641,11 +664,13 @@ static id TraceNewDefaultLibraryWithBundle(id self,
                                      error:&fallbackError];
     }
 
+    NSString *resourceName = HostMetalLibraryResourceName();
     NSURL *url = [[NSBundle mainBundle]
-        URLForResource:@"default"
+        URLForResource:resourceName
         withExtension:@"metallib"];
     if (url == nil) {
-        url = [bundle URLForResource:@"default" withExtension:@"metallib"];
+        url = [bundle URLForResource:resourceName
+                       withExtension:@"metallib"];
     }
     if (library == nil && url != nil) {
         fallbackError = nil;
@@ -745,6 +770,26 @@ static void InstallMetalLibraryFallback(id<MTLDevice> device) {
           TraceNewDefaultLibraryWithBundle);
 }
 
+static void InstallRequiredIPadOS14MetalLibraryFallback(
+    Class pvgDeviceClass) {
+    NSBundle *bundle = [NSBundle bundleForClass:pvgDeviceClass];
+    NSURL *url = [bundle URLForResource:@"default.ipados14"
+                          withExtension:@"metallib"];
+    NSData *metallib = [NSData dataWithContentsOfURL:url];
+    if (metallib != nil) {
+        void *bytes = malloc(metallib.length);
+        if (bytes != NULL) {
+            memcpy(bytes, metallib.bytes, metallib.length);
+            gSerializedMetallib = dispatch_data_create(
+                bytes, metallib.length, NULL,
+                DISPATCH_DATA_DESTRUCTOR_FREE);
+        }
+    }
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device != nil && gSerializedMetallib != nil)
+        InstallMetalLibraryFallback(device);
+}
+
 static void InstallBoolHook(Class cls,
                             SEL selector,
                             BOOL (**original)(id, SEL),
@@ -760,7 +805,9 @@ static void InstallBoolHook(Class cls,
 
 static void ProbeMetalLibrary(Class pvgDeviceClass) {
     NSBundle *bundle = [NSBundle bundleForClass:pvgDeviceClass];
-    NSURL *url = [bundle URLForResource:@"default" withExtension:@"metallib"];
+    NSString *resourceName = HostMetalLibraryResourceName();
+    NSURL *url = [bundle URLForResource:resourceName
+                          withExtension:@"metallib"];
     Trace(@"BUNDLE\tpath=%@\tmetallib=%@", bundle.bundlePath, url.path);
 
     NSData *serializedMetallib = [NSData dataWithContentsOfURL:url];
@@ -783,10 +830,18 @@ static void ProbeMetalLibrary(Class pvgDeviceClass) {
     if (device == nil) {
         return;
     }
-    InstallCommandBufferTrace(device);
-    if (getenv("PVG_METALLIB_FALLBACK") != NULL) {
+    if (gDebugLogging)
+        InstallCommandBufferTrace(device);
+    if (getenv("PVG_METALLIB_FALLBACK") != NULL ||
+        HostIPadOSMajorVersion() == 14) {
         InstallMetalLibraryFallback(device);
     }
+
+    // Loading the compatibility metallib is functional. Enumerating every
+    // function and compiling diagnostic pipelines is not, and is too costly
+    // for a normal VM boot.
+    if (!gDebugLogging)
+        return;
 
     NSError *error = nil;
     id<MTLLibrary> library = [device newDefaultLibraryWithBundle:bundle error:&error];
@@ -821,11 +876,19 @@ static void ProbeMetalLibrary(Class pvgDeviceClass) {
 __attribute__((constructor))
 static void InstallPVGTrace(void) {
     @autoreleasepool {
-        if (getenv("PVG_TRACE") == NULL) {
+        const char *debugValue = getenv("VZ_DEBUG_LOGGING");
+        gDebugLogging = debugValue && debugValue[0] &&
+            strcmp(debugValue, "0") != 0;
+        BOOL tracing = getenv("PVG_TRACE") != NULL;
+        BOOL requiresIPadOS14Fallback =
+            HostIPadOSMajorVersion() == 14;
+        if (!tracing && !requiresIPadOS14Fallback) {
             return;
         }
-        unlink(TracePath());
-        Trace(@"TRACE\tloaded\tpid=%d", getpid());
+        if (tracing && gDebugLogging) {
+            unlink(TracePath());
+            Trace(@"TRACE\tloaded\tpid=%d", getpid());
+        }
 
         void *factory = dlsym(RTLD_DEFAULT, "PGNewDeviceWithDescriptor");
         Dl_info factoryInfo = {0};
@@ -843,6 +906,10 @@ static void InstallPVGTrace(void) {
         if (cls == Nil) {
             return;
         }
+        if (requiresIPadOS14Fallback && !tracing) {
+            InstallRequiredIPadOS14MetalLibraryFallback(cls);
+            return;
+        }
 
         SEL initSelector = NSSelectorFromString(@"initWithDescriptor:");
         SEL blitSelector = NSSelectorFromString(@"setupBlitPipelines");
@@ -851,14 +918,16 @@ static void InstallPVGTrace(void) {
         SEL createTaskSelector = NSSelectorFromString(
             @"createTaskID:taskRoot:length:restoring:");
         SEL deleteTaskSelector = NSSelectorFromString(@"deleteTaskID:");
-        TraceMethod(cls, initSelector);
-        TraceMethod(cls, blitSelector);
-        TraceMethod(cls, reportingSelector);
-        TraceMethod(cls, getTaskSelector);
-        TraceMethod(cls, createTaskSelector);
-        TraceMethod(cls, deleteTaskSelector);
+        if (gDebugLogging) {
+            TraceMethod(cls, initSelector);
+            TraceMethod(cls, blitSelector);
+            TraceMethod(cls, reportingSelector);
+            TraceMethod(cls, getTaskSelector);
+            TraceMethod(cls, createTaskSelector);
+            TraceMethod(cls, deleteTaskSelector);
+        }
         const char *pause = getenv("PVG_TRACE_PAUSE_SECONDS");
-        if (pause != NULL) {
+        if (gDebugLogging && pause != NULL) {
             unsigned int seconds = (unsigned int)strtoul(pause, NULL, 10);
             Trace(@"TRACE\tpausing=%u", seconds);
             sleep(seconds);
@@ -866,9 +935,17 @@ static void InstallPVGTrace(void) {
         }
         ProbeMetalLibrary(cls);
         InstallTextureDescriptorCompatibility();
-        InstallMetalSerializerReferenceTrace();
+        if (gDebugLogging)
+            InstallMetalSerializerReferenceTrace();
 
-        if (getenv("PVG_TRACE_METHODS") != NULL) {
+        // The create/delete wrappers select and recycle the larger sparse
+        // reservations required by WindowServer. They are compatibility,
+        // not tracing, and must remain active when Debug Logging is off.
+        // Saved Ventura arm64e IMPs cannot safely round-trip through the
+        // older Objective-C runtimes, so iPadOS 14/15 retain their established
+        // factory-only compatibility path.
+        BOOL canInstallAuthenticatedMethods = !HostPredatesIPadOS16();
+        if (canInstallAuthenticatedMethods) {
             Method createTaskMethod = class_getInstanceMethod(
                 cls, createTaskSelector);
             if (createTaskMethod != NULL) {
@@ -886,6 +963,11 @@ static void InstallPVGTrace(void) {
                         deleteTaskMethod, (IMP)TraceDeleteTaskID);
                 Trace(@"HOOK\tdeleteTaskID:\tinstalled");
             }
+        }
+
+        BOOL traceMethods = gDebugLogging &&
+            getenv("PVG_TRACE_METHODS") != NULL;
+        if (traceMethods && canInstallAuthenticatedMethods) {
             Method getTaskMethod = class_getInstanceMethod(
                 cls, getTaskSelector);
             if (getTaskMethod != NULL) {
@@ -961,6 +1043,8 @@ static void InstallPVGTrace(void) {
                             reportingSelector,
                             &gOriginalSetupReporting,
                             (IMP)TraceSetupReporting);
+        } else if (traceMethods) {
+            Trace(@"HOOK\tmethod-tracing-skipped\thost-pre-iPadOS16");
         }
     }
 }

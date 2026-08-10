@@ -18,7 +18,7 @@ need_file "$VZ_REPO_ROOT/vz/host/pvg_trace.m"
 
 mkdir -p "$(dirname "$OUTPUT")"
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib -fblocks -Wl,-undefined,dynamic_lookup \
     -framework CoreFoundation -framework CoreServices \
     -framework Foundation -framework IOKit -framework Metal \

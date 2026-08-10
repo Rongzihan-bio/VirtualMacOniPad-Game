@@ -54,7 +54,8 @@ for spec in "${images[@]}"; do
     VZ_IPSW="$IPSW" VZ_WEAKEN="MetalSerializer,vmnet" \
         "$PYTHON" "$VZ_REPO_ROOT/vz/uncache.py" \
         "$DSC" "$image" "$raw" "$proto" compact
-    "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" "$proto" "$ios" 16.0
+    "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" "$proto" "$ios" \
+        "$VZ_IPADOS_MIN_VERSION"
     chmod 755 "$mac" "$ios"
 
     for output in "$mac" "$ios"; do
@@ -119,7 +120,8 @@ VZ_IPSW="$IPSW" \
     "$DSC" "$metal_serializer_image" "$metal_serializer_raw" \
     "$metal_serializer_proto" compact
 "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
-    "$metal_serializer_proto" "$metal_serializer_ios" 16.0
+    "$metal_serializer_proto" "$metal_serializer_ios" \
+    "$VZ_IPADOS_MIN_VERSION"
 chmod 755 "$metal_serializer_ios"
 uuid="$(dwarfdump --uuid "$metal_serializer_ios" | awk '{print $2}')"
 [[ "$uuid" == "$metal_serializer_uuid" ]] ||

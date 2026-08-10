@@ -10,6 +10,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, assign) float progress;
 @property(nonatomic, assign, getter=isIndeterminate) BOOL indeterminate;
 @property(nonatomic, assign) BOOL consoleHidden;
+@property(nonatomic, retain, nullable) UIImage *heroImage;
+@property(nonatomic, copy, nullable) NSString *heroTitleText;
+@property(nonatomic, copy, nullable) NSString *tipText;
 - (instancetype)initWithTitle:(NSString *)title;
 @end
 

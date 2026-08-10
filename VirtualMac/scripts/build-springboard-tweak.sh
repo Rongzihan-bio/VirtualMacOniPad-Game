@@ -16,7 +16,8 @@ need_file "$VZ_REPO_ROOT/vz/tweak/VZKeyboardPassthrough.m"
 need_file "$VZ_REPO_ROOT/vz/tweak/VZKeyboardPassthrough.plist"
 
 mkdir -p "$OUT"
-xcrun --sdk iphoneos clang -arch arm64e -miphoneos-version-min=16.0 \
+xcrun --sdk iphoneos clang -arch arm64e \
+    -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" \
     -isysroot "$SDK" -dynamiclib -fblocks -framework Foundation \
     -Wl,-undefined,dynamic_lookup \
     -install_name /var/jb/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib \

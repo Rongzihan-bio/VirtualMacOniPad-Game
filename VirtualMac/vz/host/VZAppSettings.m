@@ -13,6 +13,14 @@ NSString * const VZAutoDeleteRestoreImageKey = @"AutoDeleteRestoreImage";
 NSString * const VZHUDVisibilityKey = @"HUDVisibility";
 NSString * const VZHUDCornerKey = @"HUDCorner";
 NSString * const VZDisplayScalingKey = @"DisplayScaling";
+NSString * const VZTouchDoubleTapAccommodationKey = @"TouchDoubleTapAccommodation";
+NSString * const VZTouchTwoFingerScrollingKey = @"TouchTwoFingerScrolling";
+NSString * const VZTouchTwoFingerRightClickKey = @"TouchTwoFingerRightClick";
+NSString * const VZTouchLongPressRightClickKey = @"TouchLongPressRightClick";
+NSString * const VZIPadOS162KeyboardWorkaroundKey = @"IPadOS162KeyboardWorkaround";
+NSString * const VZNetworkResumeRecoveryKey = @"NetworkResumeRecovery";
+NSString * const VZHUDOpacityKey = @"HUDOpacity";
+NSString * const VZDebugLoggingKey = @"DebugLogging";
 
 static NSString * const VZSettingsPath = @"/var/mobile/Media/VirtualMac/Settings.plist";
 static CFStringRef const VZSettingsDarwinNotification =
@@ -55,6 +63,14 @@ static CFStringRef const VZSettingsDarwinNotification =
         VZHUDVisibilityKey: @"automatic",
         VZHUDCornerKey: @"top-right",
         VZDisplayScalingKey: @"fit",
+        VZTouchDoubleTapAccommodationKey: @YES,
+        VZTouchTwoFingerScrollingKey: @YES,
+        VZTouchTwoFingerRightClickKey: @YES,
+        VZTouchLongPressRightClickKey: @NO,
+        VZIPadOS162KeyboardWorkaroundKey: @NO,
+        VZNetworkResumeRecoveryKey: @NO,
+        VZHUDOpacityKey: @"0.55",
+        VZDebugLoggingKey: @NO,
     };
 }
 
@@ -99,6 +115,12 @@ static CFStringRef const VZSettingsDarwinNotification =
         self.values[key] = value;
     else
         [self.values removeObjectForKey:key];
+    [self save];
+}
+
+- (void)resetToDefaults
+{
+    [self.values removeAllObjects];
     [self save];
 }
 

@@ -10,30 +10,64 @@ OUT="$VZ_BUILD_ROOT/ipad-app"
 APP="$OUT/VirtualMac.app"
 BIN="$APP/VirtualMac"
 HOOK="$APP/VZHostCompat.dylib"
+DIAGNOSTICS="$OUT/virtualmac-diagnostics"
 ENTS="$VZ_REPO_ROOT/vz/host/VirtualMac.entitlements"
 
 need_command ldid
+need_command plutil
 need_command sips
 need_command xattr
 need_command xcrun
 need_file "$VZ_REPO_ROOT/vz/host/VirtualMac-Info.plist"
 need_file "$VZ_REPO_ROOT/vz/host/VirtualMacLaunchScreen.storyboard"
 need_file "$VZ_REPO_ROOT/assets/VirtualMac.png"
+need_file "$VZ_REPO_ROOT/assets/VirtualMacTemplate.png"
+for installer_icon in monterey ventura sonoma sequoia tahoe golden-gate ipsw; do
+    need_file "$VZ_REPO_ROOT/assets/installers/$installer_icon.png"
+done
 need_file "$VZ_REPO_ROOT/vz/host/NSViewShim.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZAppSettings.m"
+need_file "$VZ_REPO_ROOT/vz/host/VZDiagnostics.m"
+need_file "$VZ_REPO_ROOT/vz/host/VZFailureDetailsViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZRestoreCatalog.m"
+need_file "$VZ_REPO_ROOT/vz/host/VZSupport.m"
+need_file "$VZ_REPO_ROOT/scripts/validate-localizations.py"
 need_file "$VZ_REPO_ROOT/vz/host/VZNewVMViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZProgressViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZSettingsViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZVMLibraryViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VirtualMacApp.m"
+need_file "$VZ_REPO_ROOT/vz/host/virtualmac_diagnostics_main.m"
 need_file "$VZ_REPO_ROOT/vz/host/vzxpchook.m"
 need_file "$ENTS"
 
 rm -rf "$APP"
+python3 "$VZ_REPO_ROOT/scripts/validate-localizations.py"
 mkdir -p "$APP"
 cp "$VZ_REPO_ROOT/vz/host/VirtualMac-Info.plist" "$APP/Info.plist"
+sips -Z 320 "$VZ_REPO_ROOT/assets/VirtualMacTemplate.png" \
+    --out "$APP/VirtualMacTemplate.png" >/dev/null
+APP_VERSION="${VZ_RELEASE_VERSION:-1.1}"
+APP_BUILD="$(git -C "$VZ_REPO_ROOT" rev-list --count HEAD)"
+plutil -replace CFBundleShortVersionString -string "$APP_VERSION" \
+    "$APP/Info.plist"
+plutil -replace CFBundleVersion -string "$APP_BUILD" "$APP/Info.plist"
+plutil -replace MinimumOSVersion -string "$VZ_IPADOS_MIN_VERSION" \
+    "$APP/Info.plist"
 cp "$VZ_REPO_ROOT/vendor/VirtualBuddy/ipsws_v2.json" "$APP/ipsws_v2.json"
+if [[ -d "$VZ_REPO_ROOT/resources/Localizations" ]]; then
+    cp -R "$VZ_REPO_ROOT/resources/Localizations/"*.lproj "$APP/"
+fi
+if [[ -d "$VZ_REPO_ROOT/assets/developers" ]]; then
+    mkdir -p "$APP/Developers"
+    cp "$VZ_REPO_ROOT/assets/developers/"* "$APP/Developers/"
+fi
+if [[ -d "$VZ_REPO_ROOT/assets/installers" ]]; then
+    mkdir -p "$APP/Installers"
+    for installer_icon in monterey ventura sonoma sequoia tahoe golden-gate ipsw; do
+        cp "$VZ_REPO_ROOT/assets/installers/$installer_icon.png" "$APP/Installers/"
+    done
+fi
 if [[ -d "$VZ_REPO_ROOT/assets/wallpapers" ]]; then
     mkdir -p "$APP/Wallpapers"
     cp "$VZ_REPO_ROOT/assets/wallpapers"/*.jpg "$APP/Wallpapers/"
@@ -41,7 +75,8 @@ if [[ -d "$VZ_REPO_ROOT/assets/wallpapers" ]]; then
 fi
 xcrun ibtool --compile "$APP/VirtualMacLaunchScreen.storyboardc" \
     "$VZ_REPO_ROOT/vz/host/VirtualMacLaunchScreen.storyboard" \
-    --target-device ipad --minimum-deployment-target 16.0 >/dev/null
+    --target-device ipad \
+    --minimum-deployment-target "$VZ_IPADOS_MIN_VERSION" >/dev/null
 
 # Generate the exact legacy icon filenames consumed by iPadOS 16. The checked
 # in 1024-pixel RGB master has no alpha channel, as required for app icons.
@@ -57,14 +92,17 @@ for spec in \
 done
 
 xcrun --sdk iphoneos clang \
-    -arch arm64 -miphoneos-version-min=16.0 -isysroot "$SDK" -fblocks \
-    -framework AVFAudio -framework Foundation -framework GameController \
-    -framework UIKit \
+    -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" -fblocks \
+    -framework AVFAudio -framework CoreImage -framework Foundation \
+    -framework GameController -framework Metal -framework UIKit \
     -framework UniformTypeIdentifiers \
     -Wl,-export_dynamic -Wl,-undefined,dynamic_lookup \
     "$VZ_REPO_ROOT/vz/host/NSViewShim.m" \
     "$VZ_REPO_ROOT/vz/host/VZAppSettings.m" \
+    "$VZ_REPO_ROOT/vz/host/VZDiagnostics.m" \
+    "$VZ_REPO_ROOT/vz/host/VZFailureDetailsViewController.m" \
     "$VZ_REPO_ROOT/vz/host/VZRestoreCatalog.m" \
+    "$VZ_REPO_ROOT/vz/host/VZSupport.m" \
     "$VZ_REPO_ROOT/vz/host/VZNewVMViewController.m" \
     "$VZ_REPO_ROOT/vz/host/VZProgressViewController.m" \
     "$VZ_REPO_ROOT/vz/host/VZSettingsViewController.m" \
@@ -72,13 +110,21 @@ xcrun --sdk iphoneos clang \
     "$VZ_REPO_ROOT/vz/host/VirtualMacApp.m" \
     -o "$BIN"
 xcrun --sdk iphoneos clang \
-    -arch arm64e -miphoneos-version-min=16.0 -isysroot "$SDK" \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib -fblocks -Wl,-undefined,dynamic_lookup \
     -install_name "@executable_path/VZHostCompat.dylib" \
     "$VZ_REPO_ROOT/vz/host/vzxpchook.m" \
     -o "$HOOK"
+xcrun --sdk iphoneos clang \
+    -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" -fblocks \
+    -framework Foundation \
+    "$VZ_REPO_ROOT/vz/host/VZAppSettings.m" \
+    "$VZ_REPO_ROOT/vz/host/VZDiagnostics.m" \
+    "$VZ_REPO_ROOT/vz/host/virtualmac_diagnostics_main.m" \
+    -o "$DIAGNOSTICS"
 
 xattr -cr "$APP"
-ldid -S"$ENTS" "$BIN"
+ldid -Icom.mac.virtual -S"$ENTS" "$BIN"
 ldid -S"$ENTS" "$HOOK"
+ldid -S "$DIAGNOSTICS"
 echo "native iPad VM app built: $APP"

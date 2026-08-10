@@ -18,7 +18,16 @@ install_formula() {
     fi
 }
 
-install_formula ldid
+if ! command -v ldid >/dev/null 2>&1 ||
+   ! brew list --versions ldid-procursus >/dev/null 2>&1; then
+    # Saurik's older Homebrew formula emits a dual-CodeDirectory signature
+    # that Taurine/iPadOS 14 rejects for loaded arm64e dylibs. Use the same
+    # Procursus signer shipped on the jailbreak instead.
+    if brew list --versions ldid >/dev/null 2>&1; then
+        brew uninstall ldid
+    fi
+    brew install ldid-procursus
+fi
 install_formula libimobiledevice idevice_id
 install_formula go
 if ! command -v sshpass >/dev/null 2>&1; then

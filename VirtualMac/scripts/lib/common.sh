@@ -4,6 +4,21 @@ set -euo pipefail
 
 VZ_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VZ_BUILD_ROOT="${VZ_BUILD_ROOT:-$VZ_REPO_ROOT/build}"
+# Every shipped binary uses the oldest currently supported deployment target.
+# A single package therefore runs on iPadOS 14.5 through 16.3.1; runtime
+# compatibility decisions must be made from the actual host OS instead of by
+# producing OS-specific packages.  The override exists only for bring-up of
+# host-specific diagnostic builds.
+VZ_IPADOS_MIN_VERSION="${VZ_IPADOS_MIN_VERSION:-14.5}"
+
+case "$VZ_IPADOS_MIN_VERSION" in
+    14.5|15.0) ;;
+    *)
+        echo "error: VZ_IPADOS_MIN_VERSION must be 14.5 or 15.0" >&2
+        exit 1
+        ;;
+esac
+export VZ_IPADOS_MIN_VERSION
 
 if [[ "${VZ_IGNORE_ENV_FILE:-0}" != 1 && -f "$VZ_REPO_ROOT/.env" ]]; then
     set -a

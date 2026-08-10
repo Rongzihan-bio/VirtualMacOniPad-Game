@@ -38,11 +38,27 @@ chmod 755 \
   '$REMOTE/payload/bin/VZHostCompat.dylib' \
   '$REMOTE/payload/VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine'
 
-while IFS=\$(printf '\\t') read -r hash file; do
-  test -n "\$hash"
-  test -f '$REMOTE/payload/'"\$file"
-  jbctl trustcache add "\$hash"
-done <'$REMOTE/payload/trustcache.txt'
+if command -v jbctl >/dev/null 2>&1; then
+  while IFS=\$(printf '\\t') read -r hash file; do
+    test -n "\$hash"
+    test -f '$REMOTE/payload/'"\$file"
+    jbctl trustcache add "\$hash"
+  done <'$REMOTE/payload/trustcache.txt'
+elif test -x /taurine/jbexec; then
+  # Taurine has no jbctl. Ask jailbreakd to prepare every shipped Mach-O,
+  # including dylibs selected later through an iPadOS-version symlink/copy.
+  # Preparing only the VMM executable leaves its iPadOS 14 Hypervisor image
+  # untrusted and dyld terminates the child before main().
+  while IFS=\$(printf '\\t') read -r hash file; do
+    target='$REMOTE/payload/'"\$file"
+    test -f "\$target" || continue
+    PREFLIGHT=1 /bin/bash -c \
+      'exec -a "\$1" /taurine/jbexec' _ "\$target" >/dev/null || true
+  done <'$REMOTE/payload/trustcache.txt'
+else
+  echo 'error: neither jbctl nor Taurine jbexec is available' >&2
+  exit 1
+fi
 
 if test -d '$REMOTE/payload/Installation.xpc'; then
   test -x '$REMOTE/payload/Installation.xpc/Contents/Frameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd'

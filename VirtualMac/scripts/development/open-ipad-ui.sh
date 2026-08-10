@@ -12,5 +12,5 @@ case "$DESTINATION" in
 esac
 
 ensure_ipad_usb
-ipad_ssh "/var/jb/usr/bin/uiopen 'virtualmac://$DESTINATION'"
+ipad_ssh "uiopen=/var/jb/usr/bin/uiopen; test -x \"\$uiopen\" || uiopen=/usr/bin/uiopen; \"\$uiopen\" 'virtualmac://$DESTINATION'"
 echo "opened visible Virtual Mac $DESTINATION UI on the iPad"

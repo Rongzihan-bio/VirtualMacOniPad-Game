@@ -1186,7 +1186,9 @@ static io_connect_t shim_IORegisterForSystemPower(
     (void)callback;
     if (!notify_port || !notifier)
         return MACH_PORT_NULL;
-    *notify_port = IONotificationPortCreate(kIOMainPortDefault);
+    // kIOMainPortDefault was named kIOMasterPortDefault before iPadOS 15;
+    // both public constants are MACH_PORT_NULL. Use the ABI value directly.
+    *notify_port = IONotificationPortCreate(MACH_PORT_NULL);
     if (!*notify_port)
         return MACH_PORT_NULL;
     *notifier = FAKE_USB_POWER_NOTIFIER;
