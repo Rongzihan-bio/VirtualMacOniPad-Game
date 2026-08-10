@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Παλαιό";
 "%.0f%% complete" = "Ολοκληρώθηκε το %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "Το %@ δεν υποστηρίζεται";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "Το %@ ενδέχεται να παρουσιάσει προβλήματα απόδοσης ή γραφικών. Για την καλύτερη εμπειρία, χρησιμοποιήστε macOS Ventura, macOS Sonoma ή macOS Sequoia.\n\nΑν τα εφέ διαφάνειας προκαλούν προβλήματα προβολής, ενεργοποιήστε τη Μείωση διαφάνειας στις Ρυθμίσεις συστήματος > Προσβασιμότητα > Οθόνη.";
 "%@ remaining" = "Απομένουν %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nΤο ημιτελές εικονικό Mac διατηρήθηκε στα Προσωρινά αρχεία εγκατάστασης ως %@. Μπορεί να διαγραφεί από τις Ρυθμίσεις.";
 "%@\nState: %@\n%@\n\n" = "%@\nΚατάσταση: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Μια προηγούμενη εγκατάσταση του macOS δεν ολοκληρώθηκε. Μπορείτε να δείτε τις λεπτομέρειές της, να τη διατηρήσετε για αποσφαλμάτωση ή να τη διαγράψετε.";
+"A previous macOS installation did not finish." = "Μια προηγούμενη εγκατάσταση του macOS δεν ολοκληρώθηκε.";
 "About" = "Πληροφορίες";
 "Accommodate Finger Double-Taps" = "Διευκόλυνση διπλού αγγίγματος με το δάχτυλο";
 "Add Shared Folder" = "Προσθήκη κοινόχρηστου φακέλου";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Δεν ήταν δυνατή η αποθήκευση";
 "Could Not Start Installer" = "Δεν ήταν δυνατή η εκκίνηση του προγράμματος εγκατάστασης";
 "Couldn’t Export Diagnostics" = "Δεν ήταν δυνατή η εξαγωγή διαγνωστικών";
+"Create Github Issue" = "Δημιουργία ζητήματος στο Github";
 "Create Virtual Mac" = "Δημιουργία Εικονικού Mac";
 "Custom" = "Προσαρμοσμένο";
 "Debug Logging" = "Καταγραφή εντοπισμού σφαλμάτων";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Η καταγραφή εντοπισμού σφαλμάτων ενεργοποιήθηκε. Μπορείτε να την απενεργοποιήσετε αργότερα στις Ρυθμίσεις.";
 "Delete" = "Διαγραφή";
 "Delete All" = "Διαγραφή όλων";
 "Delete Cached Install Images" = "Διαγραφή αποθηκευμένων ειδώλων εγκατάστασης";
 "Delete Cached Install Images?" = "Διαγραφή αποθηκευμένων ειδώλων εγκατάστασης;";
-"Delete Incomplete Installation" = "Διαγραφή ημιτελούς εγκατάστασης";
 "Delete IPSW After Successful Installation" = "Διαγραφή IPSW μετά από επιτυχή εγκατάσταση";
 "Delete or rename the existing Virtual Mac first." = "Διαγράψτε ή μετονομάστε πρώτα το υπάρχον Εικονικό Mac.";
 "Delete Temporary Installation Files" = "Διαγραφή προσωρινών αρχείων εγκατάστασης";
 "Delete Temporary Installation Files?" = "Διαγραφή προσωρινών αρχείων εγκατάστασης;";
 "Delete Virtual Mac" = "Διαγραφή Εικονικού Mac";
 "Delete Virtual Mac?" = "Διαγραφή Εικονικού Mac;";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Περιγράψτε το πρόβλημα και επισυνάψτε το αρχείο ZIP διαγνωστικών και την εγγραφή οθόνης. Αν το Safari δεν μπορεί να ανοίξει το Github, χρησιμοποιήστε έναν υπολογιστή.";
 "Developer Beta" = "Beta προγραμματιστή";
 "Developers" = "Προγραμματιστές";
 "Disabled" = "Απενεργοποιημένο";
@@ -82,7 +83,6 @@
 "Display Height" = "Ύψος οθόνης";
 "Display Resolution" = "Ανάλυση οθόνης";
 "Display Width" = "Πλάτος οθόνης";
-"Done" = "Τέλος";
 "Double-tap to hold or release this modifier" = "Πατήστε δύο φορές για διατήρηση ή αποδέσμευση αυτού του πλήκτρου τροποποίησης";
 "Download Failed" = "Η λήψη απέτυχε";
 "Downloading macOS" = "Λήψη του macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Γέμισμα παραθύρου";
 "Fit in Window" = "Προσαρμογή στο παράθυρο";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Η Προσαρμογή στο παράθυρο εμφανίζει ολόκληρη την οθόνη. Η Κάλυψη παραθύρου περικόπτει τις άκρες όταν το παράθυρο έχει διαφορετικό σχήμα.";
+"Fix with Coding Agent" = "Διόρθωση με βοηθό προγραμματισμού";
 "Force Shut Down" = "Εξαναγκασμένος τερματισμός";
 "Force Shut Down Virtual Mac?" = "Εξαναγκασμένος τερματισμός Εικονικού Mac;";
 "Full Screen" = "Πλήρης οθόνη";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Εισαγωγή κατά την εκτέλεση εικονικού Mac";
 "Install %@" = "Εγκατάσταση %@";
 "Install macOS" = "Εγκατάσταση macOS";
-"Installation Details" = "Λεπτομέρειες εγκατάστασης";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Εγκαταστήστε το OpenSSH και το LLDB από το Sileo, συνδέστε το iPad σε έναν υπολογιστή και ζητήστε από το Codex ή το Claude Code να διαγνώσει και να διορθώσει το πρόβλημα. Μοιραστείτε τη λύση στο Github.";
 "Installation Failed" = "Η εγκατάσταση απέτυχε";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Η πρόοδος εγκατάστασης μπορεί να διακοπεί για αρκετά λεπτά όσο το Εικονικό Mac εκκινεί το περιβάλλον εγκατάστασης. Το iPad σας θα παραμείνει ενεργό.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Η πρόοδος εγκατάστασης ενδέχεται να παραμείνει αμετάβλητη όσο το macOS προετοιμάζει το επόμενο στάδιο εγκατάστασης. Το iPad σας θα παραμείνει ενεργό.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Κανένα Εικονικό Mac δεν αντιστοιχεί στην αναζήτησή σας.";
 "OK" = "ΟΚ";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Διατίθενται μόνο περίπου %llu GB. Το είδωλο δίσκου είναι δυναμικό, αλλά η εγκατάσταση ή η μετέπειτα χρήση μπορεί να αποτύχει αν γεμίσει ο χώρος αποθήκευσης.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Ανοίξτε το Κέντρο ελέγχου, ξεκινήστε εγγραφή οθόνης και, στη συνέχεια, αναπαραγάγετε το πρόβλημα.";
+"Optional" = "Προαιρετικά";
 "Options" = "Επιλογές";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Για περισσότερο από μια δεκαετία, οι άνθρωποι ονειρεύονται να εκτελούν το macOS σε iPad. Σήμερα, αυτό το όνειρο γίνεται πραγματικότητα. Δημιουργήστε ένα εικονικό Mac για να ξεκινήσετε.";
 "Pixels Per Inch" = "Pixel ανά ίντσα";
@@ -158,10 +161,13 @@
 "Read Only" = "Μόνο ανάγνωση";
 "Reading restore image…" = "Ανάγνωση ειδώλου επαναφοράς…";
 "Recommended macOS Release" = "Προτεινόμενη έκδοση macOS";
+"Record the Problem" = "Εγγραφή του προβλήματος";
+"Record the Problem Again" = "Καταγράψτε ξανά το πρόβλημα";
 "Recover Networking After Sleep" = "Ανάκτηση δικτύωσης μετά τον ύπνο";
 "Release" = "Έκδοση";
 "Remove" = "Αφαίρεση";
 "Report Issue" = "Αναφορά προβλήματος";
+"Report This Problem" = "Αναφορά αυτού του προβλήματος";
 "Reset" = "Επαναφορά";
 "Reset Settings" = "Επαναφορά ρυθμίσεων";
 "Reset Settings?" = "Επαναφορά ρυθμίσεων;";
@@ -169,6 +175,9 @@
 "Resources" = "Πόροι";
 "Resume" = "Συνέχιση";
 "Save" = "Αποθήκευση";
+"Save a ZIP file containing logs and crash reports." = "Αποθηκεύστε ένα αρχείο ZIP που περιέχει αρχεία καταγραφής και αναφορές κατάρρευσης.";
+"Save Diagnostics to Files" = "Αποθήκευση διαγνωστικών στα Αρχεία";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Η εγγραφή οθόνης ξεκίνησε αφού παρουσιάστηκε το πρόβλημα, επομένως δεν κατέγραψε τι συνέβη.\n\nΣυνεχίστε την εγγραφή και επαναλάβετε τα βήματα που προκάλεσαν το πρόβλημα. Όταν εμφανιστεί ξανά αυτή η αναφορά, αποθηκεύστε τα διαγνωστικά και επισυνάψτε στο ζήτημά σας στο Github τόσο την εγγραφή οθόνης όσο και το διαγνωστικό αρχείο ZIP.";
 "Search Virtual Mac" = "Αναζήτηση Εικονικού Mac";
 "Settings" = "Ρυθμίσεις";
 "Shared Folder" = "Κοινόχρηστος φάκελος";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Δεν ήταν δυνατή η δημιουργία του αρχείου διαγνωστικών.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Η πρώτη τιμή προόδου μπορεί να χρειαστεί αρκετά λεπτά όσο το Εικονικό Mac μεταβαίνει από το DFU στο RestoreOS. Το iPad σας θα παραμείνει ενεργό.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Το ημιτελές Εικονικό Mac και τα αρχεία εγκατάστασής του θα διαγραφούν.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Το είδωλο εγκατάστασης και τα προσωρινά αρχεία εγκατάστασης διατηρήθηκαν ώστε να μπορεί να διαγνωστεί η αποτυχία. Μπορείτε να εξαγάγετε διαγνωστικά από τις Ρυθμίσεις.";
 "The installer could not be started: %s" = "Δεν ήταν δυνατή η έναρξη του προγράμματος εγκατάστασης: %s";
 "The new Virtual Mac is ready to use." = "Το νέο Εικονικό Mac είναι έτοιμο για χρήση.";
 "The partial restore image will be deleted." = "Το μερικώς ληφθέν είδωλο επαναφοράς θα διαγραφεί.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Βεβαιωθείτε ότι το iPad σας έχει αρκετό ελεύθερο χώρο και δοκιμάστε ξανά.";
 "Version" = "Έκδοση";
 "Video Encoding and Decoding Acceleration" = "Επιτάχυνση κωδικοποίησης και αποκωδικοποίησης βίντεο";
-"View Details" = "Προβολή λεπτομερειών";
 "Virtual Mac" = "Εικονικό Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Το Virtual Mac %@ δεν υποστηρίζει το %@. Ελέγξτε για ενημερώσεις στο Sileo.";
 "Virtual Mac Controls" = "Χειριστήρια Εικονικού Mac";

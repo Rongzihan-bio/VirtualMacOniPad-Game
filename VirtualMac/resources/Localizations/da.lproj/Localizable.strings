@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Ældre";
 "%.0f%% complete" = "%.0f%% fuldført";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "%@ understøttes ikke";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ kan have problemer med ydeevne eller grafik. Brug macOS Ventura, macOS Sonoma eller macOS Sequoia for at få den bedste oplevelse.\n\nHvis gennemsigtighedseffekter giver visuelle problemer, skal du slå Reducer gennemsigtighed til under Systemindstillinger > Tilgængelighed > Skærm.";
 "%@ remaining" = "%@ tilbage";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nDen ufuldstændige Virtual Mac blev gemt i Midlertidige installationsfiler som %@. Den kan slettes i Indstillinger.";
 "%@\nState: %@\n%@\n\n" = "%@\nStatus: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "En tidligere macOS-installation blev ikke færdig. Du kan gennemse oplysningerne, beholde den til fejlfinding eller slette den.";
+"A previous macOS installation did not finish." = "En tidligere macOS-installation blev ikke fuldført.";
 "About" = "Om appen";
 "Accommodate Finger Double-Taps" = "Gør dobbelttryk med en finger nemmere";
 "Add Shared Folder" = "Tilføj delt mappe";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Kunne ikke gemme";
 "Could Not Start Installer" = "Installationsprogrammet kunne ikke startes";
 "Couldn’t Export Diagnostics" = "Kunne ikke eksportere diagnosticering";
+"Create Github Issue" = "Opret Github-problem";
 "Create Virtual Mac" = "Opret en Virtuel Mac";
 "Custom" = "Tilpasset";
 "Debug Logging" = "Fejllogning";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Logføring af fejlfinding er slået til. Du kan slå det fra senere i Indstillinger.";
 "Delete" = "Slet";
 "Delete All" = "Slet alle";
 "Delete Cached Install Images" = "Slet cachelagrede installationsafbilder";
 "Delete Cached Install Images?" = "Slet cachelagrede installationsafbilder?";
-"Delete Incomplete Installation" = "Slet ufuldstændig installation";
 "Delete IPSW After Successful Installation" = "Slet IPSW efter vellykket installation";
 "Delete or rename the existing Virtual Mac first." = "Slet eller omdøb først den eksisterende Virtual Mac.";
 "Delete Temporary Installation Files" = "Slet midlertidige installationsfiler";
 "Delete Temporary Installation Files?" = "Slet midlertidige installationsfiler?";
 "Delete Virtual Mac" = "Slet Virtual Mac";
 "Delete Virtual Mac?" = "Slet Virtual Mac?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Beskriv problemet, og vedhæft derefter ZIP-arkivet med diagnosticering og skærmoptagelsen. Hvis Safari ikke kan åbne Github, skal du bruge en computer i stedet.";
 "Developer Beta" = "Udviklerbeta";
 "Developers" = "Udviklere";
 "Disabled" = "Deaktiveret";
@@ -82,7 +83,6 @@
 "Display Height" = "Skærmhøjde";
 "Display Resolution" = "Skærmopløsning";
 "Display Width" = "Skærmbredde";
-"Done" = "Færdig";
 "Double-tap to hold or release this modifier" = "Tryk to gange for at låse eller frigive denne kombinationstast";
 "Download Failed" = "Overførsel mislykkedes";
 "Downloading macOS" = "Henter macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Fyld vinduet";
 "Fit in Window" = "Tilpas til vindue";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Tilpas til vindue viser hele skærmen. Udfyld vindue beskærer kanterne, når vinduet har en anden form.";
+"Fix with Coding Agent" = "Løs det med en kodningsagent";
 "Force Shut Down" = "Gennemtving nedlukning";
 "Force Shut Down Virtual Mac?" = "Gennemtving nedlukning af Virtual Mac?";
 "Full Screen" = "Fuld skærm";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Input, mens en virtuel Mac kører";
 "Install %@" = "Installer %@";
 "Install macOS" = "Installer macOS";
-"Installation Details" = "Installationsoplysninger";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Installer OpenSSH og LLDB fra Sileo, slut din iPad til en computer, og bed Codex eller Claude Code om at diagnosticere og løse problemet. Del løsningen på Github.";
 "Installation Failed" = "Installation mislykkedes";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Installationsstatus kan holde pause i flere minutter, mens Virtuel Mac starter installationsmiljøet. Din iPad forbliver vågen.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Installationsstatus kan forblive uændret, mens macOS forbereder næste installationstrin. Din iPad forbliver vågen.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Ingen virtuelle Mac-computere matcher din søgning.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Der er kun ca. %llu GB ledig plads. Diskbilledet er dynamisk, men installationen eller senere brug kan mislykkes, hvis lageret bliver fyldt.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Åbn Kontrolcenter, start en skærmoptagelse, og genskab derefter problemet.";
+"Optional" = "Valgfrit";
 "Options" = "Indstillinger";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "I mere end et årti har folk drømt om at køre macOS på iPad. I dag bliver drømmen til virkelighed. Opret en virtuel Mac for at komme i gang.";
 "Pixels Per Inch" = "Pixels pr. tomme";
@@ -158,10 +161,13 @@
 "Read Only" = "Skrivebeskyttet";
 "Reading restore image…" = "Læser gendannelsesbillede…";
 "Recommended macOS Release" = "Anbefalet macOS-udgivelse";
+"Record the Problem" = "Optag problemet";
+"Record the Problem Again" = "Optag problemet igen";
 "Recover Networking After Sleep" = "Gendan netværk efter dvale";
 "Release" = "Udgivelse";
 "Remove" = "Fjern";
 "Report Issue" = "Rapportér et problem";
+"Report This Problem" = "Rapportér dette problem";
 "Reset" = "Nulstil";
 "Reset Settings" = "Nulstil indstillinger";
 "Reset Settings?" = "Nulstil indstillinger?";
@@ -169,6 +175,9 @@
 "Resources" = "Ressourcer";
 "Resume" = "Fortsæt";
 "Save" = "Gem";
+"Save a ZIP file containing logs and crash reports." = "Gem en ZIP-fil med logfiler og rapporter om nedbrud.";
+"Save Diagnostics to Files" = "Gem diagnosticering i Arkiver";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Skærmoptagelsen blev startet, efter problemet opstod, så den optog ikke, hvad der skete.\n\nFortsæt optagelsen, og gentag de trin, der udløste problemet. Når denne rapport vises igen, skal du gemme diagnosticeringen og vedhæfte både skærmoptagelsen og diagnosticerings-ZIP-filen til dit Github-problem.";
 "Search Virtual Mac" = "Søg efter Virtuel Mac";
 "Settings" = "Indstillinger";
 "Shared Folder" = "Delt mappe";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Diagnosticeringsarkivet kunne ikke oprettes.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Den første statusværdi kan tage flere minutter, mens Virtual Mac skifter fra DFU til RestoreOS. Din iPad forbliver aktiv.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Den ufuldstændige Virtual Mac og dens installationsfiler slettes.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Installationsafbildningen og de midlertidige installationsfiler blev gemt, så fejlen kan diagnosticeres. Du kan eksportere diagnosticering fra Indstillinger.";
 "The installer could not be started: %s" = "Installationsprogrammet kunne ikke startes: %s";
 "The new Virtual Mac is ready to use." = "Den nye Virtual Mac er klar til brug.";
 "The partial restore image will be deleted." = "Det delvist hentede gendannelsesbillede slettes.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Kontroller, at din iPad har tilstrækkelig ledig plads, og prøv igen.";
 "Version" = "Version";
 "Video Encoding and Decoding Acceleration" = "Acceleration af videokodning og -afkodning";
-"View Details" = "Vis oplysninger";
 "Virtual Mac" = "Virtuel Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ understøtter ikke %@. Se efter opdateringer i Sileo.";
 "Virtual Mac Controls" = "Betjening til Virtuel Mac";

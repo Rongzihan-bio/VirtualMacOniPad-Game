@@ -236,6 +236,9 @@ case "$host_version" in
         ;;
 esac
 chmod 755 \
+    "$runtime" \
+    "$runtime/install" \
+    "$runtime/payload" \
     "$runtime/payload/VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine" \
     "$runtime/payload/Installation.xpc/Contents/MacOS/com.apple.Virtualization.Installation" \
     "$runtime/payload/Installation.xpc/Contents/Frameworks/InstallationCompat.dylib" \

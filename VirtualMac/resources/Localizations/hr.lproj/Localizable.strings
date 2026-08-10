@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Starije";
 "%.0f%% complete" = "Dovršeno %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM-a · %llu GB · %@%@";
 "%@ is not supported" = "%@ nije podržan";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "U sustavu %@ mogući su problemi s performansama ili grafikom. Za najbolje iskustvo koristite macOS Ventura, macOS Sonoma ili macOS Sequoia.\n\nAko efekti prozirnosti uzrokuju probleme s prikazom, uključite Smanji prozirnost u Postavke sustava > Pristupačnost > Zaslon.";
 "%@ remaining" = "Preostalo: %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nNedovršeni virtualni Mac zadržan je u Privremenim instalacijskim datotekama kao %@. Možete ga izbrisati u Postavkama.";
 "%@\nState: %@\n%@\n\n" = "%@\nStanje: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Prethodna instalacija sustava macOS nije dovršena. Možete pregledati pojedinosti, zadržati je radi otklanjanja pogrešaka ili je izbrisati.";
+"A previous macOS installation did not finish." = "Prethodna instalacija macOS-a nije dovršena.";
 "About" = "Informacije";
 "Accommodate Finger Double-Taps" = "Olakšaj dvostruki dodir prstom";
 "Add Shared Folder" = "Dodaj dijeljenu mapu";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Nije moguće spremiti";
 "Could Not Start Installer" = "Instalacijski program nije moguće pokrenuti";
 "Couldn’t Export Diagnostics" = "Nije moguće izvesti dijagnostiku";
+"Create Github Issue" = "Izradi prijavu na Githubu";
 "Create Virtual Mac" = "Izradi Virtualni Mac";
 "Custom" = "Prilagođeno";
 "Debug Logging" = "Bilježenje za otklanjanje pogrešaka";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Zapisivanje podataka za otklanjanje pogrešaka je uključeno. Kasnije ga možete isključiti u Postavkama.";
 "Delete" = "Izbriši";
 "Delete All" = "Izbriši sve";
 "Delete Cached Install Images" = "Izbriši predmemorirane instalacijske slike";
 "Delete Cached Install Images?" = "Izbrisati predmemorirane instalacijske slike?";
-"Delete Incomplete Installation" = "Izbriši nedovršenu instalaciju";
 "Delete IPSW After Successful Installation" = "Izbrišite IPSW nakon uspješne instalacije";
 "Delete or rename the existing Virtual Mac first." = "Najprije izbrišite ili preimenujte postojeći Virtualni Mac.";
 "Delete Temporary Installation Files" = "Izbriši privremene instalacijske datoteke";
 "Delete Temporary Installation Files?" = "Izbrisati privremene instalacijske datoteke?";
 "Delete Virtual Mac" = "Izbriši Virtualni Mac";
 "Delete Virtual Mac?" = "Izbrisati Virtualni Mac?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Opišite problem, a zatim priložite ZIP datoteku dijagnostike i snimku zaslona. Ako Safari ne može otvoriti Github, upotrijebite računalo.";
 "Developer Beta" = "Razvojna beta-verzija";
 "Developers" = "Programeri";
 "Disabled" = "Onemogućeno";
@@ -82,7 +83,6 @@
 "Display Height" = "Visina zaslona";
 "Display Resolution" = "Razlučivost zaslona";
 "Display Width" = "Širina zaslona";
-"Done" = "Gotovo";
 "Double-tap to hold or release this modifier" = "Dvaput dodirnite kako biste zadržali ili otpustili ovu modifikacijsku tipku";
 "Download Failed" = "Preuzimanje nije uspjelo";
 "Downloading macOS" = "Preuzimanje macOS-a";
@@ -95,6 +95,7 @@
 "Fill Window" = "Ispuni prozor";
 "Fit in Window" = "Prilagodi prozoru";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Prilagodi prozoru prikazuje cijeli zaslon. Ispuni prozor obrezuje rubove kada prozor ima drukčiji oblik.";
+"Fix with Coding Agent" = "Riješi pomoću agenta za programiranje";
 "Force Shut Down" = "Prisilno isključi";
 "Force Shut Down Virtual Mac?" = "Prisilno isključiti Virtualni Mac?";
 "Full Screen" = "Cijeli zaslon";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Unos dok je virtualni Mac pokrenut";
 "Install %@" = "Instaliraj %@";
 "Install macOS" = "Instalirajte macOS";
-"Installation Details" = "Pojedinosti instalacije";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Instalirajte OpenSSH i LLDB iz Silea, povežite iPad s računalom i zatražite od Codexa ili Claude Codea da dijagnosticira i riješi problem. Podijelite rješenje na Githubu.";
 "Installation Failed" = "Instalacija nije uspjela";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Napredak instalacije može zastati nekoliko minuta dok Virtualni Mac pokreće instalacijsko okruženje. Vaš iPad ostat će aktivan.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Napredak instalacije može ostati nepromijenjen dok macOS priprema sljedeću fazu instalacije. Vaš iPad ostat će aktivan.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Nijedan Virtualni Mac ne odgovara vašem pretraživanju.";
 "OK" = "U redu";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Trenutačno je dostupno samo oko %llu GB. Slika diska je dinamična, ali instalacija ili kasnija uporaba mogu biti neuspješne ako se pohrana napuni.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Otvorite Kontrolni centar, pokrenite snimanje zaslona, a zatim ponovite problem.";
+"Optional" = "Neobavezno";
 "Options" = "Opcije";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Ljudi više od desetljeća sanjaju o pokretanju sustava macOS na iPadu. Danas taj san postaje stvarnost. Za početak izradite virtualni Mac.";
 "Pixels Per Inch" = "Pikseli po inču";
@@ -158,10 +161,13 @@
 "Read Only" = "Samo za čitanje";
 "Reading restore image…" = "Čitanje slike za obnovu…";
 "Recommended macOS Release" = "Preporučeno izdanje macOS-a";
+"Record the Problem" = "Snimi problem";
+"Record the Problem Again" = "Ponovno snimite problem";
 "Recover Networking After Sleep" = "Oporavak mreže nakon mirovanja";
 "Release" = "Izdanje";
 "Remove" = "Ukloni";
 "Report Issue" = "Prijavi problem";
+"Report This Problem" = "Prijavi ovaj problem";
 "Reset" = "Resetiraj";
 "Reset Settings" = "Resetiraj postavke";
 "Reset Settings?" = "Resetirati postavke?";
@@ -169,6 +175,9 @@
 "Resources" = "Resursi";
 "Resume" = "Nastavi";
 "Save" = "Spremi";
+"Save a ZIP file containing logs and crash reports." = "Spremite ZIP datoteku koja sadrži zapise i izvješća o rušenju.";
+"Save Diagnostics to Files" = "Spremi dijagnostiku u Datoteke";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Snimanje zaslona pokrenuto je nakon pojave problema pa nije zabilježilo što se dogodilo.\n\nNastavite snimati i ponovite korake koji su uzrokovali problem. Kada se ovo izvješće ponovno pojavi, spremite dijagnostiku i svojoj prijavi na Githubu priložite snimku zaslona i dijagnostičku ZIP datoteku.";
 "Search Virtual Mac" = "Pretraži Virtualni Mac";
 "Settings" = "postavke";
 "Shared Folder" = "Dijeljena mapa";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Nije moguće izraditi dijagnostičku arhivu.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Prva vrijednost napretka može potrajati nekoliko minuta dok Virtualni Mac prelazi iz DFU-a u RestoreOS. Vaš iPad ostat će aktivan.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Nedovršeni Virtualni Mac i njegove instalacijske datoteke bit će izbrisani.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Instalacijska slika i privremene instalacijske datoteke zadržane su radi dijagnosticiranja pogreške. Dijagnostiku možete izvesti u Postavkama.";
 "The installer could not be started: %s" = "Instalacijski program nije moguće pokrenuti: %s";
 "The new Virtual Mac is ready to use." = "Novi Virtualni Mac spreman je za uporabu.";
 "The partial restore image will be deleted." = "Djelomično preuzeta slika za obnovu bit će izbrisana.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Provjerite ima li iPad dovoljno slobodnog prostora i pokušajte ponovno.";
 "Version" = "Verzija";
 "Video Encoding and Decoding Acceleration" = "Ubrzanje kodiranja i dekodiranja videozapisa";
-"View Details" = "Prikaži pojedinosti";
 "Virtual Mac" = "Virtualni Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ ne podržava %@. Potražite ažuriranja u Sileu.";
 "Virtual Mac Controls" = "Kontrole Virtualnog Maca";

@@ -1,11 +1,22 @@
 #import "VZDiagnostics.h"
 #import "VZAppSettings.h"
+#import <UIKit/UIKit.h>
 #import <errno.h>
+#import <ifaddrs.h>
+#import <limits.h>
+#import <net/if.h>
+#import <netdb.h>
+#import <spawn.h>
 #import <sys/stat.h>
+#import <sys/mount.h>
 #import <sys/sysctl.h>
+#import <sys/wait.h>
 #import <sys/utsname.h>
 #import <pwd.h>
+#import <string.h>
 #import <unistd.h>
+
+extern char **environ;
 
 static uint32_t VZCRC32(NSData *data)
 {
@@ -52,8 +63,7 @@ static NSData *VZBoundedFileData(NSString *path)
         return nil;
     unsigned long long size = [handle seekToEndOfFile];
     const unsigned long long limit = 8ULL << 20;
-    if (size > limit)
-        [handle seekToFileOffset:size - limit];
+    [handle seekToFileOffset:size > limit ? size - limit : 0];
     NSData *data = [handle readDataToEndOfFile];
     [handle closeFile];
     return data;
@@ -67,6 +77,364 @@ static void VZAddEntry(VZDiagnosticEntryHandler handler,
     if (!name.length || !data.length)
         return;
     handler(name, data);
+}
+
+static void VZAppendPathStatus(NSMutableString *report, NSString *path)
+{
+    struct stat info = {0};
+    if (lstat(path.fileSystemRepresentation, &info) != 0) {
+        int error = errno;
+        [report appendFormat:@"%@ lstat-error=%d (%s)\n", path, error,
+                             strerror(error)];
+        return;
+    }
+    [report appendFormat:
+        @"%@ mode=%04o uid=%u gid=%u size=%lld access=%c%c%c\n",
+        path, info.st_mode & 07777, info.st_uid, info.st_gid,
+        (long long)info.st_size,
+        access(path.fileSystemRepresentation, R_OK) == 0 ? 'r' : '-',
+        access(path.fileSystemRepresentation, W_OK) == 0 ? 'w' : '-',
+        access(path.fileSystemRepresentation, X_OK) == 0 ? 'x' : '-'];
+}
+
+static NSData *VZInstallerPreflightData(void)
+{
+    NSMutableString *report = [NSMutableString stringWithFormat:
+        @"caller uid=%u euid=%u gid=%u egid=%u\n",
+        getuid(), geteuid(), getgid(), getegid()];
+    NSArray *paths = @[@"/var", @"/var/root", @"/var/root/VirtualMac",
+        @"/var/root/VirtualMac/install",
+        @"/var/root/VirtualMac/install/install-launcher",
+        @"/var/root/VirtualMac/install/start-install.sh"];
+    for (NSString *path in paths)
+        VZAppendPathStatus(report, path);
+
+    struct statfs fileSystem = {0};
+    if (statfs("/var/root", &fileSystem) == 0) {
+        [report appendFormat:@"/var/root filesystem=%s flags=0x%lx\n",
+            fileSystem.f_fstypename, (unsigned long)fileSystem.f_flags];
+    } else {
+        int error = errno;
+        [report appendFormat:@"/var/root statfs-error=%d (%s)\n",
+                             error, strerror(error)];
+    }
+
+    int descriptors[2] = {-1, -1};
+    if (pipe(descriptors) != 0) {
+        int error = errno;
+        [report appendFormat:@"preflight pipe-error=%d (%s)\n",
+                             error, strerror(error)];
+        return [report dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addclose(&actions, descriptors[0]);
+    posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, descriptors[1]);
+    const char *launcher =
+        "/var/root/VirtualMac/install/install-launcher";
+    // A spawn error diagnoses the parent-directory/execute-permission failure
+    // that prevents the launcher from running at all. Output from the
+    // diagnostics-only mode covers the later privilege/script boundary.
+    char *arguments[] = {(char *)launcher, "--diagnose", NULL};
+    pid_t process = 0;
+    int spawned = posix_spawn(&process, launcher, &actions, NULL,
+                              arguments, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(descriptors[1]);
+    if (spawned != 0) {
+        close(descriptors[0]);
+        [report appendFormat:@"preflight posix_spawn=%d (%s)\n",
+                             spawned, strerror(spawned)];
+        return [report dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    NSMutableData *output = [NSMutableData data];
+    uint8_t buffer[1024];
+    for (;;) {
+        ssize_t count = read(descriptors[0], buffer, sizeof(buffer));
+        if (count > 0) {
+            [output appendBytes:buffer length:(NSUInteger)count];
+            continue;
+        }
+        if (count < 0 && errno == EINTR)
+            continue;
+        break;
+    }
+    close(descriptors[0]);
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(process, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    NSString *text = [[[NSString alloc] initWithData:output
+        encoding:NSUTF8StringEncoding] autorelease];
+    if (text.length)
+        [report appendString:text];
+    [report appendFormat:@"preflight wait=%d exited=%d status=%d signal=%d\n",
+        waited, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+        WIFSIGNALED(status) ? WTERMSIG(status) : 0];
+    return [report dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+static NSData *VZCommandOutput(NSString *executable,
+                               NSArray<NSString *> *arguments)
+{
+    int descriptors[2] = {-1, -1};
+    if (pipe(descriptors) != 0)
+        return [[NSString stringWithFormat:@"pipe failed: %s\n", strerror(errno)]
+            dataUsingEncoding:NSUTF8StringEncoding];
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addclose(&actions, descriptors[0]);
+    posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, descriptors[1]);
+    NSUInteger count = arguments.count + 1;
+    char **argv = calloc(count + 1, sizeof(char *));
+    argv[0] = (char *)executable.fileSystemRepresentation;
+    for (NSUInteger index = 0; index < arguments.count; index++)
+        argv[index + 1] = (char *)arguments[index].UTF8String;
+    pid_t process = 0;
+    int spawned = posix_spawn(&process, executable.fileSystemRepresentation,
+        &actions, NULL, argv, environ);
+    free(argv);
+    posix_spawn_file_actions_destroy(&actions);
+    close(descriptors[1]);
+    if (spawned != 0) {
+        close(descriptors[0]);
+        return [[NSString stringWithFormat:@"%@ failed to start: %s\n",
+            executable, strerror(spawned)]
+            dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    NSMutableData *output = [NSMutableData data];
+    uint8_t buffer[4096];
+    const NSUInteger limit = 4U << 20;
+    for (;;) {
+        ssize_t bytes = read(descriptors[0], buffer, sizeof(buffer));
+        if (bytes > 0) {
+            NSUInteger remaining = limit > output.length
+                ? limit - output.length : 0;
+            if (remaining)
+                [output appendBytes:buffer length:MIN((NSUInteger)bytes,
+                                                      remaining)];
+            continue;
+        }
+        if (bytes < 0 && errno == EINTR)
+            continue;
+        break;
+    }
+    close(descriptors[0]);
+    int status = 0;
+    while (waitpid(process, &status, 0) < 0 && errno == EINTR) {}
+    NSString *footer = [NSString stringWithFormat:
+        @"\n[exit=%d signal=%d]\n",
+        WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+        WIFSIGNALED(status) ? WTERMSIG(status) : 0];
+    [output appendData:[footer dataUsingEncoding:NSUTF8StringEncoding]];
+    return output;
+}
+
+static NSString *VZFirstExecutablePath(NSArray<NSString *> *paths)
+{
+    for (NSString *path in paths) {
+        if (access(path.fileSystemRepresentation, X_OK) == 0)
+            return path;
+    }
+    return nil;
+}
+
+static NSData *VZBootstrapData(void)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    BOOL rootless = [manager fileExistsAtPath:@"/var/jb"];
+    NSString *brand = @"Unknown";
+    NSString *versionPath = nil;
+    if ([manager fileExistsAtPath:@"/var/jb/basebin/dopamine"]) {
+        brand = @"Dopamine";
+        versionPath = @"/var/jb/basebin/.version";
+    } else if ([manager fileExistsAtPath:@"/taurine"]) {
+        brand = @"Taurine";
+    }
+    NSString *version = @"unknown";
+    NSData *versionData = versionPath ? VZBoundedFileData(versionPath) : nil;
+    if (versionData.length) {
+        NSString *candidate = [[[NSString alloc] initWithData:versionData
+            encoding:NSUTF8StringEncoding] autorelease];
+        candidate = [candidate stringByTrimmingCharactersInSet:
+            NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (candidate.length) version = candidate;
+    }
+    NSMutableString *report = [NSMutableString stringWithFormat:
+        @"Detected jailbreak: %@\nVersion: %@\nBootstrap variant: %@\n"
+         "uid=%u euid=%u gid=%u egid=%u\n",
+        brand, version, rootless ? @"rootless" : @"rootful",
+        getuid(), geteuid(), getgid(), getegid()];
+    for (NSString *name in @[@"JB_ROOT_PATH", @"PATH",
+                              @"DYLD_INSERT_LIBRARIES"]) {
+        const char *value = getenv(name.UTF8String);
+        [report appendFormat:@"%@=%s\n", name, value ?: "(unset)"];
+    }
+    NSArray *paths = @[@"/var/jb", @"/var/jb/basebin",
+        @"/var/jb/basebin/dopamine", @"/taurine", @"/odyssey",
+        @"/chimera", @"/var/jb/usr/bin/dpkg-query",
+        @"/usr/bin/dpkg-query", @"/var/jb/Library/dpkg/status",
+        @"/Library/dpkg/status", @"/var/lib/dpkg/status"];
+    for (NSString *path in paths) {
+        VZAppendPathStatus(report, path);
+        char resolved[PATH_MAX] = {0};
+        if (realpath(path.fileSystemRepresentation, resolved))
+            [report appendFormat:@"  resolved=%s\n", resolved];
+    }
+    for (NSString *path in @[@"/var/jb/basebin/.version",
+                              @"/var/jb/.procursus_strapped",
+                              @"/.installed_unc0ver"]) {
+        NSData *data = VZBoundedFileData(path);
+        if (!data.length)
+            continue;
+        NSString *value = [[[NSString alloc] initWithData:data
+            encoding:NSUTF8StringEncoding] autorelease];
+        [report appendFormat:@"%@ contents=%@\n", path,
+            [value stringByTrimmingCharactersInSet:
+                NSCharacterSet.whitespaceAndNewlineCharacterSet]];
+    }
+    return [report dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+static NSData *VZTweakInventoryData(void)
+{
+    NSMutableString *report = [NSMutableString string];
+    NSArray *directories = @[
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries",
+        @"/var/jb/usr/lib/TweakInject",
+        @"/Library/MobileSubstrate/DynamicLibraries",
+        @"/usr/lib/TweakInject",
+    ];
+    for (NSString *directory in directories) {
+        NSArray *entries = [[NSFileManager.defaultManager
+            contentsOfDirectoryAtPath:directory error:nil]
+            sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+        if (!entries)
+            continue;
+        [report appendFormat:@"[%@]\n", directory];
+        for (NSString *entry in entries)
+            [report appendFormat:@"%@\n", entry];
+        [report appendString:@"\n"];
+    }
+    if (!report.length)
+        [report appendString:@"No tweak injection directories were readable.\n"];
+    return [report dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+static NSData *VZLanguageAndKeyboardData(void)
+{
+    NSMutableString *report = [NSMutableString stringWithFormat:
+        @"Locale: %@\nPreferred languages: %@\nTime zone: %@\n"
+         "Screen captured: %@\n",
+        NSLocale.currentLocale.localeIdentifier,
+        NSLocale.preferredLanguages,
+        NSTimeZone.localTimeZone.name,
+        UIScreen.mainScreen.isCaptured ? @"yes" : @"no"];
+    id configured = [NSUserDefaults.standardUserDefaults
+        objectForKey:@"AppleKeyboards"];
+    id expanded = [NSUserDefaults.standardUserDefaults
+        objectForKey:@"AppleKeyboardsExpanded"];
+    [report appendFormat:@"AppleKeyboards: %@\nAppleKeyboardsExpanded: %@\n",
+        configured ?: @"unavailable", expanded ?: @"unavailable"];
+    [report appendString:@"Active input modes:\n"];
+    NSUInteger index = 0;
+    for (UITextInputMode *mode in UITextInputMode.activeInputModes) {
+        [report appendFormat:@"%lu. class=%@ language=%@\n",
+            (unsigned long)++index, NSStringFromClass(mode.class),
+            mode.primaryLanguage ?: @"(none)"];
+    }
+    return [report dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+static NSData *VZStorageData(void)
+{
+    NSMutableString *report = [NSMutableString string];
+    NSArray *paths = @[@"/var", @"/var/mobile", VZDiagnosticsLibraryPath(),
+        @"/var/root", @"/var/root/VirtualMac"];
+    for (NSString *path in paths) {
+        VZAppendPathStatus(report, path);
+        struct statfs fileSystem = {0};
+        if (statfs(path.fileSystemRepresentation, &fileSystem) != 0) {
+            int error = errno;
+            [report appendFormat:@"  statfs-error=%d (%s)\n", error,
+                                 strerror(error)];
+            continue;
+        }
+        uint64_t blockSize = (uint64_t)fileSystem.f_bsize;
+        [report appendFormat:
+            @"  filesystem=%s flags=0x%lx total=%llu free=%llu available=%llu\n",
+            fileSystem.f_fstypename, (unsigned long)fileSystem.f_flags,
+            (unsigned long long)((uint64_t)fileSystem.f_blocks * blockSize),
+            (unsigned long long)((uint64_t)fileSystem.f_bfree * blockSize),
+            (unsigned long long)((uint64_t)fileSystem.f_bavail * blockSize)];
+    }
+    return [report dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+static NSData *VZNetworkData(void)
+{
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0) {
+        return [[NSString stringWithFormat:@"getifaddrs failed: %s\n",
+            strerror(errno)] dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    NSMutableArray *lines = [NSMutableArray array];
+    for (struct ifaddrs *item = interfaces; item; item = item->ifa_next) {
+        if (!item->ifa_addr)
+            continue;
+        int family = item->ifa_addr->sa_family;
+        if (family != AF_INET && family != AF_INET6)
+            continue;
+        char address[NI_MAXHOST] = {0};
+        char netmask[NI_MAXHOST] = {0};
+        if (getnameinfo(item->ifa_addr, item->ifa_addr->sa_len, address,
+                        sizeof(address), NULL, 0, NI_NUMERICHOST) != 0)
+            strlcpy(address, "?", sizeof(address));
+        if (!item->ifa_netmask ||
+            getnameinfo(item->ifa_netmask, item->ifa_netmask->sa_len, netmask,
+                        sizeof(netmask), NULL, 0, NI_NUMERICHOST) != 0)
+            strlcpy(netmask, "?", sizeof(netmask));
+        [lines addObject:[NSString stringWithFormat:
+            @"%s family=%s flags=0x%x address=%s netmask=%s",
+            item->ifa_name ?: "?", family == AF_INET ? "IPv4" : "IPv6",
+            item->ifa_flags, address, netmask]];
+    }
+    freeifaddrs(interfaces);
+    [lines sortUsingSelector:@selector(compare:)];
+    return [[[lines componentsJoinedByString:@"\n"]
+        stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+static NSData *VZRuntimePathData(void)
+{
+    NSMutableString *report = [NSMutableString string];
+    NSArray *paths = @[
+        @"/Applications/VirtualMac.app",
+        @"/Applications/VirtualMac.app/VirtualMac",
+        @"/var/jb/Applications/VirtualMac.app",
+        @"/var/jb/Applications/VirtualMac.app/VirtualMac",
+        @"/var/root/VirtualMac",
+        @"/var/root/VirtualMac/install",
+        @"/var/root/VirtualMac/payload",
+        @"/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib",
+        @"/usr/lib/TweakInject/VZKeyboardPassthrough.dylib",
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib",
+        @"/var/jb/usr/lib/TweakInject/VZKeyboardPassthrough.dylib",
+        @"/var/run/usbmuxd",
+        @"/tmp/vzusbmuxd",
+    ];
+    for (NSString *path in paths) {
+        VZAppendPathStatus(report, path);
+        char resolved[PATH_MAX] = {0};
+        if (realpath(path.fileSystemRepresentation, resolved))
+            [report appendFormat:@"  resolved=%s\n", resolved];
+    }
+    return [report dataUsingEncoding:NSUTF8StringEncoding];
 }
 
 static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
@@ -84,17 +452,58 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
     NSDictionary *fileSystem = [NSFileManager.defaultManager
         attributesOfFileSystemForPath:VZDiagnosticsLibraryPath() error:nil] ?: @{};
     NSDictionary *bundleInfo = NSBundle.mainBundle.infoDictionary ?: @{};
+    UIScreen *screen = UIScreen.mainScreen;
     NSString *manifest = [NSString stringWithFormat:
         @"Virtual Mac diagnostics\n"
          "Created: %@\nApp version: %@ (%@)\nDevice: %s\n"
-         "iPadOS: %@ (%@)\nPhysical memory: %llu\nFree storage: %@\n",
+         "iPadOS: %@ (%@)\nPhysical memory: %llu\nFree storage: %@\n"
+         "Total storage: %@\nUptime: %.0f seconds\nThermal state: %ld\n"
+         "Low Power Mode: %@\nProtected data available: %@\n"
+         "Application state: %ld\nScreen bounds: %@\nNative bounds: %@\n"
+         "Screen scale: %.2f\nNative scale: %.2f\n",
         NSDate.date, bundleInfo[@"CFBundleShortVersionString"] ?: @"unknown",
         bundleInfo[@"CFBundleVersion"] ?: @"unknown", systemInfo.machine,
         NSProcessInfo.processInfo.operatingSystemVersionString, osBuild,
         (unsigned long long)NSProcessInfo.processInfo.physicalMemory,
-        fileSystem[NSFileSystemFreeSize] ?: @"unknown"];
+        fileSystem[NSFileSystemFreeSize] ?: @"unknown",
+        fileSystem[NSFileSystemSize] ?: @"unknown",
+        NSProcessInfo.processInfo.systemUptime,
+        (long)NSProcessInfo.processInfo.thermalState,
+        NSProcessInfo.processInfo.lowPowerModeEnabled ? @"yes" : @"no",
+        UIApplication.sharedApplication.protectedDataAvailable ? @"yes" : @"no",
+        (long)UIApplication.sharedApplication.applicationState,
+        NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
+        screen.scale, screen.nativeScale];
     VZAddEntry(handler, @"manifest.txt",
         [manifest dataUsingEncoding:NSUTF8StringEncoding]);
+    VZAddEntry(handler, @"installer/preflight.txt",
+        VZInstallerPreflightData());
+    VZAddEntry(handler, @"device/language-and-keyboards.txt",
+        VZLanguageAndKeyboardData());
+    VZAddEntry(handler, @"device/storage-and-mounts.txt", VZStorageData());
+    VZAddEntry(handler, @"device/network-interfaces.txt", VZNetworkData());
+    VZAddEntry(handler, @"device/dns/etc-resolv.conf",
+        VZBoundedFileData(@"/etc/resolv.conf"));
+    VZAddEntry(handler, @"device/dns/var-run-resolv.conf",
+        VZBoundedFileData(@"/var/run/resolv.conf"));
+    VZAddEntry(handler, @"jailbreak/environment.txt", VZBootstrapData());
+    VZAddEntry(handler, @"jailbreak/tweak-injection-files.txt",
+        VZTweakInventoryData());
+    NSString *dpkgQuery = VZFirstExecutablePath(
+        @[@"/var/jb/usr/bin/dpkg-query", @"/usr/bin/dpkg-query"]);
+    if (dpkgQuery) {
+        VZAddEntry(handler, @"jailbreak/packages.txt",
+            VZCommandOutput(dpkgQuery, @[@"-W",
+                @"-f=${Package}\t${Version}\t${Architecture}\\n"]));
+        VZAddEntry(handler, @"package/metadata.txt",
+            VZCommandOutput(dpkgQuery, @[@"-s", @"com.mac.virtual"]));
+    }
+    NSString *dpkg = VZFirstExecutablePath(
+        @[@"/var/jb/usr/bin/dpkg", @"/usr/bin/dpkg"]);
+    if (dpkg)
+        VZAddEntry(handler, @"package/verification.txt",
+            VZCommandOutput(dpkg, @[@"--verify", @"com.mac.virtual"]));
+    VZAddEntry(handler, @"package/runtime-paths.txt", VZRuntimePathData());
 
     NSData *settings = [NSPropertyListSerialization dataWithPropertyList:
         VZAppSettings.sharedSettings.dictionaryRepresentation
@@ -181,17 +590,45 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
     for (NSString *artifactPath in VZDiagnosticsInstallationPaths()) {
         NSDirectoryEnumerator *enumerator = [NSFileManager.defaultManager
             enumeratorAtPath:artifactPath];
+        NSMutableString *inventory = [NSMutableString string];
         for (NSString *relativePath in enumerator) {
-            NSString *extension = relativePath.pathExtension.lowercaseString;
-            if (![@[@"plist", @"log", @"txt"] containsObject:extension])
-                continue;
             NSString *path = [artifactPath stringByAppendingPathComponent:
                 relativePath];
+            struct stat info = {0};
+            if (lstat(path.fileSystemRepresentation, &info) != 0) {
+                [inventory appendFormat:@"unreadable %@: %s\n", relativePath,
+                    strerror(errno)];
+                continue;
+            }
+            if (S_ISDIR(info.st_mode)) {
+                [inventory appendFormat:@"directory %04o %@\n",
+                    info.st_mode & 07777, relativePath];
+                continue;
+            }
+            if (!S_ISREG(info.st_mode)) {
+                [inventory appendFormat:@"other %04o %lld %@\n",
+                    info.st_mode & 07777, (long long)info.st_size,
+                    relativePath];
+                continue;
+            }
+            [inventory appendFormat:@"file %04o %lld %@%@\n",
+                info.st_mode & 07777, (long long)info.st_size, relativePath,
+                info.st_size > (1LL << 20) ? @" (contents excluded)" : @""];
+            NSString *extension = relativePath.pathExtension.lowercaseString;
+            BOOL diagnosticText = [@[@"plist", @"log", @"txt"]
+                containsObject:extension];
+            if (!diagnosticText && info.st_size > (1LL << 20))
+                continue;
             NSString *archiveName = [NSString stringWithFormat:
                 @"restore/attempts/%@/%@", artifactPath.lastPathComponent,
                 relativePath];
             VZAddEntry(handler, archiveName, VZBoundedFileData(path));
         }
+        NSString *inventoryName = [NSString stringWithFormat:
+            @"restore/attempts/%@/inventory.txt",
+            artifactPath.lastPathComponent];
+        VZAddEntry(handler, inventoryName,
+            [inventory dataUsingEncoding:NSUTF8StringEncoding]);
     }
 }
 

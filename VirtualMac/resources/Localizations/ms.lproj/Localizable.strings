@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Lama";
 "%.0f%% complete" = "%.0f%% selesai";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · RAM %@ GB · %llu GB · %@%@";
 "%@ is not supported" = "%@ tidak disokong";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ mungkin mengalami masalah prestasi atau grafik. Untuk pengalaman terbaik, gunakan macOS Ventura, macOS Sonoma atau macOS Sequoia.\n\nJika kesan ketelusan menyebabkan masalah paparan, hidupkan Kurangkan Ketelusan dalam Seting Sistem > Kebolehcapaian > Paparan.";
 "%@ remaining" = "%@ lagi";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nMac Maya yang belum selesai disimpan dalam Fail Pemasangan Sementara sebagai %@. Mac ini boleh dipadamkan daripada Tetapan.";
 "%@\nState: %@\n%@\n\n" = "%@\nStatus: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Pemasangan macOS terdahulu tidak selesai. Anda boleh menyemak butirannya, menyimpannya untuk penyahpepijatan atau memadamkannya.";
+"A previous macOS installation did not finish." = "Pemasangan macOS sebelumnya tidak selesai.";
 "About" = "Perihal";
 "Accommodate Finger Double-Taps" = "Mudahkan dwiketik dengan jari";
 "Add Shared Folder" = "Tambah Folder Bersama";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Tidak Dapat Menyimpan";
 "Could Not Start Installer" = "Pemasang Tidak Dapat Dimulakan";
 "Couldn’t Export Diagnostics" = "Tidak Dapat Mengeksport Diagnostik";
+"Create Github Issue" = "Cipta laporan di Github";
 "Create Virtual Mac" = "Cipta Mac Maya";
 "Custom" = "Tersuai";
 "Debug Logging" = "Pengelogan nyahpepijat";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Pengelogan nyahpepijat telah didayakan. Anda boleh mematikannya kemudian dalam Tetapan.";
 "Delete" = "Padam";
 "Delete All" = "Padam Semua";
 "Delete Cached Install Images" = "Padam Imej Pemasangan yang Dicache";
 "Delete Cached Install Images?" = "Padam imej pemasangan yang dicache?";
-"Delete Incomplete Installation" = "Padam Pemasangan yang Belum Selesai";
 "Delete IPSW After Successful Installation" = "Padam IPSW Selepas Berjaya Pemasangan";
 "Delete or rename the existing Virtual Mac first." = "Padam atau ganti nama Mac maya yang ada terlebih dahulu.";
 "Delete Temporary Installation Files" = "Padam Fail Pemasangan Sementara";
 "Delete Temporary Installation Files?" = "Padam Fail Pemasangan Sementara?";
 "Delete Virtual Mac" = "Padam Mac maya";
 "Delete Virtual Mac?" = "Padam Mac maya?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Terangkan masalah, kemudian lampirkan ZIP diagnostik dan rakaman skrin. Jika Safari tidak dapat membuka Github, gunakan komputer.";
 "Developer Beta" = "Beta Pembangun";
 "Developers" = "Pembangun";
 "Disabled" = "Dinyahdayakan";
@@ -82,7 +83,6 @@
 "Display Height" = "Ketinggian Paparan";
 "Display Resolution" = "Resolusi Paparan";
 "Display Width" = "Lebar Paparan";
-"Done" = "Selesai";
 "Double-tap to hold or release this modifier" = "Ketuk dua kali untuk mengekalkan atau melepaskan kekunci pengubah ini";
 "Download Failed" = "Muat Turun Gagal";
 "Downloading macOS" = "Memuat turun macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Isi Tetingkap";
 "Fit in Window" = "Muat dalam Tetingkap";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Muat dalam Tetingkap memaparkan keseluruhan paparan. Penuhi Tetingkap memangkas bahagian tepi apabila bentuk jendela berbeza.";
+"Fix with Coding Agent" = "Baiki dengan ejen pengaturcaraan";
 "Force Shut Down" = "Paksa Matikan";
 "Force Shut Down Virtual Mac?" = "Paksa Matikan Mac maya?";
 "Full Screen" = "Skrin Penuh";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Input semasa Mac maya sedang berjalan";
 "Install %@" = "Pasang %@";
 "Install macOS" = "Pasang macOS";
-"Installation Details" = "Detail Pemasangan";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Pasang OpenSSH dan LLDB daripada Sileo, sambungkan iPad ke komputer, kemudian minta Codex atau Claude Code mendiagnosis dan membaiki masalah. Kongsi penyelesaiannya di Github.";
 "Installation Failed" = "Pemasangan Gagal";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Kemajuan pemasangan mungkin berhenti selama beberapa minit apabila Mac Maya memulakan persekitaran pemasangan. iPad akan kekal aktif.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Kemajuan pemasangan mungkin tidak berubah semasa macOS menyediakan peringkat pemasangan seterusnya. iPad akan kekal aktif.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Tiada Mac Maya yang sepadan dengan carian anda.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Pada masa ini hanya tersedia sekitar %llu GB. Imej cakera bersifat dinamik, tetapi pemasangan atau penggunaan kemudian boleh gagal apabila storan penuh.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Buka Pusat Kawalan, mulakan Rakaman Skrin, kemudian hasilkan semula masalah.";
+"Optional" = "Pilihan";
 "Options" = "Pilihan";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Selama lebih sedekad, orang ramai mengimpikan macOS dijalankan pada iPad. Hari ini, impian itu menjadi kenyataan. Cipta Mac maya untuk bermula.";
 "Pixels Per Inch" = "Piksel Per Inci";
@@ -158,10 +161,13 @@
 "Read Only" = "Hanya Baca";
 "Reading restore image…" = "Membaca imej pemulihan…";
 "Recommended macOS Release" = "Keluaran macOS yang Disyorkan";
+"Record the Problem" = "Rakam Masalah";
+"Record the Problem Again" = "Rakam Masalah Sekali Lagi";
 "Recover Networking After Sleep" = "Pulihkan Rangkaian Selepas Tidur";
 "Release" = "Keluaran";
 "Remove" = "Keluarkan";
 "Report Issue" = "Laporkan Isu";
+"Report This Problem" = "Laporkan Masalah Ini";
 "Reset" = "Tetapkan Semula";
 "Reset Settings" = "Tetapkan Semula Tetapan";
 "Reset Settings?" = "Tetapkan Semula Tetapan?";
@@ -169,6 +175,9 @@
 "Resources" = "Sumber";
 "Resume" = "Sambung";
 "Save" = "Simpan";
+"Save a ZIP file containing logs and crash reports." = "Simpan fail ZIP yang mengandungi log dan laporan ranap.";
+"Save Diagnostics to Files" = "Simpan Diagnostik ke Fail";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Rakaman skrin bermula selepas masalah berlaku, jadi rakaman tidak menangkap perkara yang terjadi.\n\nTeruskan rakaman, kemudian ulangi langkah yang menyebabkan masalah. Apabila laporan ini muncul lagi, simpan diagnostik dan lampirkan rakaman skrin serta fail ZIP diagnostik pada laporan Github anda.";
 "Search Virtual Mac" = "Cari Mac Maya";
 "Settings" = "tetapan";
 "Shared Folder" = "Folder Dikongsi";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Arkib diagnostik tidak boleh dibuat.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Nilai kemajuan pertama mungkin mengambil masa beberapa minit apabila Virtual Mac beralih daripada DFU kepada RestoreOS. iPad akan kekal aktif.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Mac maya yang belum selesai dan fail pemasangannya akan dipadam.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Imej pemasangan dan fail pemasangan sementara disimpan supaya kegagalan dapat didiagnosis. Anda boleh mengeksport diagnostik daripada Tetapan.";
 "The installer could not be started: %s" = "Pemasang tidak dapat dimulakan: %s";
 "The new Virtual Mac is ready to use." = "Mac maya baru siap digunakan.";
 "The partial restore image will be deleted." = "Imej pemulihan separa akan dipadam.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Pastikan iPad mempunyai ruang kosong yang mencukupi, kemudian cuba lagi.";
 "Version" = "Versi";
 "Video Encoding and Decoding Acceleration" = "Pecutan Pengekodan dan Penyahkodan Video";
-"View Details" = "Lihat Detail";
 "Virtual Mac" = "Mac Maya";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ tidak menyokong %@. Semak kemas kini dalam Sileo.";
 "Virtual Mac Controls" = "Kawalan Mac Maya";

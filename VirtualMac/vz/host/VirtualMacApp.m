@@ -108,13 +108,13 @@ static NSString *VZInstallationFailureExplanation(NSString *failure)
         [failure containsString:@"error: 100"]) {
         return VZL(@"Verify your iPad has sufficient free storage and try again.");
     }
-    return VZL(@"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings.");
+    return nil;
 }
 
-// On iPadOS 16.2, CoreUI's candidate bar artwork asks CoreImage for its legacy 
-// EAGL backend. Platform/unsandboxed apps receive a null GL entry point and 
-// crash in CI::GLContext before Virtual Mac code runs. CoreUI only requires 
-// an ordinary CIContext here, so use the supported Metal backend.
+// On iPadOS 15 and 16.2, CoreUI's candidate bar artwork can ask CoreImage for
+// its legacy EAGL backend. Platform/unsandboxed apps receive a null GL entry
+// point and crash in CI::GLContext before Virtual Mac code runs. CoreUI only
+// requires an ordinary CIContext here, so use the supported Metal backend.
 static id VZCoreUISharedMetalContext(id object, SEL selector) {
     (void)object; (void)selector;
     static CIContext *context;
@@ -126,9 +126,63 @@ static id VZCoreUISharedMetalContext(id object, SEL selector) {
     return context;
 }
 
-static void installIPadOS162KeyboardRenderingFix(void) {
-    if (![UIDevice.currentDevice.systemVersion hasPrefix:@"16.2"])
+static NSString *VZLatestKeyboardRenderingCrash(void) {
+    NSString *root = @"/var/mobile/Library/Logs/CrashReporter";
+    NSArray *directoryNames = [NSFileManager.defaultManager
+        contentsOfDirectoryAtPath:root error:nil];
+    NSMutableArray *candidates = [NSMutableArray array];
+    for (NSString *name in directoryNames) {
+        if ([name hasPrefix:@"VirtualMac-"] &&
+            [name.pathExtension.lowercaseString isEqualToString:@"ips"])
+            [candidates addObject:name];
+    }
+    NSArray *names = candidates;
+    names = [names sortedArrayUsingComparator:
+        ^NSComparisonResult(NSString *left, NSString *right) {
+            NSString *leftPath = [root stringByAppendingPathComponent:left];
+            NSString *rightPath = [root stringByAppendingPathComponent:right];
+            NSDate *leftDate = [[NSFileManager.defaultManager
+                attributesOfItemAtPath:leftPath error:nil]
+                fileModificationDate] ?: NSDate.distantPast;
+            NSDate *rightDate = [[NSFileManager.defaultManager
+                attributesOfItemAtPath:rightPath error:nil]
+                fileModificationDate] ?: NSDate.distantPast;
+            return [rightDate compare:leftDate];
+        }];
+    NSUInteger examined = 0;
+    for (NSString *name in names) {
+        if (++examined > 8)
+            break;
+        NSString *path = [root stringByAppendingPathComponent:name];
+        NSData *data = [NSData dataWithContentsOfFile:path
+            options:NSDataReadingMappedIfSafe error:nil];
+        NSString *report = data.length
+            ? [[[NSString alloc] initWithData:data
+                encoding:NSUTF8StringEncoding] autorelease] : nil;
+        if ([report containsString:@"CI::GLContext::GLContext"] &&
+            [report containsString:@"CUIShapeEffectStack sharedCIContext"])
+            return name;
+    }
+    return nil;
+}
+
+static void VZEnableKeyboardRenderingFixAfterCrash(void) {
+    static NSString * const processedCrashKey =
+        @"LastKeyboardRenderingCrashReport";
+    NSString *crash = VZLatestKeyboardRenderingCrash();
+    if (!crash.length || [crash isEqualToString:
+        [VZAppSettings.sharedSettings stringForKey:processedCrashKey]])
         return;
+    [VZAppSettings.sharedSettings setString:crash forKey:processedCrashKey];
+    [VZAppSettings.sharedSettings setBool:YES
+        forKey:VZIPadOS162KeyboardWorkaroundKey];
+    printf("[VirtualMac] enabled keyboard-rendering fix after crash %s\n",
+        crash.UTF8String);
+}
+
+static void installKeyboardRenderingFix(void) {
+    // This preference is either enabled explicitly or after the exact CoreUI
+    // crash is observed on a previous launch. Do not guess from the OS version.
     if (![VZAppSettings.sharedSettings
             boolForKey:VZIPadOS162KeyboardWorkaroundKey])
         return;
@@ -142,7 +196,7 @@ static void installIPadOS162KeyboardRenderingFix(void) {
     class_replaceMethod(object_getClass(shapeEffects),
         method_getName(method), (IMP)VZCoreUISharedMetalContext,
         method_getTypeEncoding(method));
-    printf("[VirtualMac] installed iPadOS 16.2 Metal keyboard-rendering fix\n");
+    printf("[VirtualMac] installed Metal keyboard-rendering fix\n");
 }
 
 static NSUInteger activePointerButtons(void) {
@@ -1721,11 +1775,22 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 @end
 
 @interface VZHUDView : UIView
+@property(nonatomic, assign) id menuTarget;
 - (instancetype)initWithTarget:(id)target;
 - (void)setContentOpacity:(CGFloat)opacity;
+- (void)refreshMenu;
 @end
 
 @implementation VZHUDView
+
+- (void)refreshMenu
+{
+    UIButton *button = (UIButton *)[self viewWithTag:1702];
+    if (!button || !self.menuTarget)
+        return;
+    button.menu = ((id(*)(id, SEL))objc_msgSend)(
+        self.menuTarget, NSSelectorFromString(@"hudMenu"));
+}
 
 - (void)setContentOpacity:(CGFloat)opacity
 {
@@ -1744,6 +1809,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 - (instancetype)initWithTarget:(id)target
 {
     if ((self = [super initWithFrame:CGRectZero])) {
+        self.menuTarget = target;
         // A small, solid translucent layer is considerably cheaper than a
         // UIVisualEffectView: no backdrop capture, blur, or offscreen effect
         // pass is introduced above the continuously updating PVG surface.
@@ -1766,6 +1832,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
                     forState:UIControlStateNormal];
             button.tintColor = UIColor.whiteColor;
             if ([item[@"menu"] boolValue]) {
+                button.tag = 1702;
                 button.menu = ((id(*)(id, SEL))objc_msgSend)(
                     target, NSSelectorFromString(@"hudMenu"));
                 button.showsMenuAsPrimaryAction = YES;
@@ -1856,6 +1923,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         gStatusLabel.hidden = !shouldShowStatusLabel();
     [self updateImmersivePresentation];
     [self updateHUDPosition];
+    [(VZHUDView *)gHUDView refreshMenu];
     [self updateHUDVisibility];
     updateDisplayGeometry();
     if (gTouchScrollRecognizer) {
@@ -1960,6 +2028,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
             [VZAppSettings.sharedSettings setString:placement[1]
                                               forKey:VZHUDCornerKey];
             [self updateHUDPosition];
+            [(VZHUDView *)gHUDView refreshMenu];
         }];
         move.state = [current isEqualToString:placement[1]]
             ? UIMenuElementStateOn : UIMenuElementStateOff;
@@ -2197,43 +2266,35 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         }
         if (interrupted.count) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
             400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:
-                interrupted.count == 1 ? VZL(@"Incomplete Installation") : VZL(@"Incomplete Installations")
-                message:VZL(@"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it.")
-                preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Done")
-                style:UIAlertActionStyleCancel handler:nil]];
-            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"View Details") style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *action) {
-                    (void)action;
-                    NSMutableString *details = [NSMutableString string];
-                    for (NSDictionary *item in interrupted) {
-                        NSDictionary *record = item[@"record"];
-                        [details appendFormat:VZL(@"%@\nState: %@\n%@\n\n"),
-                            record[@"Name"] ?: [item[@"path"] lastPathComponent],
-                            record[@"State"] ?: VZL(@"Unknown"), item[@"path"]];
-                    }
-                    VZFailureDetailsViewController *controller =
-                        [[[VZFailureDetailsViewController alloc]
-                            initWithTitle:VZL(@"Installation Details")
-                                   details:details] autorelease];
-                    UINavigationController *navigation =
-                        [[[UINavigationController alloc]
-                            initWithRootViewController:controller] autorelease];
-                    navigation.modalPresentationStyle =
-                        UIModalPresentationPageSheet;
-                    navigation.preferredContentSize = CGSizeMake(640, 620);
-                    [self presentViewController:navigation animated:YES
-                        completion:nil];
-                }]];
-            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Delete All") style:UIAlertActionStyleDestructive
-                handler:^(UIAlertAction *action) {
-                    (void)action;
+            NSMutableString *details = [NSMutableString string];
+            for (NSDictionary *item in interrupted) {
+                NSDictionary *record = item[@"record"];
+                [details appendFormat:VZL(@"%@\nState: %@\n%@\n\n"),
+                    record[@"Name"] ?: [item[@"path"] lastPathComponent],
+                    record[@"State"] ?: VZL(@"Unknown"), item[@"path"]];
+            }
+            VZFailureDetailsViewController *controller =
+                [[[VZFailureDetailsViewController alloc]
+                    initWithTitle:interrupted.count == 1
+                        ? VZL(@"Incomplete Installation")
+                        : VZL(@"Incomplete Installations")
+                    message:VZL(@"A previous macOS installation did not finish.")
+                    details:details
+                    options:VZFailureSupportOptionNone]
+                    autorelease];
+            [controller setDestructiveActionTitle:VZL(@"Delete All")
+                handler:^{
                     NSMutableArray *paths = [NSMutableArray array];
-                    for (NSDictionary *item in interrupted) [paths addObject:item[@"path"]];
+                    for (NSDictionary *item in interrupted)
+                        [paths addObject:item[@"path"]];
                     VZRemovePaths(paths);
-                }]];
-            [self presentViewController:alert animated:YES completion:nil];
+                }];
+            UINavigationController *navigation =
+                [[[UINavigationController alloc]
+                    initWithRootViewController:controller] autorelease];
+            navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+            navigation.preferredContentSize = CGSizeMake(640, 720);
+            [self presentViewController:navigation animated:YES completion:nil];
         });
     }
 }
@@ -2308,14 +2369,10 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     NSURL *persistentURL = persistentRestoreImageURL(url, &imageError);
     [url stopAccessingSecurityScopedResource];
     if (!persistentURL) {
-        UIAlertController *failure = [UIAlertController
-            alertControllerWithTitle:VZL(@"Could Not Prepare Restore Image")
-                             message:imageError.localizedDescription
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [failure addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-            style:UIAlertActionStyleDefault handler:nil]];
-        VZAddFailureSupportActions(failure);
-        [self presentViewController:failure animated:YES completion:nil];
+        VZPresentFailureReport(self,
+            VZL(@"Could Not Prepare Restore Image"),
+            imageError.localizedDescription, imageError.debugDescription,
+            VZFailureSupportOptionNone);
         return;
     }
     url = persistentURL;
@@ -2338,7 +2395,6 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                       preferredStyle:UIAlertControllerStyleAlert];
         [exists addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
             style:UIAlertActionStyleDefault handler:nil]];
-        VZAddFailureSupportActions(exists);
         [self presentViewController:exists animated:YES completion:nil];
         return;
     }
@@ -2378,15 +2434,14 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         VZWriteInstallationAttempt(attemptPath, @"failed", @{
             @"Failure": [NSString stringWithFormat:@"Could not start installer: %s", strerror(result)]
         });
-        UIAlertController *failure = [UIAlertController
-            alertControllerWithTitle:VZL(@"Could Not Start Installer")
-                             message:[NSString stringWithFormat:
-                                VZL(@"The installer could not be started: %s"), strerror(result)]
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [failure addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-            style:UIAlertActionStyleDefault handler:nil]];
-        VZAddFailureSupportActions(failure);
-        [self presentViewController:failure animated:YES completion:nil];
+        VZPresentFailureReport(self, VZL(@"Could Not Start Installer"),
+            [NSString stringWithFormat:
+                VZL(@"The installer could not be started: %s"),
+                strerror(result)],
+            [NSString stringWithFormat:
+                @"posix_spawn(install-launcher)=%d (%s)",
+                result, strerror(result)],
+            VZFailureSupportOptionNone);
         return;
     }
     printf("[VirtualMac] installation launcher pid=%d ipsw=%s bundle=%s\n",
@@ -2499,9 +2554,17 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                 self.installationTimer = nil;
                 self.installationProcess = 0;
                 [self presentVMLibrary];
-                if (writeError)
+                if (writeError) {
                     setStatus([NSString stringWithFormat:
                         VZL(@"Installed, but settings save failed: %@"), writeError]);
+                    VZPresentFailureReport(self, VZL(@"Could Not Save"),
+                        [NSString stringWithFormat:
+                            VZL(@"Installed, but settings save failed: %@"),
+                            writeError.localizedDescription],
+                        writeError.debugDescription,
+                        VZFailureSupportOptionNone);
+                    return;
+                }
                 UIAlertController *success = [UIAlertController
                     alertControllerWithTitle:VZL(@"macOS Installed")
                                      message:VZL(@"The new Virtual Mac is ready to use.")
@@ -2548,45 +2611,25 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                 }
             }
             NSString *explanation = VZInstallationFailureExplanation(tail);
-            NSString *details = archivePath
-                ? [NSString stringWithFormat:
-                    VZL(@"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings."),
-                    tail, explanation, archivePath.lastPathComponent]
-                : [NSString stringWithFormat:@"%@\n\n%@", tail, explanation];
-            NSString *failedAttempt = [[self.installationAttemptPath copy] autorelease];
             self.installationController.cancellationHandler = nil;
             [self.installationController.navigationController dismissViewControllerAnimated:YES completion:^{
                 self.installationController = nil;
                 self.installationTimer = nil;
                 self.installationProcess = 0;
-                UIAlertController *failureAlert = [UIAlertController
-                    alertControllerWithTitle:VZL(@"Installation Failed")
-                                     message:explanation
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [failureAlert addAction:[UIAlertAction actionWithTitle:VZL(@"Done")
-                    style:UIAlertActionStyleCancel handler:nil]];
-                [failureAlert addAction:[UIAlertAction actionWithTitle:VZL(@"View Details")
-                    style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                        (void)action;
-                        VZFailureDetailsViewController *controller =
-                            [[[VZFailureDetailsViewController alloc]
-                                initWithTitle:VZL(@"Installation Details")
-                                       details:details] autorelease];
-                        UINavigationController *navigation =
-                            [[[UINavigationController alloc]
-                                initWithRootViewController:controller]
-                                autorelease];
-                        navigation.modalPresentationStyle =
-                            UIModalPresentationPageSheet;
-                        navigation.preferredContentSize = CGSizeMake(640, 620);
-                        [self presentViewController:navigation animated:YES
-                            completion:nil];
-                }]];
-                [failureAlert addAction:[UIAlertAction actionWithTitle:VZL(@"Delete Incomplete Installation")
-                    style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-                    (void)action; VZRemovePaths(@[failedAttempt]);
-                }]];
-                [self presentViewController:failureAlert animated:YES completion:nil];
+                VZFailureDetailsViewController *controller =
+                    [[[VZFailureDetailsViewController alloc]
+                        initWithTitle:VZL(@"Installation Failed")
+                        message:explanation details:tail
+                        options:VZFailureSupportOptionNone]
+                        autorelease];
+                UINavigationController *navigation =
+                    [[[UINavigationController alloc]
+                        initWithRootViewController:controller] autorelease];
+                navigation.modalPresentationStyle =
+                    UIModalPresentationPageSheet;
+                navigation.preferredContentSize = CGSizeMake(640, 720);
+                [self presentViewController:navigation animated:YES
+                    completion:nil];
             }];
             return;
         }
@@ -2695,14 +2738,10 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     self.activeVMBundlePath = nil;
     [self presentVMLibrary];
     if (error) {
-        UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:VZL(@"Virtual Mac Stopped")
-                             message:error.localizedDescription
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-            style:UIAlertActionStyleDefault handler:nil]];
-        VZAddFailureSupportActions(alert);
-        [self presentViewController:alert animated:YES completion:nil];
+        VZPresentFailureReport(self, VZL(@"Virtual Mac Stopped"),
+            error.localizedDescription, error.debugDescription,
+            VZFailureSupportOptionSuggestDebugLogging |
+            VZFailureSupportOptionSuggestScreenRecording);
     }
 }
 
@@ -3787,7 +3826,8 @@ static void startVirtualMachine(UIView *container, id delegate,
     freopen("/tmp/VirtualMac.log", "a", stdout);
     freopen("/tmp/VirtualMac.log", "a", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
-    installIPadOS162KeyboardRenderingFix();
+    VZEnableKeyboardRenderingFixAfterCrash();
+    installKeyboardRenderingFix();
     installShellShortcutRelay();
 
     self.window = [[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]

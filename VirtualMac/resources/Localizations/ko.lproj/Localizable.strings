@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · 레거시";
 "%.0f%% complete" = "%.0f%% 완료";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@GB RAM · %lluGB · %@%@";
 "%@ is not supported" = "%@은(는) 지원되지 않음";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@에서 성능 또는 그래픽 문제가 발생할 수 있습니다. 최상의 경험을 위해 macOS Ventura, macOS Sonoma 또는 macOS Sequoia를 사용하십시오.\n\n투명 효과로 화면 문제가 발생하면 시스템 설정 > 손쉬운 사용 > 디스플레이에서 투명도 줄이기를 켜십시오.";
 "%@ remaining" = "%@ 남음";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\n완료되지 않은 가상 Mac은 임시 설치 파일에 %@ 이름으로 보관되었습니다. 설정에서 삭제할 수 있습니다.";
 "%@\nState: %@\n%@\n\n" = "%@\n상태: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "이전 macOS 설치가 완료되지 않았습니다. 세부사항을 확인하거나, 디버깅용으로 보관하거나, 삭제할 수 있습니다.";
+"A previous macOS installation did not finish." = "이전 macOS 설치가 완료되지 않았습니다.";
 "About" = "정보";
 "Accommodate Finger Double-Taps" = "손가락 이중 탭 보정";
 "Add Shared Folder" = "공유 폴더 추가";
@@ -58,20 +57,22 @@
 "Could Not Save" = "저장할 수 없음";
 "Could Not Start Installer" = "설치 프로그램을 시작할 수 없음";
 "Couldn’t Export Diagnostics" = "진단을 내보낼 수 없음";
+"Create Github Issue" = "Github 문제 신고";
 "Create Virtual Mac" = "가상 Mac 생성";
 "Custom" = "사용자 지정";
 "Debug Logging" = "디버그 기록";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "디버그 기록이 활성화되었습니다. 나중에 설정에서 끌 수 있습니다.";
 "Delete" = "제거";
 "Delete All" = "모두 삭제";
 "Delete Cached Install Images" = "캐시된 설치 이미지 삭제";
 "Delete Cached Install Images?" = "캐시된 설치 이미지를 삭제하시겠습니까?";
-"Delete Incomplete Installation" = "완료되지 않은 설치 삭제";
 "Delete IPSW After Successful Installation" = "설치 성공 후 IPSW 삭제";
 "Delete or rename the existing Virtual Mac first." = "기존 가상 Mac을 먼저 삭제하거나 이름을 변경하십시오.";
 "Delete Temporary Installation Files" = "임시 설치 파일 삭제";
 "Delete Temporary Installation Files?" = "임시 설치 파일을 삭제하시겠습니까?";
 "Delete Virtual Mac" = "가상 Mac 삭제";
 "Delete Virtual Mac?" = "가상 Mac을 삭제하시겠습니까?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "문제를 설명한 다음 진단 ZIP과 화면 기록을 첨부하십시오. Safari에서 Github을 열 수 없으면 컴퓨터를 사용하십시오.";
 "Developer Beta" = "개발자 베타";
 "Developers" = "개발자";
 "Disabled" = "비활성화";
@@ -82,7 +83,6 @@
 "Display Height" = "디스플레이 높이";
 "Display Resolution" = "디스플레이 해상도";
 "Display Width" = "디스플레이 너비";
-"Done" = "완료";
 "Double-tap to hold or release this modifier" = "이 보조 키를 고정하거나 해제하려면 이중 탭";
 "Download Failed" = "다운로드 실패";
 "Downloading macOS" = "macOS 다운로드 중";
@@ -95,6 +95,7 @@
 "Fill Window" = "윈도우 채우기";
 "Fit in Window" = "윈도우에 맞추기";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "윈도우에 맞추기는 전체 화면을 표시합니다. 윈도우 채우기는 윈도우 비율이 다르면 가장자리를 자릅니다.";
+"Fix with Coding Agent" = "코딩 에이전트로 해결";
 "Force Shut Down" = "강제 종료";
 "Force Shut Down Virtual Mac?" = "가상 Mac을 강제로 종료하시겠습니까?";
 "Full Screen" = "전체 화면";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "가상 Mac 실행 중 입력";
 "Install %@" = "%@ 설치";
 "Install macOS" = "macOS 설치";
-"Installation Details" = "설치 세부사항";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Sileo에서 OpenSSH와 LLDB를 설치하고 iPad를 컴퓨터에 연결한 다음 Codex 또는 Claude Code에 문제 진단과 해결을 요청하십시오. 해결 방법을 Github에 공유하십시오.";
 "Installation Failed" = "설치 실패";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "가상 Mac이 설치 환경을 시작하는 동안 설치 진행률이 몇 분간 멈출 수 있습니다. iPad가 잠자기 상태로 전환되지 않습니다.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "macOS가 다음 설치 단계를 준비하는 동안 설치 진행률이 변하지 않을 수 있습니다. iPad가 잠자기 상태로 전환되지 않습니다.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "검색과 일치하는 가상 Mac이 없습니다.";
 "OK" = "확인";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "현재 약 %lluGB만 사용할 수 있습니다. 디스크 이미지는 희소 이미지이지만 저장 공간이 가득 차면 설치 또는 이후 사용이 실패할 수 있습니다.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "제어 센터를 열고 화면 기록을 시작한 다음 문제를 재현하십시오.";
+"Optional" = "선택 사항";
 "Options" = "옵션";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "10년 넘게 사람들은 iPad에서 macOS를 실행하는 것을 꿈꿔 왔습니다. 오늘 그 꿈이 이루어집니다. 가상 Mac을 생성하여 시작하십시오.";
 "Pixels Per Inch" = "인치당 픽셀";
@@ -158,10 +161,13 @@
 "Read Only" = "읽기 전용";
 "Reading restore image…" = "복원 이미지 읽는 중…";
 "Recommended macOS Release" = "권장macOS 릴리스";
+"Record the Problem" = "문제 기록";
+"Record the Problem Again" = "문제 다시 기록";
 "Recover Networking After Sleep" = "잠자기에서 깬 후 네트워크 복구";
 "Release" = "릴리스";
 "Remove" = "제거";
 "Report Issue" = "문제 보고";
+"Report This Problem" = "이 문제 신고";
 "Reset" = "리셋";
 "Reset Settings" = "설정 재설정";
 "Reset Settings?" = "설정을 재설정하시겠습니까?";
@@ -169,6 +175,9 @@
 "Resources" = "리소스";
 "Resume" = "재개";
 "Save" = "저장";
+"Save a ZIP file containing logs and crash reports." = "로그와 충돌 보고서가 포함된 ZIP 파일을 저장합니다.";
+"Save Diagnostics to Files" = "진단 정보를 파일에 저장";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "문제가 발생한 후 화면 기록이 시작되어 당시 상황이 기록되지 않았습니다.\n\n기록을 계속한 상태로 문제를 일으킨 단계를 반복하십시오. 이 보고서가 다시 나타나면 진단을 저장하고 화면 기록과 진단 ZIP을 모두 Github 문제에 첨부하십시오.";
 "Search Virtual Mac" = "가상 Mac 검색";
 "Settings" = "설정";
 "Shared Folder" = "공유 폴더";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "진단 아카이브를 생성할 수 없습니다.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "가상 Mac이 DFU에서 RestoreOS로 전환되는 동안 첫 진행률이 표시되기까지 몇 분이 걸릴 수 있습니다. iPad가 깨어 있습니다.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "완료되지 않은 가상 Mac과 설치 파일이 삭제됩니다.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "실패 원인을 진단할 수 있도록 설치 이미지와 임시 설치 파일을 보관했습니다. 설정에서 진단 정보를 내보낼 수 있습니다.";
 "The installer could not be started: %s" = "설치 프로그램을 시작할 수 없습니다: %s";
 "The new Virtual Mac is ready to use." = "새 가상 Mac을 사용할 준비가 되었습니다.";
 "The partial restore image will be deleted." = "일부만 받은 복원 이미지가 삭제됩니다.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "iPad에 충분한 여유 공간이 있는지 확인하고 다시 시도하십시오.";
 "Version" = "버전";
 "Video Encoding and Decoding Acceleration" = "비디오 인코딩 및 디코딩 가속";
-"View Details" = "세부사항 보기";
 "Virtual Mac" = "가상 Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@은(는) %@을(를) 지원하지 않습니다. Sileo에서 업데이트를 확인하십시오.";
 "Virtual Mac Controls" = "가상 Mac 제어기";

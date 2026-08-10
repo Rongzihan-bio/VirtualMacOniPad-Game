@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Vanha";
 "%.0f%% complete" = "%.0f %% valmis";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ Gt RAM · %llu Gt · %@%@";
 "%@ is not supported" = "%@:ää ei tueta";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@:ssä voi esiintyä suorituskyky- tai grafiikkaongelmia. Parhaan käyttökokemuksen saat käyttämällä macOS Venturaa, macOS Sonomaa tai macOS Sequoiaa.\n\nJos läpinäkyvyystehosteet aiheuttavat näyttöongelmia, laita Vähennä läpinäkyvyyttä päälle kohdassa Järjestelmäasetukset > Käyttöapu > Näyttö.";
 "%@ remaining" = "%@ jäljellä";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nKeskeneräinen virtuaalinen Mac säilytettiin väliaikaisissa asennustiedostoissa nimellä %@. Sen voi poistaa Asetuksissa.";
 "%@\nState: %@\n%@\n\n" = "%@\nTila: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Edellinen macOS-asennus ei valmistunut. Voit tarkistaa tiedot, säilyttää sen vianmääritystä varten tai poistaa sen.";
+"A previous macOS installation did not finish." = "Aiempi macOS-asennus ei valmistunut.";
 "About" = "Tietoja";
 "Accommodate Finger Double-Taps" = "Helpota kaksoisnapautusta sormella";
 "Add Shared Folder" = "Lisää jaettu kansio";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Tallennus ei onnistunut";
 "Could Not Start Installer" = "Asennusohjelmaa ei voitu käynnistää";
 "Couldn’t Export Diagnostics" = "Diagnostiikkaa ei voitu viedä";
+"Create Github Issue" = "Luo ilmoitus Githubiin";
 "Create Virtual Mac" = "Luo virtuaalinen Mac";
 "Custom" = "Mukautettu";
 "Debug Logging" = "Virheenkorjausloki";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Virheenkorjausloki on otettu käyttöön. Voit poistaa sen myöhemmin käytöstä Asetuksissa.";
 "Delete" = "Poista";
 "Delete All" = "Poista kaikki";
 "Delete Cached Install Images" = "Poista välimuistissa olevat asennuslevykuvat";
 "Delete Cached Install Images?" = "Poistetaanko välimuistissa olevat asennuslevykuvat?";
-"Delete Incomplete Installation" = "Poista keskeneräinen asennus";
 "Delete IPSW After Successful Installation" = "Poista IPSW onnistuneen asennuksen jälkeen";
 "Delete or rename the existing Virtual Mac first." = "Poista nykyinen virtuaalinen Mac tai nimeä se ensin uudelleen.";
 "Delete Temporary Installation Files" = "Poista väliaikaiset asennustiedostot";
 "Delete Temporary Installation Files?" = "Poistetaanko väliaikaiset asennustiedostot?";
 "Delete Virtual Mac" = "Poista virtuaalinen Mac";
 "Delete Virtual Mac?" = "Poistetaanko virtuaalinen Mac?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Kuvaile ongelma ja liitä sitten diagnostiikan ZIP-tiedosto ja näyttötallenne. Jos Safari ei pysty avaamaan Githubia, käytä tietokonetta.";
 "Developer Beta" = "Kehittäjäbeta";
 "Developers" = "Kehittäjät";
 "Disabled" = "Pois käytöstä";
@@ -82,7 +83,6 @@
 "Display Height" = "Näytön korkeus";
 "Display Resolution" = "Näytön tarkkuus";
 "Display Width" = "Näytön leveys";
-"Done" = "Valmis";
 "Double-tap to hold or release this modifier" = "Lukitse tai vapauta tämä muuntonäppäin kaksoisnapauttamalla";
 "Download Failed" = "Lataus epäonnistui";
 "Downloading macOS" = "Ladataan macOS:ää";
@@ -95,6 +95,7 @@
 "Fill Window" = "Täytä ikkuna";
 "Fit in Window" = "Sovita ikkunaan";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Sovita ikkunaan näyttää koko näytön. Täytä ikkuna rajaa reunat, jos ikkuna on eri muotoinen.";
+"Fix with Coding Agent" = "Korjaa koodausagentin avulla";
 "Force Shut Down" = "Pakota sammutus";
 "Force Shut Down Virtual Mac?" = "Pakotetaanko virtuaalisen Macin sammutus?";
 "Full Screen" = "Koko näyttö";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Syöttö virtuaalisen Macin ollessa käynnissä";
 "Install %@" = "Asenna %@";
 "Install macOS" = "Asenna macOS";
-"Installation Details" = "Asennuksen tiedot";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Asenna OpenSSH ja LLDB Sileosta, yhdistä iPad tietokoneeseen ja pyydä Codexia tai Claude Codea diagnosoimaan ja korjaamaan ongelma. Jaa ratkaisu Githubissa.";
 "Installation Failed" = "Asennus epäonnistui";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Asennuksen eteneminen voi pysähtyä useiksi minuuteiksi, kun Virtuaalinen Mac käynnistää asennusympäristöä. iPad pysyy hereillä.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Asennuksen eteneminen voi pysyä muuttumattomana, kun macOS valmistelee seuraavaa asennusvaihetta. iPad pysyy hereillä.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Yksikään virtuaalinen Mac ei vastaa hakuasi.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Tallennustilaa on nyt vain noin %llu Gt. Levykuva on dynaaminen, mutta asennus tai myöhempi käyttö voi epäonnistua tallennustilan täyttyessä.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Avaa Ohjauskeskus, aloita näyttötallennus ja toista sitten ongelma.";
+"Optional" = "Valinnainen";
 "Options" = "Valinnat";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Ihmiset ovat haaveilleet macOS:n käyttämisestä iPadilla yli vuosikymmenen ajan. Tänään tuo unelma toteutuu. Aloita luomalla virtuaalinen Mac.";
 "Pixels Per Inch" = "Pikseliä tuumalla";
@@ -158,10 +161,13 @@
 "Read Only" = "Lue ainoastaan";
 "Reading restore image…" = "Palautuskuvaa luetaan…";
 "Recommended macOS Release" = "Suositeltu macOS-julkaisu";
+"Record the Problem" = "Tallenna ongelma";
+"Record the Problem Again" = "Tallenna ongelma uudelleen";
 "Recover Networking After Sleep" = "Palauta verkkoyhteys nukkumisen jälkeen";
 "Release" = "Julkaisu";
 "Remove" = "Poista";
 "Report Issue" = "Ilmoita ongelmasta";
+"Report This Problem" = "Ilmoita tästä ongelmasta";
 "Reset" = "Nollaa";
 "Reset Settings" = "Palauta asetukset";
 "Reset Settings?" = "Nollataanko asetukset?";
@@ -169,6 +175,9 @@
 "Resources" = "Resurssit";
 "Resume" = "Jatka";
 "Save" = "Tallenna";
+"Save a ZIP file containing logs and crash reports." = "Tallenna lokit ja kaatumisraportit sisältävä ZIP-tiedosto.";
+"Save Diagnostics to Files" = "Tallenna diagnostiikka Tiedostot-appiin";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Näytön tallennus alkoi vasta ongelman ilmenemisen jälkeen, joten tapahtunutta ei tallennettu.\n\nJatka tallennusta ja toista ongelman aiheuttaneet vaiheet. Kun tämä raportti tulee uudelleen näkyviin, tallenna diagnostiikka ja liitä sekä näytön tallenne että diagnostiikan ZIP-tiedosto Github-ilmoitukseen.";
 "Search Virtual Mac" = "Etsi virtuaalista Macia";
 "Settings" = "Asetukset";
 "Shared Folder" = "Jaettu kansio";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Diagnostiikka-arkistoa ei voitu luoda.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Ensimmäinen edistymisarvo voi kestää useita minuutteja virtuaalisen Macin siirtyessä DFU:sta RestoreOS:ään. iPad pysyy hereillä.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Keskeneräinen virtuaalinen Mac ja sen asennustiedostot poistetaan.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Asennuskuva ja väliaikaiset asennustiedostot säilytettiin vian diagnosointia varten. Voit viedä diagnostiikan Asetuksista.";
 "The installer could not be started: %s" = "Asennusohjelmaa ei voitu käynnistää: %s";
 "The new Virtual Mac is ready to use." = "Uusi virtuaalinen Mac on käyttövalmis.";
 "The partial restore image will be deleted." = "Osittain ladattu palautuskuva poistetaan.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Varmista, että iPadilla on riittävästi vapaata tilaa, ja yritä uudelleen.";
 "Version" = "Versio";
 "Video Encoding and Decoding Acceleration" = "Videon koodauksen ja dekoodauksen kiihdytys";
-"View Details" = "Näytä tiedot";
 "Virtual Mac" = "Virtuaalinen Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ ei tue %@:ää. Tarkista päivitykset Sileosta.";
 "Virtual Mac Controls" = "Virtuaalisen Macin säätimet";

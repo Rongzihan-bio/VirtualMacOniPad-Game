@@ -35,7 +35,8 @@ static NSDictionary *gSettings;
 static BOOL VZSettingEnabled(NSString *key)
 {
     id value = gSettings[key];
-    if (value)
+    if ([value isKindOfClass:NSNumber.class] ||
+        [value isKindOfClass:NSString.class])
         return [value boolValue];
     // Match the app's defaults exactly. Shortcut capture is the only
     // SpringBoard behavior enabled until the user opts in; edge and

@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Устаревшая";
 "%.0f%% complete" = "Выполнено: %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ ЦП · %@ ГБ ОЗУ · %llu ГБ · %@%@";
 "%@ is not supported" = "%@ не поддерживается";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "В %@ возможны проблемы с производительностью или графикой. Для наилучшей работы используйте macOS Ventura, macOS Sonoma или macOS Sequoia.\n\nЕсли эффекты прозрачности вызывают проблемы с отображением, включите «Уменьшение прозрачности» в разделе «Системные настройки» > «Универсальный доступ» > «Дисплей».";
 "%@ remaining" = "Осталось: %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nНеполный виртуальный Mac сохранён во «Временных файлах установки» как %@. Его можно удалить в Настройках.";
 "%@\nState: %@\n%@\n\n" = "%@\nСостояние: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Предыдущая установка macOS не завершена. Можно просмотреть сведения, сохранить её для отладки или удалить.";
+"A previous macOS installation did not finish." = "Предыдущая установка macOS не была завершена.";
 "About" = "Об этом приложении";
 "Accommodate Finger Double-Taps" = "Упростить двойное касание пальцем";
 "Add Shared Folder" = "Добавить общую папку";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Не удалось сохранить";
 "Could Not Start Installer" = "Не удалось запустить установщик";
 "Couldn’t Export Diagnostics" = "Не удалось экспортировать диагностику";
+"Create Github Issue" = "Создать обращение на Github";
 "Create Virtual Mac" = "Создать Виртуальный Mac";
 "Custom" = "Пользовательская";
 "Debug Logging" = "Ведение журнала отладки";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Ведение журнала отладки включено. Его можно отключить позже в Настройках.";
 "Delete" = "Удалить";
 "Delete All" = "Удалить всё";
 "Delete Cached Install Images" = "Удалить кэшированные образы установки";
 "Delete Cached Install Images?" = "Удалить кэшированные образы установки?";
-"Delete Incomplete Installation" = "Удалить незавершённую установку";
 "Delete IPSW After Successful Installation" = "Удалить IPSW после успешной установки";
 "Delete or rename the existing Virtual Mac first." = "Сначала удалите или переименуйте существующий виртуальный Mac.";
 "Delete Temporary Installation Files" = "Удалить временные файлы установки";
 "Delete Temporary Installation Files?" = "Удалить временные файлы установки?";
 "Delete Virtual Mac" = "Удалить виртуальный Mac";
 "Delete Virtual Mac?" = "Удалить виртуальный Mac?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Опишите проблему, затем прикрепите ZIP-файл диагностики и запись экрана. Если Safari не открывает Github, воспользуйтесь компьютером.";
 "Developer Beta" = "Бета-версия для разработчиков";
 "Developers" = "Разработчики";
 "Disabled" = "Отключено";
@@ -82,7 +83,6 @@
 "Display Height" = "Высота дисплея";
 "Display Resolution" = "Разрешение дисплея";
 "Display Width" = "Ширина дисплея";
-"Done" = "Готово";
 "Double-tap to hold or release this modifier" = "Дважды коснитесь, чтобы зафиксировать или отпустить эту клавишу-модификатор";
 "Download Failed" = "Сбой загрузки";
 "Downloading macOS" = "Загрузка macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Заполнить окно";
 "Fit in Window" = "Вписать в окно";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "«Вписать в окно» показывает весь дисплей. «Заполнить окно» обрезает края, если форма окна отличается.";
+"Fix with Coding Agent" = "Исправить с помощью агента программирования";
 "Force Shut Down" = "Принудительно выключить";
 "Force Shut Down Virtual Mac?" = "Принудительно выключить виртуальный Mac?";
 "Full Screen" = "Во весь экран";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Ввод во время работы виртуального Mac";
 "Install %@" = "Установить %@";
 "Install macOS" = "Установить macOS";
-"Installation Details" = "Сведения об установке";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Установите OpenSSH и LLDB из Sileo, подключите iPad к компьютеру и попросите Codex или Claude Code диагностировать и устранить проблему. Опубликуйте решение на Github.";
 "Installation Failed" = "Сбой установки";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Ход установки может остановиться на несколько минут, пока Виртуальный Mac запускает среду установки. iPad не перейдёт в режим сна.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Ход установки может не меняться, пока macOS подготавливает следующий этап. iPad не перейдёт в режим сна.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Ни один виртуальный Mac не соответствует поиску.";
 "OK" = "ОК";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Сейчас доступно только около %llu ГБ. Образ диска динамический, но установка или дальнейшее использование могут завершиться ошибкой при заполнении хранилища.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Откройте Пункт управления, начните запись экрана, а затем воспроизведите проблему.";
+"Optional" = "Необязательно";
 "Options" = "Параметры";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Более десяти лет люди мечтали запустить macOS на iPad. Сегодня эта мечта сбывается. Чтобы начать, создайте виртуальный Mac.";
 "Pixels Per Inch" = "Пикселей на дюйм";
@@ -158,10 +161,13 @@
 "Read Only" = "Только для чтения";
 "Reading restore image…" = "Чтение образа восстановления…";
 "Recommended macOS Release" = "Рекомендуемый выпуск macOS";
+"Record the Problem" = "Записать проблему";
+"Record the Problem Again" = "Запишите проблему еще раз";
 "Recover Networking After Sleep" = "Восстановление сети после сна";
 "Release" = "Выпуск";
 "Remove" = "Удалить";
 "Report Issue" = "Сообщить о проблеме";
+"Report This Problem" = "Сообщить об этой проблеме";
 "Reset" = "Сбросить";
 "Reset Settings" = "Сбросить настройки";
 "Reset Settings?" = "Сбросить настройки?";
@@ -169,6 +175,9 @@
 "Resources" = "Ресурсы";
 "Resume" = "Возобновить";
 "Save" = "Сохранить";
+"Save a ZIP file containing logs and crash reports." = "Сохраните ZIP-файл с журналами и отчетами о сбоях.";
+"Save Diagnostics to Files" = "Сохранить диагностику в «Файлы»";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Запись экрана началась после возникновения проблемы, поэтому произошедшее не было записано.\n\nПродолжайте запись и повторите действия, вызвавшие проблему. Когда этот отчет появится снова, сохраните диагностику и прикрепите к обращению на Github запись экрана и ZIP-архив диагностики.";
 "Search Virtual Mac" = "Найти Виртуальный Mac";
 "Settings" = "Настройки";
 "Shared Folder" = "Общая папка";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Не удалось создать архив диагностики.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Первое значение хода выполнения может появиться через несколько минут, пока виртуальный Mac переходит из DFU в RestoreOS. iPad не перейдёт в режим сна.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Незавершённый виртуальный Mac и его установочные файлы будут удалены.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Установочный образ и временные файлы установки сохранены для диагностики сбоя. Диагностику можно экспортировать в Настройках.";
 "The installer could not be started: %s" = "Не удалось запустить программу установки: %s";
 "The new Virtual Mac is ready to use." = "Новый виртуальный Mac готов к работе.";
 "The partial restore image will be deleted." = "Частично загруженный образ восстановления будет удалён.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Убедитесь, что на iPad достаточно свободного места, и повторите попытку.";
 "Version" = "Версия";
 "Video Encoding and Decoding Acceleration" = "Ускорение кодирования и декодирования видео";
-"View Details" = "Подробнее";
 "Virtual Mac" = "Виртуальный Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ не поддерживает %@. Проверьте наличие обновлений в Sileo.";
 "Virtual Mac Controls" = "Элементы управления Виртуального Mac";

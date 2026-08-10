@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Versiune veche";
 "%.0f%% complete" = "%.0f%% finalizat";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "%@ nu este compatibil";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ poate avea probleme de performanță sau grafică. Pentru cea mai bună experiență, utilizați macOS Ventura, macOS Sonoma sau macOS Sequoia.\n\nDacă efectele de transparență provoacă probleme vizuale, activați Reducere transparență în Configurări sistem > Accesibilitate > Afișaj.";
 "%@ remaining" = "Timp rămas: %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nMac-ul virtual incomplet a fost păstrat în Fișiere temporare de instalare ca %@. Poate fi șters din Configurări.";
 "%@\nState: %@\n%@\n\n" = "%@\nStato: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "O instalare anterioară a macOS nu s-a finalizat. Puteți consulta detaliile, o puteți păstra pentru depanare sau o puteți șterge.";
+"A previous macOS installation did not finish." = "O instalare macOS anterioară nu s-a finalizat.";
 "About" = "Despre";
 "Accommodate Finger Double-Taps" = "Facilitează atingerea dublă cu degetul";
 "Add Shared Folder" = "Adăugați un dosar partajat";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Nu s-a putut salva";
 "Could Not Start Installer" = "Programul de instalare nu a putut fi pornit";
 "Couldn’t Export Diagnostics" = "Nu s-au putut exporta datele de diagnosticare";
+"Create Github Issue" = "Creați o sesizare pe Github";
 "Create Virtual Mac" = "Creați un Mac virtual";
 "Custom" = "Personalizzata";
 "Debug Logging" = "Jurnalizare pentru depanare";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Jurnalizarea pentru depanare a fost activată. O puteți dezactiva ulterior în Configurări.";
 "Delete" = "Ștergeți";
 "Delete All" = "Ștergeți tutto";
 "Delete Cached Install Images" = "Ștergeți imaginile de instalare din cache";
 "Delete Cached Install Images?" = "Ștergeți imaginile de instalare din cache?";
-"Delete Incomplete Installation" = "Ștergeți instalare incompleta";
 "Delete IPSW After Successful Installation" = "Ștergeți IPSW după instalarea cu succes";
 "Delete or rename the existing Virtual Mac first." = "Mai întâi ștergeți sau redenumiți Mac-ul virtual existent.";
 "Delete Temporary Installation Files" = "Ștergeți fișierele temporare de instalare";
 "Delete Temporary Installation Files?" = "Ștergeți fișierele temporare de instalare?";
 "Delete Virtual Mac" = "Ștergeți Mac virtual";
 "Delete Virtual Mac?" = "Ștergeți Mac virtual?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Descrieți problema, apoi atașați arhiva ZIP cu diagnostice și înregistrarea ecranului. Dacă Safari nu poate deschide Github, utilizați un computer.";
 "Developer Beta" = "Beta pentru dezvoltatori";
 "Developers" = "Dezvoltatori";
 "Disabled" = "Dezactivat";
@@ -82,7 +83,6 @@
 "Display Height" = "Înălțime afișaj";
 "Display Resolution" = "Rezoluție afișaj";
 "Display Width" = "Lățime afișaj";
-"Done" = "Gata";
 "Double-tap to hold or release this modifier" = "Tocca due volte per bloccare o rilasciare acest tasto modificatore";
 "Download Failed" = "Descărcarea a eșuat";
 "Downloading macOS" = "Se descarcă macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Umple fereastra";
 "Fit in Window" = "Potrivește în fereastră";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Potrivire în fereastră afișează întregul ecran. Umplere fereastră decupează marginile când fereastra are altă formă.";
+"Fix with Coding Agent" = "Remediați cu un agent de programare";
 "Force Shut Down" = "Forțați oprirea";
 "Force Shut Down Virtual Mac?" = "Forzare lo oprire di Mac virtual?";
 "Full Screen" = "Ecran complet";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Introducere în timp ce rulează un Mac virtual";
 "Install %@" = "Instalați %@";
 "Install macOS" = "Instalează macOS";
-"Installation Details" = "Detalii instalare";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Instalați OpenSSH și LLDB din Sileo, conectați iPad-ul la un computer și cereți Codex sau Claude Code să diagnosticheze și să remedieze problema. Distribuiți soluția pe Github.";
 "Installation Failed" = "Instalarea a eșuat";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Progresul instalării se poate opri câteva minute în timp ce Mac Virtual pornește mediul de instalare. iPad-ul va rămâne activ.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Este posibil ca progresul instalării să rămână neschimbat în timp ce macOS pregătește etapa următoare. iPad-ul va rămâne activ.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Niciun Mac Virtual nu corespunde căutării.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "În prezent sunt disponibili doar aproximativ %llu GB. Imaginea discului este dinamică, dar instalarea sau utilizarea ulterioară poate eșua dacă spațiul se umple.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Deschideți Centrul de control, porniți o înregistrare a ecranului, apoi reproduceți problema.";
+"Optional" = "Opțional";
 "Options" = "Opzioni";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "De mai bine de un deceniu, oamenii visează să ruleze macOS pe iPad. Astăzi, acel vis devine realitate. Creați un Mac virtual pentru a începe.";
 "Pixels Per Inch" = "Pixeli per inch";
@@ -158,10 +161,13 @@
 "Read Only" = "Doar citire";
 "Reading restore image…" = "Se citește imaginea de restaurare…";
 "Recommended macOS Release" = "Versiunea macOS recomandată";
+"Record the Problem" = "Înregistrați problema";
+"Record the Problem Again" = "Înregistrați din nou problema";
 "Recover Networking After Sleep" = "Recuperați rețeaua după repaus";
 "Release" = "Versiune publică";
 "Remove" = "Eliminați";
 "Report Issue" = "Raportați o problemă";
+"Report This Problem" = "Raportați această problemă";
 "Reset" = "Resetați";
 "Reset Settings" = "Resetați setările";
 "Reset Settings?" = "Resetațire le impostazioni?";
@@ -169,6 +175,9 @@
 "Resources" = "Resurse";
 "Resume" = "Reluați";
 "Save" = "Salvează";
+"Save a ZIP file containing logs and crash reports." = "Salvați un fișier ZIP care conține jurnale și rapoarte de blocare.";
+"Save Diagnostics to Files" = "Salvați diagnosticele în Fișiere";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Înregistrarea ecranului a început după apariția problemei, deci nu a surprins ce s-a întâmplat.\n\nContinuați înregistrarea și repetați pașii care au provocat problema. Când acest raport apare din nou, salvați diagnosticele și atașați atât înregistrarea ecranului, cât și arhiva ZIP de diagnostic la sesizarea de pe Github.";
 "Search Virtual Mac" = "Căutați Mac virtual";
 "Settings" = "Setări";
 "Shared Folder" = "Dosar partajat";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Arhiva de diagnosticare nu a putut fi creată.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Prima valoare a progresului poate apărea după câteva minute, în timp ce Mac-ul virtual trece din DFU în RestoreOS. iPad-ul va rămâne activ.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Mac-ul virtual incomplet și fișierele sale de instalare vor fi șterse.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Imaginea de instalare și fișierele temporare de instalare au fost păstrate pentru diagnosticarea erorii. Puteți exporta datele de diagnosticare din Configurări.";
 "The installer could not be started: %s" = "Programul de instalare nu a putut fi pornit: %s";
 "The new Virtual Mac is ready to use." = "Noul Mac virtual este gata de utilizare.";
 "The partial restore image will be deleted." = "Imaginea de restaurare descărcată parțial va fi ștearsă.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Verificați dacă iPad-ul are suficient spațiu liber și încercați din nou.";
 "Version" = "Versiune";
 "Video Encoding and Decoding Acceleration" = "Accelerarea codificării și decodificării video";
-"View Details" = "Vedeți detaliile";
 "Virtual Mac" = "Mac Virtual";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ nu este compatibil cu %@. Verificați dacă există actualizări în Sileo.";
 "Virtual Mac Controls" = "Comenzile Mac-ului virtual";

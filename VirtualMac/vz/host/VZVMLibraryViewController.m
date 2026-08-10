@@ -1314,14 +1314,10 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                     [newName stringByAppendingPathExtension:@"bundle"]];
             if (![NSFileManager.defaultManager moveItemAtPath:self.bundlePath
                 toPath:destination error:&error]) {
-                UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:VZL(@"Could Not Rename Virtual Mac")
-                    message:error.localizedDescription
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-                    style:UIAlertActionStyleDefault handler:nil]];
-                VZAddFailureSupportActions(alert);
-                [self presentViewController:alert animated:YES completion:nil];
+                VZPresentFailureReport(self,
+                    VZL(@"Could Not Rename Virtual Mac"),
+                    error.localizedDescription, error.debugDescription,
+                    VZFailureSupportOptionNone);
                 return;
             }
             NSString *autoBoot = [VZAppSettings.sharedSettings
@@ -1333,14 +1329,9 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             self.vmName = newName;
         }
         if (!VZWriteVMOptions(self.options, self.bundlePath, &error)) {
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:VZL(@"Could Not Save")
-                                 message:error.localizedDescription
-                          preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-                style:UIAlertActionStyleDefault handler:nil]];
-            VZAddFailureSupportActions(alert);
-            [self presentViewController:alert animated:YES completion:nil];
+            VZPresentFailureReport(self, VZL(@"Could Not Save"),
+                error.localizedDescription, error.debugDescription,
+                VZFailureSupportOptionNone);
             return;
         }
     }
@@ -2525,14 +2516,10 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
                     [self configureRestoreImageAtURL:
                         [NSURL fileURLWithPath:destination]];
                 } else {
-                    UIAlertController *alert = [UIAlertController
-                        alertControllerWithTitle:VZL(@"Could Not Copy IPSW")
-                        message:copyError.localizedDescription
-                        preferredStyle:UIAlertControllerStyleAlert];
-                    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-                        style:UIAlertActionStyleDefault handler:nil]];
-                    VZAddFailureSupportActions(alert);
-                    [self presentViewController:alert animated:YES completion:nil];
+                    VZPresentFailureReport(self, VZL(@"Could Not Copy IPSW"),
+                        copyError.localizedDescription,
+                        copyError.debugDescription,
+                        VZFailureSupportOptionNone);
                 }
             };
             if (navigation.presentingViewController)
@@ -2745,24 +2732,11 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
                                                  // restore request.
                                                  return;
                                              } else if (failure) {
-                                                 UIAlertController *alert = [UIAlertController
-                                                     alertControllerWithTitle:VZL(@"Download Failed")
-                                                                      message:
-                                                                          failure
-                                                                              .localizedDescription
-                                                               preferredStyle:
-                                                                   UIAlertControllerStyleAlert];
-                                                 [alert
-                                                     addAction:
-                                                         [UIAlertAction
-                                                             actionWithTitle:VZL(@"OK")
-                                                                       style:
-                                                                           UIAlertActionStyleDefault
-                                                                     handler:nil]];
-                                                 VZAddFailureSupportActions(alert);
-                                                 [self presentViewController:alert
-                                                                    animated:YES
-                                                                  completion:nil];
+                                                 VZPresentFailureReport(self,
+                                                     VZL(@"Download Failed"),
+                                                     failure.localizedDescription,
+                                                     failure.debugDescription,
+                                                     VZFailureSupportOptionNone);
                                              } else {
                                                  [self.delegate vmLibrary:self
                                                      installRestoreImageAtURL:
@@ -2857,7 +2831,6 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
     [invalid addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
                                                 style:UIAlertActionStyleDefault
                                               handler:nil]];
-    VZAddFailureSupportActions(invalid);
     [self presentViewController:invalid animated:YES completion:nil];
     return;
   }

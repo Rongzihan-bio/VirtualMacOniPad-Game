@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Starší";
 "%.0f%% complete" = "%.0f %% dokončeno";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "%@ není podporován";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ může mít problémy s výkonem nebo grafikou. Pro nejlepší zážitek použijte macOS Ventura, macOS Sonoma nebo macOS Sequoia.\n\nPokud efekty průhlednosti způsobují problémy se zobrazením, zapněte Omezit průhlednost v Nastavení systému > Zpřístupnění > Zobrazení.";
 "%@ remaining" = "Zbývá %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nNedokončený virtuální Mac byl zachován v Dočasných instalačních souborech jako %@. Můžete ho smazat v Nastavení.";
 "%@\nState: %@\n%@\n\n" = "%@\nStav: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Předchozí instalace macOS nebyla dokončena. Můžete zobrazit podrobnosti, ponechat ji pro ladění nebo ji smazat.";
+"A previous macOS installation did not finish." = "Předchozí instalace macOS nebyla dokončena.";
 "About" = "O aplikaci";
 "Accommodate Finger Double-Taps" = "Usnadnit dvojité klepnutí prstem";
 "Add Shared Folder" = "Přidat sdílenou složku";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Nepodařilo se uložit";
 "Could Not Start Installer" = "Instalátor se nepodařilo spustit";
 "Couldn’t Export Diagnostics" = "Diagnostiku se nepodařilo exportovat";
+"Create Github Issue" = "Vytvořit problém na Githubu";
 "Create Virtual Mac" = "Vytvořit Virtuální Mac";
 "Custom" = "Vlastní";
 "Debug Logging" = "Protokolování ladění";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Protokolování ladění bylo zapnuto. Později ho můžete vypnout v Nastavení.";
 "Delete" = "Smazat";
 "Delete All" = "Smazat vše";
 "Delete Cached Install Images" = "Smazat instalační obrazy z mezipaměti";
 "Delete Cached Install Images?" = "Smazat instalační obrazy z mezipaměti?";
-"Delete Incomplete Installation" = "Smazat nedokončenou instalaci";
 "Delete IPSW After Successful Installation" = "Po úspěšné instalaci odstraňte IPSW";
 "Delete or rename the existing Virtual Mac first." = "Nejprve smažte nebo přejmenujte existující virtuální Mac.";
 "Delete Temporary Installation Files" = "Odstranit dočasné instalační soubory";
 "Delete Temporary Installation Files?" = "Odstranit dočasné instalační soubory?";
 "Delete Virtual Mac" = "Smazat virtuální Mac";
 "Delete Virtual Mac?" = "Smazat virtuální Mac?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Popište problém a poté přiložte diagnostický soubor ZIP a záznam obrazovky. Pokud Safari nedokáže otevřít Github, použijte místo něj počítač.";
 "Developer Beta" = "Vývojářská betaverze";
 "Developers" = "Vývojáři";
 "Disabled" = "Vypnuto";
@@ -82,7 +83,6 @@
 "Display Height" = "Výška displeje";
 "Display Resolution" = "Rozlišení displeje";
 "Display Width" = "Šířka displeje";
-"Done" = "Hotovo";
 "Double-tap to hold or release this modifier" = "Dvojitým klepnutím tuto modifikační klávesu podržíte nebo uvolníte";
 "Download Failed" = "Stahování se nezdařilo";
 "Downloading macOS" = "Stahování macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Vyplnit okno";
 "Fit in Window" = "Přizpůsobit oknu";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Přizpůsobit oknu zobrazí celý displej. Vyplnit okno ořízne okraje, pokud má okno jiný tvar.";
+"Fix with Coding Agent" = "Oprava pomocí programovacího agenta";
 "Force Shut Down" = "Vynutit vypnutí";
 "Force Shut Down Virtual Mac?" = "Vynutit vypnutí virtuálního Macu?";
 "Full Screen" = "Celá obrazovka";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Ovládání za běhu virtuálního Macu";
 "Install %@" = "Nainstalovat %@";
 "Install macOS" = "Nainstalujte macOS";
-"Installation Details" = "Podrobnosti instalace";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Nainstalujte OpenSSH a LLDB ze Silea, připojte iPad k počítači a požádejte Codex nebo Claude Code, aby problém diagnostikoval a opravil. Sdílejte řešení na Githubu.";
 "Installation Failed" = "Instalace se nezdařila";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Průběh instalace se může na několik minut pozastavit, zatímco Virtuální Mac spouští instalační prostředí. iPad zůstane vzhůru.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Průběh instalace se nemusí měnit, zatímco macOS připravuje další fázi instalace. iPad zůstane vzhůru.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Žádný virtuální Mac neodpovídá vašemu hledání.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Aktuálně je k dispozici jen asi %llu GB. Obraz disku je dynamický, ale při zaplnění úložiště může instalace nebo pozdější používání selhat.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Otevřete Ovládací centrum, spusťte záznam obrazovky a poté problém znovu vyvolejte.";
+"Optional" = "Volitelné";
 "Options" = "Volby";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Lidé už více než deset let sní o spuštění macOS na iPadu. Dnes se tento sen stává skutečností. Začněte vytvořením virtuálního Macu.";
 "Pixels Per Inch" = "Pixelů na palec";
@@ -158,10 +161,13 @@
 "Read Only" = "Jen pro čtení";
 "Reading restore image…" = "Načítání obrazu pro obnovení…";
 "Recommended macOS Release" = "Doporučené vydání macOS";
+"Record the Problem" = "Zaznamenat problém";
+"Record the Problem Again" = "Zaznamenejte problém znovu";
 "Recover Networking After Sleep" = "Obnovení sítě po spánku";
 "Release" = "Vydání";
 "Remove" = "Odstranit";
 "Report Issue" = "Nahlásit problém";
+"Report This Problem" = "Nahlásit tento problém";
 "Reset" = "Resetovat";
 "Reset Settings" = "Obnovit nastavení";
 "Reset Settings?" = "Resetovat nastavení?";
@@ -169,6 +175,9 @@
 "Resources" = "Prostředky";
 "Resume" = "Pokračovat";
 "Save" = "Uložit";
+"Save a ZIP file containing logs and crash reports." = "Uložte soubor ZIP obsahující protokoly a zprávy o pádech.";
+"Save Diagnostics to Files" = "Uložit diagnostiku do Souborů";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Záznam obrazovky začal až po výskytu problému, takže nezachytil, co se stalo.\n\nPokračujte v nahrávání a zopakujte kroky, které problém způsobily. Až se toto hlášení zobrazí znovu, uložte diagnostiku a k problému na Githubu přiložte záznam obrazovky i diagnostický ZIP.";
 "Search Virtual Mac" = "Hledat Virtuální Mac";
 "Settings" = "Nastavení";
 "Shared Folder" = "Sdílená složka";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Diagnostický archiv se nepodařilo vytvořit.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "První hodnota průběhu může trvat několik minut, zatímco virtuální Mac přechází z DFU do RestoreOS. iPad zůstane aktivní.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Nedokončený virtuální Mac a jeho instalační soubory budou smazány.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Instalační obraz a dočasné instalační soubory byly zachovány, aby bylo možné chybu diagnostikovat. Diagnostiku můžete exportovat v Nastavení.";
 "The installer could not be started: %s" = "Instalační program se nepodařilo spustit: %s";
 "The new Virtual Mac is ready to use." = "Nový virtuální Mac je připraven k použití.";
 "The partial restore image will be deleted." = "Částečně stažený obraz pro obnovení bude smazán.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Ověřte, že je na iPadu dostatek volného místa, a zkuste to znovu.";
 "Version" = "Verze";
 "Video Encoding and Decoding Acceleration" = "Akcelerace kódování a dekódování videa";
-"View Details" = "Zobrazit podrobnosti";
 "Virtual Mac" = "Virtuální Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ nepodporuje %@. Zkontrolujte aktualizace v Sileu.";
 "Virtual Mac Controls" = "Ovládací prvky Virtuálního Macu";

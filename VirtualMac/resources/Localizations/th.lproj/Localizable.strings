@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · รุ่นเก่า";
 "%.0f%% complete" = "เสร็จแล้ว %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "CPU %@ ตัว · หน่วยความจำ %@ GB · %llu GB · %@%@";
 "%@ is not supported" = "ไม่รองรับ %@";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ อาจพบปัญหาด้านประสิทธิภาพหรือกราฟิก เพื่อประสบการณ์ที่ดีที่สุด ให้ใช้ macOS Ventura, macOS Sonoma หรือ macOS Sequoia\n\nหากเอฟเฟ็กต์ความโปร่งใสทำให้เกิดปัญหาในการแสดงผล ให้เปิด ลดความโปร่งใส ใน การตั้งค่าระบบ > การช่วยการเข้าถึง > จอภาพ";
 "%@ remaining" = "เหลือ %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nเก็บ Mac เสมือนที่ติดตั้งไม่เสร็จไว้ในไฟล์ติดตั้งชั่วคราวในชื่อ %@ คุณสามารถลบได้จากการตั้งค่า";
 "%@\nState: %@\n%@\n\n" = "%@\nสถานะ: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "การติดตั้ง macOS ครั้งก่อนยังไม่เสร็จ คุณสามารถดูรายละเอียด เก็บไว้เพื่อตรวจสอบปัญหา หรือลบออกได้";
+"A previous macOS installation did not finish." = "การติดตั้ง macOS ก่อนหน้านี้ไม่เสร็จสมบูรณ์";
 "About" = "เกี่ยวกับ";
 "Accommodate Finger Double-Taps" = "ช่วยให้แตะสองครั้งด้วยนิ้วได้ง่ายขึ้น";
 "Add Shared Folder" = "เพิ่มโฟลเดอร์ที่แชร์";
@@ -58,20 +57,22 @@
 "Could Not Save" = "ไม่สามารถบันทึก";
 "Could Not Start Installer" = "ไม่สามารถเริ่มตัวติดตั้ง";
 "Couldn’t Export Diagnostics" = "ไม่สามารถส่งออกข้อมูลวินิจฉัยได้";
+"Create Github Issue" = "สร้างรายงานใน Github";
 "Create Virtual Mac" = "สร้าง Mac เสมือน";
 "Custom" = "กำหนดเอง";
 "Debug Logging" = "การบันทึกการแก้ไขข้อบกพร่อง";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "เปิดใช้การบันทึกข้อมูลแก้ไขจุดบกพร่องแล้ว คุณสามารถปิดได้ภายหลังในการตั้งค่า";
 "Delete" = "ลบ";
 "Delete All" = "ลบทั้งหมด";
 "Delete Cached Install Images" = "ลบอิมเมจการติดตั้งที่แคชไว้";
 "Delete Cached Install Images?" = "ลบอิมเมจการติดตั้งที่แคชไว้หรือไม่";
-"Delete Incomplete Installation" = "ลบการติดตั้งที่ไม่เสร็จ";
 "Delete IPSW After Successful Installation" = "ลบ IPSW หลังจากการติดตั้งสำเร็จ";
 "Delete or rename the existing Virtual Mac first." = "โปรดลบหรือเปลี่ยนชื่อ Virtual Mac ที่มีอยู่ก่อน";
 "Delete Temporary Installation Files" = "ลบไฟล์ติดตั้งชั่วคราว";
 "Delete Temporary Installation Files?" = "ลบไฟล์ติดตั้งชั่วคราวหรือไม่";
 "Delete Virtual Mac" = "ลบ Virtual Mac";
 "Delete Virtual Mac?" = "ลบ Virtual Mac หรือไม่";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "อธิบายปัญหา แล้วแนบไฟล์ ZIP การวินิจฉัยและวิดีโอบันทึกหน้าจอ หาก Safari เปิด Github ไม่ได้ ให้ใช้คอมพิวเตอร์แทน";
 "Developer Beta" = "เบต้าสำหรับนักพัฒนา";
 "Developers" = "นักพัฒนา";
 "Disabled" = "ปิดใช้งาน";
@@ -82,7 +83,6 @@
 "Display Height" = "ความสูงจอภาพ";
 "Display Resolution" = "ความละเอียดจอภาพ";
 "Display Width" = "ความกว้างจอภาพ";
-"Done" = "เสร็จสิ้น";
 "Double-tap to hold or release this modifier" = "แตะสองครั้งเพื่อกดค้างหรือปล่อยปุ่มปรับนี้";
 "Download Failed" = "การดาวน์โหลดล้มเหลว";
 "Downloading macOS" = "กำลังดาวน์โหลด macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "เติมหน้าต่าง";
 "Fit in Window" = "ปรับให้พอดีกับหน้าต่าง";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "พอดีกับหน้าต่างจะแสดงทั้งจอ ส่วนเต็มหน้าต่างจะครอบขอบเมื่อหน้าต่างมีสัดส่วนต่างกัน";
+"Fix with Coding Agent" = "แก้ไขด้วยเอเจนต์เขียนโค้ด";
 "Force Shut Down" = "บังคับปิดเครื่อง";
 "Force Shut Down Virtual Mac?" = "บังคับปิด Virtual Mac หรือไม่";
 "Full Screen" = "เต็มหน้าจอ";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "การป้อนข้อมูลขณะ Mac เสมือนกำลังทำงาน";
 "Install %@" = "ติดตั้ง %@";
 "Install macOS" = "ติดตั้ง macOS";
-"Installation Details" = "รายละเอียดการติดตั้ง";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "ติดตั้ง OpenSSH และ LLDB จาก Sileo เชื่อมต่อ iPad กับคอมพิวเตอร์ แล้วขอให้ Codex หรือ Claude Code วินิจฉัยและแก้ไขปัญหา แชร์วิธีแก้ไขบน Github";
 "Installation Failed" = "การติดตั้งล้มเหลว";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "ความคืบหน้าการติดตั้งอาจหยุดชั่วคราวหลายนาทีขณะที่ Mac เสมือน เริ่มสภาพแวดล้อมการติดตั้ง iPad จะไม่พักเครื่อง";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "ความคืบหน้าการติดตั้งอาจไม่เปลี่ยนแปลงขณะที่ macOS เตรียมขั้นตอนการติดตั้งถัดไป iPad จะไม่พักเครื่อง";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "ไม่พบ Virtual Mac ที่ตรงกับการค้นหา";
 "OK" = "ตกลง";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "ขณะนี้มีพื้นที่ว่างเพียงประมาณ %llu GB อิมเมจดิสก์เป็นแบบเบาบาง แต่การติดตั้งหรือการใช้งานภายหลังอาจล้มเหลวเมื่อพื้นที่เต็ม";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "เปิดศูนย์ควบคุม เริ่มการบันทึกหน้าจอ แล้วทำให้เกิดปัญหาซ้ำ";
+"Optional" = "ไม่บังคับ";
 "Options" = "ตัวเลือก";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "ผู้คนใฝ่ฝันที่จะใช้งาน macOS บน iPad มานานกว่าทศวรรษ วันนี้ความฝันนั้นเป็นจริง สร้าง Mac เสมือนเพื่อเริ่มต้นใช้งาน";
 "Pixels Per Inch" = "พิกเซลต่อนิ้ว";
@@ -158,10 +161,13 @@
 "Read Only" = "อ่านอย่างเดียว";
 "Reading restore image…" = "กำลังอ่านอิมเมจกู้คืน…";
 "Recommended macOS Release" = "รุ่น macOS ที่แนะนำ";
+"Record the Problem" = "บันทึกปัญหา";
+"Record the Problem Again" = "บันทึกปัญหาอีกครั้ง";
 "Recover Networking After Sleep" = "กู้คืนระบบเครือข่ายหลังการนอนหลับ";
 "Release" = "รุ่นเผยแพร่";
 "Remove" = "เอาออก";
 "Report Issue" = "รายงานปัญหา";
+"Report This Problem" = "รายงานปัญหานี้";
 "Reset" = "รีเซ็ต";
 "Reset Settings" = "รีเซ็ตการตั้งค่า";
 "Reset Settings?" = "รีเซ็ตการตั้งค่าหรือไม่";
@@ -169,6 +175,9 @@
 "Resources" = "ทรัพยากร";
 "Resume" = "ทำงานต่อ";
 "Save" = "บันทึก";
+"Save a ZIP file containing logs and crash reports." = "บันทึกไฟล์ ZIP ที่มีบันทึกและรายงานข้อขัดข้อง";
+"Save Diagnostics to Files" = "บันทึกข้อมูลวินิจฉัยไปยังไฟล์";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "การบันทึกหน้าจอเริ่มหลังจากเกิดปัญหา จึงไม่ได้บันทึกสิ่งที่เกิดขึ้น\n\nให้บันทึกต่อและทำขั้นตอนที่ทำให้เกิดปัญหาซ้ำ เมื่อรายงานนี้ปรากฏอีกครั้ง ให้บันทึกข้อมูลวินิจฉัย แล้วแนบทั้งวิดีโอบันทึกหน้าจอและไฟล์ ZIP ข้อมูลวินิจฉัยในรายงาน Github";
 "Search Virtual Mac" = "ค้นหา Mac เสมือน";
 "Settings" = "การตั้งค่า";
 "Shared Folder" = "โฟลเดอร์ที่แชร์";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "ไม่สามารถสร้างไฟล์ข้อมูลวินิจฉัยได้";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "ค่าความคืบหน้าแรกอาจใช้เวลาหลายนาทีขณะที่ Virtual Mac เปลี่ยนจาก DFU เป็น RestoreOS iPad จะไม่พักเครื่อง";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Virtual Mac ที่ติดตั้งไม่เสร็จและไฟล์ติดตั้งจะถูกลบ";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "เก็บอิมเมจติดตั้งและไฟล์ติดตั้งชั่วคราวไว้เพื่อวินิจฉัยข้อผิดพลาด คุณสามารถส่งออกข้อมูลวินิจฉัยจากการตั้งค่า";
 "The installer could not be started: %s" = "ไม่สามารถเริ่มโปรแกรมติดตั้งได้: %s";
 "The new Virtual Mac is ready to use." = "Virtual Mac เครื่องใหม่พร้อมใช้งานแล้ว";
 "The partial restore image will be deleted." = "อิมเมจกู้คืนที่ดาวน์โหลดไม่ครบจะถูกลบ";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "ตรวจสอบว่า iPad มีพื้นที่ว่างเพียงพอแล้วลองอีกครั้ง";
 "Version" = "เวอร์ชัน";
 "Video Encoding and Decoding Acceleration" = "การเร่งความเร็วการเข้ารหัสและถอดรหัสวิดีโอ";
-"View Details" = "ดูรายละเอียด";
 "Virtual Mac" = "Mac เสมือน";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ ไม่รองรับ %@ โปรดตรวจสอบการอัปเดตใน Sileo";
 "Virtual Mac Controls" = "ตัวควบคุม Mac เสมือน";

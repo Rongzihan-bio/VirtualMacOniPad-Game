@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · ישן";
 "%.0f%% complete" = "%.0f%% הושלמו";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "אין תמיכה ב-%@";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "ב-%@ עלולות להופיע בעיות ביצועים או תצוגה. לחוויה הטובה ביותר, השתמשו ב-macOS Ventura, ב-macOS Sonoma או ב-macOS Sequoia.\n\nאם אפקטים של שקיפות גורמים לבעיות תצוגה, הפעילו את ״הפחתת שקיפות״ ב״הגדרות המערכת״ > ״נגישות״ > ״תצוגה״.";
 "%@ remaining" = "נותרו %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nה-Mac הווירטואלי שלא הושלם נשמר בקובצי ההתקנה הזמניים בשם %@. ניתן למחוק אותו בהגדרות.";
 "%@\nState: %@\n%@\n\n" = "%@\nמצב: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "התקנת macOS קודמת לא הושלמה. ניתן לעיין בפרטים, לשמור אותה לצורך איתור באגים או למחוק אותה.";
+"A previous macOS installation did not finish." = "התקנה קודמת של macOS לא הסתיימה.";
 "About" = "פרטים";
 "Accommodate Finger Double-Taps" = "הקלה על הקשה כפולה באצבע";
 "Add Shared Folder" = "הוספת תיקייה משותפת";
@@ -58,20 +57,22 @@
 "Could Not Save" = "לא ניתן היה לשמור";
 "Could Not Start Installer" = "לא ניתן היה להפעיל את תוכנית ההתקנה";
 "Couldn’t Export Diagnostics" = "לא ניתן לייצא את נתוני האבחון";
+"Create Github Issue" = "יצירת דיווח ב-Github";
 "Create Virtual Mac" = "יצירת Mac וירטואלי";
 "Custom" = "מותאם אישית";
 "Debug Logging" = "רישום ניפוי באגים";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "רישום ניפוי הבאגים הופעל. אפשר להשבית אותו מאוחר יותר בהגדרות.";
 "Delete" = "מחיקה";
 "Delete All" = "מחיקת הכול";
 "Delete Cached Install Images" = "מחיקת תמונות התקנה מהמטמון";
 "Delete Cached Install Images?" = "למחוק תמונות התקנה שמורות במטמון?";
-"Delete Incomplete Installation" = "מחיקת התקנה שלא הושלמה";
 "Delete IPSW After Successful Installation" = "מחיקת IPSW לאחר התקנה מוצלחת";
 "Delete or rename the existing Virtual Mac first." = "תחילה יש למחוק או לשנות את שם ה-Mac הווירטואלי הקיים.";
 "Delete Temporary Installation Files" = "מחיקת קובצי התקנה זמניים";
 "Delete Temporary Installation Files?" = "למחוק קובצי התקנה זמניים?";
 "Delete Virtual Mac" = "מחיקת Mac וירטואלי";
 "Delete Virtual Mac?" = "למחוק את ה-Mac הווירטואלי?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "תארו את הבעיה ולאחר מכן צרפו את קובץ ה-ZIP של האבחון ואת הקלטת המסך. אם Safari לא מצליח לפתוח את Github, השתמשו במחשב.";
 "Developer Beta" = "גרסת בטא למפתחים";
 "Developers" = "מפתחים";
 "Disabled" = "מושבת";
@@ -82,7 +83,6 @@
 "Display Height" = "גובה הצג";
 "Display Resolution" = "רזולוציית הצג";
 "Display Width" = "רוחב הצג";
-"Done" = "סיום";
 "Double-tap to hold or release this modifier" = "יש להקיש פעמיים כדי לנעול או לשחרר מקש צירוף זה";
 "Download Failed" = "ההורדה נכשלה";
 "Downloading macOS" = "מתבצעת הורדה של macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "מילוי חלון";
 "Fit in Window" = "התאמה לחלון";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "״התאמה לחלון״ מציגה את כל הצג. ״מילוי החלון״ חותך את הקצוות כאשר צורת החלון שונה.";
+"Fix with Coding Agent" = "תיקון באמצעות סוכן תכנות";
 "Force Shut Down" = "אילוץ כיבוי";
 "Force Shut Down Virtual Mac?" = "לאלץ כיבוי של ה-Mac הווירטואלי?";
 "Full Screen" = "מסך מלא";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "קלט בזמן שמופעל Mac וירטואלי";
 "Install %@" = "התקנת %@";
 "Install macOS" = "התקנת macOS";
-"Installation Details" = "פרטי ההתקנה";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "התקינו את OpenSSH ואת LLDB מ-Sileo, חברו את ה-iPad למחשב ובקשו מ-Codex או מ-Claude Code לאבחן ולתקן את הבעיה. שתפו את הפתרון ב-Github.";
 "Installation Failed" = "ההתקנה נכשלה";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "ייתכן שהתקדמות ההתקנה תיעצר למשך כמה דקות בזמן ש-Mac וירטואלי מפעיל את סביבת ההתקנה. ה-iPad יישאר פעיל.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "ייתכן שהתקדמות ההתקנה לא תשתנה בזמן ש-macOS מכין את שלב ההתקנה הבא. ה-iPad יישאר פעיל.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "אין מחשבי Mac וירטואליים התואמים לחיפוש.";
 "OK" = "אישור";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "כרגע זמינים רק כ-%llu GB. תמונת הכונן דינמית, אך ההתקנה או השימוש בהמשך עלולים להיכשל אם האחסון יתמלא.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "פתחו את מרכז הבקרה, התחילו הקלטת מסך ולאחר מכן שחזרו את הבעיה.";
+"Optional" = "אופציונלי";
 "Options" = "אפשרויות";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "כבר יותר מעשור אנשים חולמים להפעיל את macOS ב-iPad. היום החלום הזה מתגשם. כדי להתחיל, יש ליצור Mac וירטואלי.";
 "Pixels Per Inch" = "פיקסלים לאינץ׳";
@@ -158,10 +161,13 @@
 "Read Only" = "קריאה בלבד";
 "Reading restore image…" = "תמונת השחזור נקראת…";
 "Recommended macOS Release" = "גרסת macOS המומלצת";
+"Record the Problem" = "הקלטת הבעיה";
+"Record the Problem Again" = "הקלטת הבעיה מחדש";
 "Recover Networking After Sleep" = "שחזור הרשת לאחר שינה";
 "Release" = "גרסה";
 "Remove" = "הסרה";
 "Report Issue" = "דיווח על בעיה";
+"Report This Problem" = "דיווח על בעיה זו";
 "Reset" = "איפוס";
 "Reset Settings" = "איפוס ההגדרות";
 "Reset Settings?" = "לאפס הגדרות?";
@@ -169,6 +175,9 @@
 "Resources" = "משאבים";
 "Resume" = "המשך";
 "Save" = "שמירה";
+"Save a ZIP file containing logs and crash reports." = "שמרו קובץ ZIP המכיל יומנים ודוחות קריסה.";
+"Save Diagnostics to Files" = "שמירת נתוני האבחון ב״קבצים״";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "הקלטת המסך התחילה לאחר שהבעיה התרחשה, ולכן לא תיעדה את מה שקרה.\n\nהמשיכו להקליט וחזרו על השלבים שגרמו לבעיה. כשהדוח יופיע שוב, שמרו את האבחון וצרפו לדיווח ב-Github גם את הקלטת המסך וגם את קובץ ה-ZIP של האבחון.";
 "Search Virtual Mac" = "חיפוש Mac וירטואלי";
 "Settings" = "הגדרות";
 "Shared Folder" = "תיקייה משותפת";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "לא ניתן ליצור את ארכיון האבחון.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "ערך ההתקדמות הראשון עשוי להופיע לאחר מספר דקות בזמן שה-Mac הווירטואלי עובר מ-DFU ל-RestoreOS. ה-iPad יישאר פעיל.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "ה-Mac הווירטואלי שלא הושלם וקובצי ההתקנה שלו יימחקו.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "תמונת ההתקנה וקובצי ההתקנה הזמניים נשמרו כדי לאפשר אבחון של התקלה. ניתן לייצא נתוני אבחון מההגדרות.";
 "The installer could not be started: %s" = "לא ניתן להפעיל את תוכנית ההתקנה: %s";
 "The new Virtual Mac is ready to use." = "ה-Mac הווירטואלי החדש מוכן לשימוש.";
 "The partial restore image will be deleted." = "תמונת השחזור שהורדה חלקית תימחק.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "יש לוודא שיש ב-iPad מספיק מקום פנוי ולנסות שוב.";
 "Version" = "גרסה";
 "Video Encoding and Decoding Acceleration" = "האצת קידוד ופענוח וידאו";
-"View Details" = "הצגת פרטים";
 "Virtual Mac" = "Mac וירטואלי";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ אינו תומך ב-%@. יש לבדוק אם קיימים עדכונים ב-Sileo.";
 "Virtual Mac Controls" = "פקדי ה-Mac הווירטואלי";

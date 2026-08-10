@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Antigua";
 "%.0f%% complete" = "%.0f %% completado";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB de RAM · %llu GB · %@%@";
 "%@ is not supported" = "%@ no es compatible";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ puede presentar problemas de rendimiento o gráficos. Para obtener la mejor experiencia, usa macOS Ventura, macOS Sonoma o macOS Sequoia.\n\nSi los efectos de transparencia causan problemas visuales, activa Reducir transparencia en Configuración del Sistema > Accesibilidad > Pantalla.";
 "%@ remaining" = "Quedan %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nLa Mac virtual incompleta se conservó en Archivos temporales de instalación como %@. Puedes eliminarla desde Configuración.";
 "%@\nState: %@\n%@\n\n" = "%@\nEstado: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Una instalación anterior de macOS no terminó. Puedes revisar los detalles, conservarla para depurarla o eliminarla.";
+"A previous macOS installation did not finish." = "Una instalación anterior de macOS no finalizó.";
 "About" = "Acerca de";
 "Accommodate Finger Double-Taps" = "Facilitar los toques dobles con el dedo";
 "Add Shared Folder" = "Añadir carpeta compartida";
@@ -58,20 +57,22 @@
 "Could Not Save" = "No se pudo guardar";
 "Could Not Start Installer" = "No se pudo iniciar el instalador";
 "Couldn’t Export Diagnostics" = "No se pudieron exportar los diagnósticos";
+"Create Github Issue" = "Crear informe en Github";
 "Create Virtual Mac" = "Crear un Mac virtual";
 "Custom" = "Personalizado";
 "Debug Logging" = "Registro de depuración";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "El registro de depuración se activó. Puedes desactivarlo más tarde en Configuración.";
 "Delete" = "Eliminar";
 "Delete All" = "Eliminar todo";
 "Delete Cached Install Images" = "Eliminar imágenes de instalación en caché";
 "Delete Cached Install Images?" = "¿Eliminar las imágenes de instalación en caché?";
-"Delete Incomplete Installation" = "Eliminar instalación incompleta";
 "Delete IPSW After Successful Installation" = "Eliminar IPSW después de una instalación exitosa";
 "Delete or rename the existing Virtual Mac first." = "Primero elimina o cambia el nombre del Virtual Mac existente.";
 "Delete Temporary Installation Files" = "Eliminar archivos temporales de instalación";
 "Delete Temporary Installation Files?" = "¿Eliminar los archivos temporales de instalación?";
 "Delete Virtual Mac" = "Eliminar Virtual Mac";
 "Delete Virtual Mac?" = "¿Eliminar Virtual Mac?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Describe el problema y adjunta el ZIP de diagnóstico y la grabación de pantalla. Si Safari no puede abrir Github, usa una computadora.";
 "Developer Beta" = "Beta para desarrolladores";
 "Developers" = "Desarrolladores";
 "Disabled" = "Desactivado";
@@ -82,7 +83,6 @@
 "Display Height" = "Altura de pantalla";
 "Display Resolution" = "Resolución de pantalla";
 "Display Width" = "Anchura de pantalla";
-"Done" = "Listo";
 "Double-tap to hold or release this modifier" = "Toca dos veces para bloquear o soltar esta tecla modificadora";
 "Download Failed" = "Falló la descarga";
 "Downloading macOS" = "Descargando macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Llenar ventana";
 "Fit in Window" = "Ajustar a la ventana";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Ajustar a la ventana muestra toda la pantalla. Llenar ventana recorta los bordes cuando la ventana tiene una forma diferente.";
+"Fix with Coding Agent" = "Solucionarlo con un agente de programación";
 "Force Shut Down" = "Forzar apagado";
 "Force Shut Down Virtual Mac?" = "¿Forzar el apagado de Virtual Mac?";
 "Full Screen" = "Pantalla completa";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Entrada mientras se ejecuta una Mac virtual";
 "Install %@" = "Instalar %@";
 "Install macOS" = "Instalar macOS";
-"Installation Details" = "Detalles de la instalación";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Instala OpenSSH y LLDB desde Sileo, conecta el iPad a una computadora y pide a Codex o Claude Code que diagnostique y solucione el problema. Comparte la solución en Github.";
 "Installation Failed" = "Falló la instalación";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "El progreso de la instalación puede detenerse varios minutos mientras Mac Virtual inicia el entorno de instalación. Tu iPad permanecerá activo.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Es posible que el progreso de la instalación no cambie mientras macOS prepara la siguiente etapa. Tu iPad permanecerá activo.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Ninguna Mac virtual coincide con tu búsqueda.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Solo hay unos %llu GB disponibles. La imagen de disco es dinámica, pero la instalación o el uso posterior pueden fallar si se agota el almacenamiento.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Abre el Centro de control, inicia una grabación de pantalla y reproduce el problema.";
+"Optional" = "Opcional";
 "Options" = "Opciones";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Durante más de una década, las personas han soñado con ejecutar macOS en el iPad. Hoy ese sueño se hace realidad. Crea una Mac virtual para comenzar.";
 "Pixels Per Inch" = "Píxeles por pulgada";
@@ -158,10 +161,13 @@
 "Read Only" = "Sólo lectura";
 "Reading restore image…" = "Leyendo la imagen de restauración…";
 "Recommended macOS Release" = "Versión recomendada de macOS";
+"Record the Problem" = "Grabar el problema";
+"Record the Problem Again" = "Graba el problema de nuevo";
 "Recover Networking After Sleep" = "Recuperar la red después del sueño";
 "Release" = "Versión pública";
 "Remove" = "Eliminar";
 "Report Issue" = "Reportar un problema";
+"Report This Problem" = "Reportar este problema";
 "Reset" = "Reiniciar";
 "Reset Settings" = "Restablecer configuración";
 "Reset Settings?" = "¿Restablecer los ajustes?";
@@ -169,6 +175,9 @@
 "Resources" = "Recursos";
 "Resume" = "Reanudar";
 "Save" = "Guardar";
+"Save a ZIP file containing logs and crash reports." = "Guarda un archivo ZIP con registros e informes de fallos.";
+"Save Diagnostics to Files" = "Guardar diagnósticos en Archivos";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "La grabación de pantalla comenzó después de que ocurriera el problema, por lo que no capturó lo sucedido.\n\nMantén la grabación y repite los pasos que causaron el problema. Cuando este informe vuelva a aparecer, guarda el diagnóstico y adjunta tanto la grabación de pantalla como el ZIP de diagnóstico a tu informe de Github.";
 "Search Virtual Mac" = "Buscar Mac virtual";
 "Settings" = "Ajustes";
 "Shared Folder" = "Carpeta compartida";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "No se pudo crear el archivo de diagnósticos.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "El primer valor de progreso puede tardar varios minutos mientras el Virtual Mac pasa de DFU a RestoreOS. Tu iPad permanecerá activo.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Se eliminarán el Virtual Mac incompleto y sus archivos de instalación.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "La imagen de instalación y los archivos temporales de instalación se conservaron para poder diagnosticar el error. Puedes exportar los diagnósticos desde Configuración.";
 "The installer could not be started: %s" = "No se pudo iniciar el instalador: %s";
 "The new Virtual Mac is ready to use." = "El nuevo Virtual Mac está listo para usarse.";
 "The partial restore image will be deleted." = "Se eliminará la imagen de restauración descargada parcialmente.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Comprueba que tu iPad tenga suficiente espacio libre e inténtalo de nuevo.";
 "Version" = "Versión";
 "Video Encoding and Decoding Acceleration" = "Aceleración de codificación y decodificación de video";
-"View Details" = "Ver detalles";
 "Virtual Mac" = "Mac Virtual";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ no es compatible con %@. Busca actualizaciones en Sileo.";
 "Virtual Mac Controls" = "Controles del Mac virtual";

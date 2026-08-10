@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · 舊版";
 "%.0f%% complete" = "已完成%.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@核CPU · %@ GB記憶體 · %llu GB · %@%@";
 "%@ is not supported" = "不支援%@";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@可能會遇到圖形和效能問題。建議使用macOS Ventura、macOS Sonoma或macOS Sequoia，以獲得最佳體驗。\n\n如果透明效果導致顯示異常，請前往系統設定 > 輔助使用 > 顯示器，開啟減少透明度。";
 "%@ remaining" = "剩餘%@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\n未完成的虛擬Mac已作為%@保留在「安裝暫存檔案」中，可在「設定」中刪除。";
 "%@\nState: %@\n%@\n\n" = "%@\n狀態：%@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "上一次macOS安裝未完成。你可以檢視詳細資訊、保留檔案以供除錯，或將其刪除。";
+"A previous macOS installation did not finish." = "上一次macOS安裝未完成。";
 "About" = "關於";
 "Accommodate Finger Double-Taps" = "改善手指點兩下辨識";
 "Add Shared Folder" = "新增共享資料夾";
@@ -58,20 +57,22 @@
 "Could Not Save" = "無法儲存";
 "Could Not Start Installer" = "無法啟動安裝程式";
 "Couldn’t Export Diagnostics" = "無法匯出診斷資訊";
+"Create Github Issue" = "建立Github問題";
 "Create Virtual Mac" = "建立虛擬Mac";
 "Custom" = "自定義";
 "Debug Logging" = "偵錯記錄";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "偵錯記錄已啟用。可稍後在設定中將其關閉。";
 "Delete" = "刪除";
 "Delete All" = "全部刪除";
 "Delete Cached Install Images" = "刪除快取的安裝映像";
 "Delete Cached Install Images?" = "要刪除快取的安裝映像嗎？";
-"Delete Incomplete Installation" = "刪除未完成的安裝";
 "Delete IPSW After Successful Installation" = "成功安裝後刪除IPSW";
 "Delete or rename the existing Virtual Mac first." = "請先刪除現有的虛擬Mac或將其重新命名。";
 "Delete Temporary Installation Files" = "刪除安裝暫存檔案";
 "Delete Temporary Installation Files?" = "確定刪除安裝暫存檔案嗎？";
 "Delete Virtual Mac" = "刪除虛擬Mac";
 "Delete Virtual Mac?" = "要刪除虛擬Mac嗎？";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "描述問題並附上診斷ZIP和螢幕錄影。如果Safari無法存取Github，改用電腦開啟。";
 "Developer Beta" = "開發者測試版";
 "Developers" = "開發者";
 "Disabled" = "已停用";
@@ -82,7 +83,6 @@
 "Display Height" = "顯示高度";
 "Display Resolution" = "顯示解析度";
 "Display Width" = "顯示寬度";
-"Done" = "完成";
 "Double-tap to hold or release this modifier" = "輕點兩下以鎖定或釋放此修飾鍵";
 "Download Failed" = "下載失敗";
 "Downloading macOS" = "正在下載macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "填滿視窗";
 "Fit in Window" = "符合視窗大小";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "“適應視窗”會顯示完整畫面。“填滿視窗”會在視窗形狀不同時裁剪畫面邊緣。";
+"Fix with Coding Agent" = "使用程式設計代理修正";
 "Force Shut Down" = "強制關機";
 "Force Shut Down Virtual Mac?" = "要強制關閉虛擬Mac嗎？";
 "Full Screen" = "全螢幕";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "虛擬Mac執行時的輸入";
 "Install %@" = "安裝%@";
 "Install macOS" = "安裝macOS";
-"Installation Details" = "安裝詳細資訊";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "從Sileo安裝OpenSSH和LLDB，將iPad連接到電腦，然後請Codex或Claude Code診斷並修正問題。在Github上分享解決方案。";
 "Installation Failed" = "安裝失敗";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "虛擬Mac啟動安裝環境時，安裝進度可能會暫停數分鐘。你的iPad將保持喚醒。";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "macOS準備下一安裝階段時，安裝進度可能暫時不變。你的iPad將保持喚醒。";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "沒有符合搜尋條件的虛擬Mac。";
 "OK" = "好";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "目前僅約有%llu GB可用空間。磁碟映象為稀疏格式，但儲存空間耗盡時，安裝或後續使用仍可能失敗。";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "開啟控制中心並開始螢幕錄影，然後重現問題。";
+"Optional" = "可選";
 "Options" = "選項";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "十多年來，人們一直夢想在iPad上執行macOS。今⁠天，這個夢想終於成真。建立虛擬Mac以開始使用。";
 "Pixels Per Inch" = "每英寸畫素數";
@@ -158,10 +161,13 @@
 "Read Only" = "只讀";
 "Reading restore image…" = "正在讀取恢復映象…";
 "Recommended macOS Release" = "建議的macOS版本";
+"Record the Problem" = "錄影記錄問題";
+"Record the Problem Again" = "重新錄影問題";
 "Recover Networking After Sleep" = "睡眠喚醒後回復網路";
 "Release" = "正式版";
 "Remove" = "移除";
 "Report Issue" = "回報問題";
+"Report This Problem" = "回報此問題";
 "Reset" = "還原";
 "Reset Settings" = "重置設定";
 "Reset Settings?" = "要還原設定嗎？";
@@ -169,6 +175,9 @@
 "Resources" = "資源";
 "Resume" = "繼續";
 "Save" = "儲存";
+"Save a ZIP file containing logs and crash reports." = "儲存包含記錄和當機報告的ZIP檔案。";
+"Save Diagnostics to Files" = "將診斷資訊儲存到「檔案」";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "螢幕錄影在問題發生後才開始，因此沒有錄下當時的情況。\n\n請繼續錄影，然後重複導致問題的步驟。此報告再次出現時，請儲存診斷，並將螢幕錄影和診斷ZIP都附加到Github問題中。";
 "Search Virtual Mac" = "搜尋虛擬Mac";
 "Settings" = "設定";
 "Shared Folder" = "共享資料夾";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "無法建立診斷歸檔。";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "虛擬Mac從DFU切換到RestoreOS時，首次顯示進度可能需要幾分鐘。你的iPad將保持喚醒。";
 "The incomplete Virtual Mac and its installation files will be deleted." = "將刪除未完成的虛擬Mac及其安裝檔案。";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "安裝映像和安裝暫存檔案已保留，以便診斷故障。你可以在「設定」中匯出診斷資訊。";
 "The installer could not be started: %s" = "無法啟動安裝程式：%s";
 "The new Virtual Mac is ready to use." = "新的虛擬Mac已可使用。";
 "The partial restore image will be deleted." = "將刪除未下載完成的恢復映象。";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "請確認你的iPad有足夠的可用儲存空間，然後重試。";
 "Version" = "版本";
 "Video Encoding and Decoding Acceleration" = "視訊編碼與解碼加速";
-"View Details" = "檢視詳細資訊";
 "Virtual Mac" = "虛擬Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "虛擬Mac %@不支援%@。請在Sileo檢查更新。";
 "Virtual Mac Controls" = "虛擬Mac控制項";

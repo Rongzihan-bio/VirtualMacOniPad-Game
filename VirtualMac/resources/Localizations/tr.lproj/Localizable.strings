@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Eski";
 "%.0f%% complete" = "%.0f%% tamamlandı";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "%@ desteklenmiyor";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ performans veya grafik sorunları yaşayabilir. En iyi deneyim için macOS Ventura, macOS Sonoma veya macOS Sequoia kullanın.\n\nSaydamlık efektleri görsel sorunlara neden olursa Sistem Ayarları > Erişilebilirlik > Ekran bölümünde Saydamlığı Azalt’ı açın.";
 "%@ remaining" = "%@ kaldı";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nTamamlanmamış sanal Mac, Geçici Kurulum Dosyaları içinde %@ olarak tutuldu. Ayarlar’dan silinebilir.";
 "%@\nState: %@\n%@\n\n" = "%@\nDurum: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Önceki bir macOS kurulumu tamamlanmadı. Ayrıntılarını inceleyebilir, hata ayıklama için tutabilir veya silebilirsiniz.";
+"A previous macOS installation did not finish." = "Önceki bir macOS yüklemesi tamamlanmadı.";
 "About" = "Hakkında";
 "Accommodate Finger Double-Taps" = "Parmakla çift dokunmayı kolaylaştır";
 "Add Shared Folder" = "Paylaşılan Klasör Ekle";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Kaydedilemedi";
 "Could Not Start Installer" = "Yükleyici Başlatılamadı";
 "Couldn’t Export Diagnostics" = "Tanılar Dışa Aktarılamadı";
+"Create Github Issue" = "Github Sorunu Oluştur";
 "Create Virtual Mac" = "Sanal Mac Oluştur";
 "Custom" = "Özel";
 "Debug Logging" = "Hata ayıklama günlüğü";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Hata ayıklama günlükleri etkinleştirildi. Daha sonra Ayarlar’dan kapatabilirsiniz.";
 "Delete" = "Sil";
 "Delete All" = "Tümünü Sil";
 "Delete Cached Install Images" = "Önbelleğe Alınmış Kurulum İmajlarını Sil";
 "Delete Cached Install Images?" = "Önbelleğe alınmış kurulum imajları silinsin mi?";
-"Delete Incomplete Installation" = "Tamamlanmamış Kurulumu Sil";
 "Delete IPSW After Successful Installation" = "Başarılı Kurulumdan Sonra IPSW'ü Sil";
 "Delete or rename the existing Virtual Mac first." = "Önce var olan Sanal Mac’i silin veya yeniden adlandırın.";
 "Delete Temporary Installation Files" = "Geçici Kurulum Dosyalarını Sil";
 "Delete Temporary Installation Files?" = "Geçici Kurulum Dosyaları Silinsin mi?";
 "Delete Virtual Mac" = "Sanal Mac’i Sil";
 "Delete Virtual Mac?" = "Sanal Mac Silinsin mi?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Sorunu açıklayın, ardından tanılama ZIP dosyasını ve ekran kaydını ekleyin. Safari Github’ı açamıyorsa bunun yerine bir bilgisayar kullanın.";
 "Developer Beta" = "Geliştirici Betası";
 "Developers" = "Geliştiriciler";
 "Disabled" = "Kapalı";
@@ -82,7 +83,6 @@
 "Display Height" = "Ekran Yüksekliği";
 "Display Resolution" = "Ekran Çözünürlüğü";
 "Display Width" = "Ekran Genişliği";
-"Done" = "Bitti";
 "Double-tap to hold or release this modifier" = "Bu niteleyiciyi basılı tutmak veya bırakmak için çift dokunun";
 "Download Failed" = "İndirme Başarısız";
 "Downloading macOS" = "macOS İndiriliyor";
@@ -95,6 +95,7 @@
 "Fill Window" = "Pencereyi Doldur";
 "Fit in Window" = "Pencereye Sığdır";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Pencereye Sığdır tüm ekranı gösterir. Pencereyi Doldur, pencerenin şekli farklı olduğunda kenarları kırpar.";
+"Fix with Coding Agent" = "Kodlama aracısıyla düzelt";
 "Force Shut Down" = "Kapatmaya Zorla";
 "Force Shut Down Virtual Mac?" = "Sanal Mac Kapatmaya Zorlansın mı?";
 "Full Screen" = "Tam Ekran";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Sanal Mac çalışırken giriş";
 "Install %@" = "%@ Yükle";
 "Install macOS" = "macOS’i Yükle";
-"Installation Details" = "Kurulum Ayrıntıları";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Sileo’dan OpenSSH ve LLDB’yi yükleyin, iPad’i bir bilgisayara bağlayın ve Codex ya da Claude Code’dan sorunu tanılayıp düzeltmesini isteyin. Çözümü Github’da paylaşın.";
 "Installation Failed" = "Yükleme Başarısız";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Sanal Mac kurulum ortamını başlatırken kurulum ilerlemesi birkaç dakika duraklayabilir. iPad’iniz uyanık kalacak.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "macOS bir sonraki kurulum aşamasını hazırlarken kurulum ilerlemesi değişmeden kalabilir. iPad’iniz uyanık kalacak.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Aramanızla eşleşen bir Sanal Mac yok.";
 "OK" = "Tamam";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Şu anda yalnızca yaklaşık %llu GB kullanılabilir. Disk imajı seyrektir ancak depolama dolarsa kurulum veya sonraki kullanım başarısız olabilir.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Denetim Merkezi’ni açın, Ekran Kaydı’nı başlatın ve ardından sorunu yeniden oluşturun.";
+"Optional" = "İsteğe bağlı";
 "Options" = "Seçenekler";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "İnsanlar on yılı aşkın süredir iPad’de macOS çalıştırmanın hayalini kuruyor. Bugün bu hayal gerçek oluyor. Başlamak için bir sanal Mac oluşturun.";
 "Pixels Per Inch" = "İnç Başına Piksel";
@@ -158,10 +161,13 @@
 "Read Only" = "Salt Okunur";
 "Reading restore image…" = "Geri yükleme imajı okunuyor…";
 "Recommended macOS Release" = "Önerilen macOS Sürümü";
+"Record the Problem" = "Sorunu Kaydet";
+"Record the Problem Again" = "Sorunu Yeniden Kaydedin";
 "Recover Networking After Sleep" = "Uykudan Sonra Ağı Kurtarma";
 "Release" = "Sürüm";
 "Remove" = "Çıkar";
 "Report Issue" = "Sorun Bildir";
+"Report This Problem" = "Bu Sorunu Bildir";
 "Reset" = "Sıfırla";
 "Reset Settings" = "Ayarları Sıfırla";
 "Reset Settings?" = "Ayarlar Sıfırlansın mı?";
@@ -169,6 +175,9 @@
 "Resources" = "Kaynaklar";
 "Resume" = "Sürdür";
 "Save" = "Kaydet";
+"Save a ZIP file containing logs and crash reports." = "Günlükleri ve çökme raporlarını içeren bir ZIP dosyası kaydedin.";
+"Save Diagnostics to Files" = "Tanılamayı Dosyalar’a Kaydet";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Ekran kaydı sorun oluştuktan sonra başladığı için olanları kaydetmedi.\n\nKayda devam edin ve soruna neden olan adımları tekrarlayın. Bu rapor yeniden göründüğünde tanılamayı kaydedin ve hem ekran kaydını hem de tanılama ZIP dosyasını Github sorununuza ekleyin.";
 "Search Virtual Mac" = "Sanal Mac Ara";
 "Settings" = "Ayarlar";
 "Shared Folder" = "Paylaşılan Klasör";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Tanı arşivi oluşturulamadı.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Sanal Mac DFU’dan RestoreOS’e geçerken ilk ilerleme değeri birkaç dakika sürebilir. iPad’iniz uyanık kalacak.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Tamamlanmamış Sanal Mac ve kurulum dosyaları silinecek.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Arızanın tanılanabilmesi için kurulum imajı ve geçici kurulum dosyaları tutuldu. Tanıları Ayarlar’dan dışa aktarabilirsiniz.";
 "The installer could not be started: %s" = "Yükleyici başlatılamadı: %s";
 "The new Virtual Mac is ready to use." = "Yeni Sanal Mac kullanıma hazır.";
 "The partial restore image will be deleted." = "Kısmen indirilmiş geri yükleme imajı silinecek.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "iPad’inizde yeterli boş alan olduğunu doğrulayıp yeniden deneyin.";
 "Version" = "Sürüm";
 "Video Encoding and Decoding Acceleration" = "Video Kodlama ve Kod Çözme Hızlandırması";
-"View Details" = "Ayrıntıları Göster";
 "Virtual Mac" = "Sanal Mac";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@, %@ sürümünü desteklemiyor. Sileo’da güncellemeleri kontrol edin.";
 "Virtual Mac Controls" = "Sanal Mac Denetimleri";

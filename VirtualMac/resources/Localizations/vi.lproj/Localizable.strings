@@ -1,13 +1,12 @@
-/* Virtual Mac 1.1 localization. */
+/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Cũ";
 "%.0f%% complete" = "Đã hoàn tất %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
 "%@ is not supported" = "%@ không được hỗ trợ";
 "%@ may encounter performance or graphical issues. For the best experience, use macOS Ventura, macOS Sonoma, or macOS Sequoia.\n\nIf transparency effects cause visual problems, turn on Reduce Transparency in System Settings > Accessibility > Display." = "%@ có thể gặp vấn đề về hiệu năng hoặc đồ họa. Để có trải nghiệm tốt nhất, hãy dùng macOS Ventura, macOS Sonoma hoặc macOS Sequoia.\n\nNếu hiệu ứng trong suốt gây ra vấn đề hiển thị, hãy bật Giảm độ trong suốt trong Cài đặt hệ thống > Trợ năng > Màn hình.";
 "%@ remaining" = "Còn lại %@";
-"%@\n\n%@\n\nThe incomplete Virtual Mac was retained in Temporary Installation Files as %@. It can be deleted from Settings." = "%@\n\n%@\n\nMáy Mac ảo chưa hoàn tất được giữ trong Tệp cài đặt tạm thời với tên %@. Bạn có thể xóa máy này trong Cài đặt.";
 "%@\nState: %@\n%@\n\n" = "%@\nTrạng thái: %@\n%@\n\n";
-"A previous macOS installation did not finish. You can review its details, keep it for debugging, or delete it." = "Một lần cài đặt macOS trước đó chưa hoàn tất. Bạn có thể xem chi tiết, giữ lại để gỡ lỗi hoặc xóa.";
+"A previous macOS installation did not finish." = "Lần cài đặt macOS trước chưa hoàn tất.";
 "About" = "Giới thiệu";
 "Accommodate Finger Double-Taps" = "Giúp thao tác chạm hai lần bằng ngón tay dễ hơn";
 "Add Shared Folder" = "Thêm thư mục được chia sẻ";
@@ -58,20 +57,22 @@
 "Could Not Save" = "Không thể lưu";
 "Could Not Start Installer" = "Không thể khởi động trình cài đặt";
 "Couldn’t Export Diagnostics" = "Không thể xuất dữ liệu chẩn đoán";
+"Create Github Issue" = "Tạo báo cáo trên Github";
 "Create Virtual Mac" = "Tạo Máy Mac ảo";
 "Custom" = "Tùy chỉnh";
 "Debug Logging" = "Ghi nhật ký gỡ lỗi";
+"Debug Logging has been enabled. You can turn it off later in Settings." = "Tính năng ghi nhật ký gỡ lỗi đã được bật. Bạn có thể tắt tính năng này sau trong Cài đặt.";
 "Delete" = "Xóa";
 "Delete All" = "Xóa tất cả";
 "Delete Cached Install Images" = "Xóa ảnh cài đặt đã lưu vào bộ nhớ đệm";
 "Delete Cached Install Images?" = "Xóa ảnh cài đặt đã lưu vào bộ nhớ đệm?";
-"Delete Incomplete Installation" = "Xóa bản cài đặt chưa hoàn tất";
 "Delete IPSW After Successful Installation" = "Xóa IPSW Sau khi cài đặt thành công";
 "Delete or rename the existing Virtual Mac first." = "Trước tiên hãy xóa hoặc đổi tên máy Mac ảo hiện có.";
 "Delete Temporary Installation Files" = "Xóa tệp cài đặt tạm thời";
 "Delete Temporary Installation Files?" = "Xóa tệp cài đặt tạm thời?";
 "Delete Virtual Mac" = "Xóa máy Mac ảo";
 "Delete Virtual Mac?" = "Xóa máy Mac ảo?";
+"Describe the problem and attach the diagnostics ZIP and screen recording. If Safari cannot access Github, use a computer instead." = "Mô tả sự cố, sau đó đính kèm tệp ZIP chẩn đoán và bản ghi màn hình. Nếu Safari không thể mở Github, hãy dùng máy tính.";
 "Developer Beta" = "Bản beta dành cho nhà phát triển";
 "Developers" = "Nhà phát triển";
 "Disabled" = "Tắt";
@@ -82,7 +83,6 @@
 "Display Height" = "Chiều cao màn hình";
 "Display Resolution" = "Độ phân giải màn hình";
 "Display Width" = "Chiều rộng màn hình";
-"Done" = "Xong";
 "Double-tap to hold or release this modifier" = "Chạm hai lần để giữ hoặc nhả phím bổ trợ này";
 "Download Failed" = "Tải về không thành công";
 "Downloading macOS" = "Đang tải về macOS";
@@ -95,6 +95,7 @@
 "Fill Window" = "Lấp đầy cửa sổ";
 "Fit in Window" = "Vừa với cửa sổ";
 "Fit in Window shows the entire display. Fill Window crops its edges when the window has a different shape." = "Vừa cửa sổ hiển thị toàn bộ màn hình. Lấp đầy cửa sổ cắt bớt các cạnh khi cửa sổ có hình dạng khác.";
+"Fix with Coding Agent" = "Khắc phục bằng tác nhân lập trình";
 "Force Shut Down" = "Buộc tắt";
 "Force Shut Down Virtual Mac?" = "Buộc tắt máy Mac ảo?";
 "Full Screen" = "Toàn màn hình";
@@ -108,7 +109,7 @@
 "Input While a Virtual Mac Is Running" = "Nhập liệu khi Máy Mac ảo đang chạy";
 "Install %@" = "Cài đặt %@";
 "Install macOS" = "Cài đặt macOS";
-"Installation Details" = "Chi tiết cài đặt";
+"Install OpenSSH and LLDB from Sileo, connect your iPad to a computer, and ask Codex or Claude Code to diagnose and fix the issue. Share the solution on Github." = "Cài đặt OpenSSH và LLDB từ Sileo, kết nối iPad với máy tính rồi yêu cầu Codex hoặc Claude Code chẩn đoán và khắc phục sự cố. Chia sẻ giải pháp trên Github.";
 "Installation Failed" = "Cài đặt không thành công";
 "Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake." = "Tiến trình cài đặt có thể tạm dừng vài phút trong khi Máy Mac ảo khởi động môi trường cài đặt. iPad của bạn sẽ không chuyển sang chế độ ngủ.";
 "Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake." = "Tiến trình cài đặt có thể không thay đổi trong khi macOS chuẩn bị giai đoạn tiếp theo. iPad của bạn sẽ không chuyển sang chế độ ngủ.";
@@ -144,6 +145,8 @@
 "No Virtual Macs match your search." = "Không có Máy Mac ảo nào khớp với tìm kiếm.";
 "OK" = "OK";
 "Only about %llu GB is currently available. The disk image is sparse, but installation or later use can fail when storage fills up." = "Hiện chỉ có khoảng %llu GB khả dụng. Ảnh đĩa là dạng động, nhưng cài đặt hoặc sử dụng sau này có thể thất bại nếu hết dung lượng.";
+"Open Control Center and start Screen Recording, then reproduce the problem." = "Mở Trung tâm điều khiển, bắt đầu Ghi màn hình rồi tái hiện sự cố.";
+"Optional" = "Không bắt buộc";
 "Options" = "Tùy chọn";
 "People have dreamed of running macOS on iPad for more than a decade. Today, that dream comes true. Create a Virtual Mac to get started." = "Trong hơn một thập kỷ, mọi người đã mơ ước chạy macOS trên iPad. Hôm nay, giấc mơ đó đã thành hiện thực. Hãy tạo một Máy Mac ảo để bắt đầu.";
 "Pixels Per Inch" = "Pixel trên mỗi inch";
@@ -158,10 +161,13 @@
 "Read Only" = "Chỉ đọc";
 "Reading restore image…" = "Đang đọc ảnh khôi phục…";
 "Recommended macOS Release" = "Bản phát hành macOS được đề xuất";
+"Record the Problem" = "Ghi lại sự cố";
+"Record the Problem Again" = "Ghi lại sự cố";
 "Recover Networking After Sleep" = "Khôi phục mạng sau khi ngủ";
 "Release" = "Bản phát hành";
 "Remove" = "Xóa";
 "Report Issue" = "Báo cáo sự cố";
+"Report This Problem" = "Báo cáo sự cố này";
 "Reset" = "Đặt lại";
 "Reset Settings" = "Đặt lại cài đặt";
 "Reset Settings?" = "Đặt lại cài đặt?";
@@ -169,6 +175,9 @@
 "Resources" = "Tài nguyên";
 "Resume" = "Tiếp tục";
 "Save" = "Lưu";
+"Save a ZIP file containing logs and crash reports." = "Lưu tệp ZIP chứa nhật ký và báo cáo sự cố.";
+"Save Diagnostics to Files" = "Lưu chẩn đoán vào Tệp";
+"Screen Recording started after the problem occurred, so it did not capture what happened.\n\nKeep recording, then repeat the steps that caused the problem. When this report appears again, save the diagnostics and attach both the screen recording and diagnostics ZIP to your Github issue." = "Tính năng ghi màn hình bắt đầu sau khi sự cố xảy ra nên không ghi lại được diễn biến.\n\nHãy tiếp tục ghi rồi lặp lại các bước gây ra sự cố. Khi báo cáo này xuất hiện lại, hãy lưu dữ liệu chẩn đoán và đính kèm cả bản ghi màn hình lẫn tệp ZIP chẩn đoán vào báo cáo trên Github.";
 "Search Virtual Mac" = "Tìm Máy Mac ảo";
 "Settings" = "Cài đặt";
 "Shared Folder" = "Thư mục được chia sẻ";
@@ -197,7 +206,6 @@
 "The diagnostics archive could not be created." = "Không thể tạo tệp chẩn đoán.";
 "The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake." = "Giá trị tiến trình đầu tiên có thể mất vài phút trong khi máy Mac ảo chuyển từ DFU sang RestoreOS. iPad của bạn sẽ không ngủ.";
 "The incomplete Virtual Mac and its installation files will be deleted." = "Máy Mac ảo chưa hoàn tất và các tệp cài đặt của máy sẽ bị xóa.";
-"The install image and temporary installation files were kept so the failure can be diagnosed. You can export diagnostics from Settings." = "Ảnh cài đặt và các tệp cài đặt tạm thời đã được giữ lại để có thể chẩn đoán lỗi. Bạn có thể xuất dữ liệu chẩn đoán từ Cài đặt.";
 "The installer could not be started: %s" = "Không thể khởi chạy trình cài đặt: %s";
 "The new Virtual Mac is ready to use." = "Máy Mac ảo mới đã sẵn sàng để sử dụng.";
 "The partial restore image will be deleted." = "Ảnh khôi phục tải xuống một phần sẽ bị xóa.";
@@ -225,7 +233,6 @@
 "Verify your iPad has sufficient free storage and try again." = "Hãy kiểm tra iPad của bạn có đủ dung lượng trống rồi thử lại.";
 "Version" = "Phiên bản";
 "Video Encoding and Decoding Acceleration" = "Tăng tốc mã hóa và giải mã video";
-"View Details" = "Xem chi tiết";
 "Virtual Mac" = "Máy Mac ảo";
 "Virtual Mac %@ does not support %@. Check for updates in Sileo." = "Virtual Mac %@ không hỗ trợ %@. Hãy kiểm tra bản cập nhật trong Sileo.";
 "Virtual Mac Controls" = "Bộ điều khiển Máy Mac ảo";

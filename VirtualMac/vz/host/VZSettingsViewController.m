@@ -21,8 +21,10 @@
     NSString *path = [NSBundle.mainBundle pathForResource:
         imageName.stringByDeletingPathExtension ofType:imageName.pathExtension
         inDirectory:@"Developers"];
-    UIImageView *avatar = [[[UIImageView alloc] initWithImage:
-        [UIImage imageWithContentsOfFile:path]] autorelease];
+    UIImage *image = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
+    if (!image)
+        image = [UIImage systemImageNamed:@"person.crop.circle"];
+    UIImageView *avatar = [[[UIImageView alloc] initWithImage:image] autorelease];
     avatar.translatesAutoresizingMaskIntoConstraints = NO;
     avatar.contentMode = UIViewContentModeScaleAspectFill;
     avatar.layer.cornerRadius = 14.0;
@@ -61,8 +63,21 @@
 
 - (instancetype)initWithMachines:(NSArray<NSDictionary *> *)machines
 {
-    if ((self = [super initWithStyle:UITableViewStyleInsetGrouped]))
-        _machines = [machines copy];
+    if ((self = [super initWithStyle:UITableViewStyleInsetGrouped])) {
+        NSMutableArray *validMachines = [NSMutableArray array];
+        if ([machines isKindOfClass:NSArray.class]) {
+            for (id candidate in machines) {
+                if (![candidate isKindOfClass:NSDictionary.class]) continue;
+                id path = candidate[@"path"];
+                id name = candidate[@"name"];
+                if (![path isKindOfClass:NSString.class] || ![path length] ||
+                    ![name isKindOfClass:NSString.class] || ![name length])
+                    continue;
+                [validMachines addObject:candidate];
+            }
+        }
+        _machines = [validMachines copy];
+    }
     return self;
 }
 
@@ -205,7 +220,10 @@
         cell.textLabel.text = VZL(@"Virtual Mac Controls");
         NSDictionary *names = @{@"automatic": VZL(@"Automatic"), @"always": VZL(@"Always Visible"),
                                 @"hidden": VZL(@"Always Hidden")};
-        cell.detailTextLabel.text = names[[settings stringForKey:VZHUDVisibilityKey]] ?: VZL(@"Automatic");
+        NSString *visibility = [settings stringForKey:VZHUDVisibilityKey];
+        cell.detailTextLabel.text = visibility ? names[visibility] : nil;
+        if (!cell.detailTextLabel.text)
+            cell.detailTextLabel.text = VZL(@"Automatic");
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (indexPath.section == 1) {
         cell.textLabel.text = VZL(@"Controls Opacity");
@@ -422,15 +440,12 @@
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.userInteractionEnabled = YES;
             if (!archive) {
-                UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:VZL(@"Couldn’t Export Diagnostics")
-                    message:error.localizedDescription ?:
-                        VZL(@"The diagnostics archive could not be created.")
-                    preferredStyle:UIAlertControllerStyleAlert];
-                VZAddFailureSupportActions(alert);
-                [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-                    style:UIAlertActionStyleDefault handler:nil]];
-                [self presentViewController:alert animated:YES completion:nil];
+                VZPresentFailureReport(self,
+                    VZL(@"Couldn’t Export Diagnostics"),
+                    error.localizedDescription ?:
+                        VZL(@"The diagnostics archive could not be created."),
+                    error.debugDescription,
+                    VZFailureSupportOptionDiagnosticsUnavailable);
                 return;
             }
             // The activity sheet initializes Core Image to draw the AirDrop

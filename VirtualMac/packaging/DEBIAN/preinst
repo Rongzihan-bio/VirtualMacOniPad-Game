@@ -9,11 +9,12 @@ export PATH=/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/var/jb/sbin:/usr/bin:/
 # owned by 1.0, avoiding an upgrade-time alias collision.
 mkdir -p /var/jb/usr/lib/TweakInject
 
-# Some iPadOS 16 builds leave /var/root at 0750. Virtual Mac itself runs as
-# mobile and must traverse this directory to execute its root-owned setuid
-# restore launcher. Add traverse permission only; this does not permit mobile
-# to list /var/root. Preserve every existing owner/group permission bit.
-if test -d /var/root && ! su mobile -c 'test -x /var/root' 2>/dev/null; then
+# Some system and bootstrap combinations leave /var/root at 0750. Virtual Mac
+# runs as mobile and must traverse it to execute the root-owned setuid restore
+# launcher. Add traverse permission only; this does not permit directory
+# listing and preserves every existing owner/group permission bit. Do this
+# unconditionally so repair does not depend on a bootstrap's `su` behavior.
+if test -d /var/root; then
     chmod o+x /var/root
 fi
 

@@ -8,7 +8,7 @@ NSString * const VZKeyboardShortcutCaptureKey = @"KeyboardShortcutCapture";
 NSString * const VZSystemGestureSuppressionKey = @"SystemGestureSuppression";
 NSString * const VZMultitaskingGestureSuppressionKey = @"MultitaskingGestureSuppression";
 NSString * const VZHomeIndicatorSuppressionKey = @"HomeIndicatorSuppression";
-NSString * const VZShowStatusLabelKey = @"ShowStatusLabel";
+NSString * const VZShowStatusLabelKey = @"ShowDebugStatusOverlay";
 NSString * const VZAutoDeleteRestoreImageKey = @"AutoDeleteRestoreImage";
 NSString * const VZHUDVisibilityKey = @"HUDVisibility";
 NSString * const VZHUDCornerKey = @"HUDCorner";
@@ -74,19 +74,21 @@ static CFStringRef const VZSettingsDarwinNotification =
     };
 }
 
-- (id)valueForSettingKey:(NSString *)key
-{
-    return self.values[key] ?: [self defaults][key];
-}
-
 - (BOOL)boolForKey:(NSString *)key
 {
-    return [[self valueForSettingKey:key] boolValue];
+    id value = self.values[key];
+    if (![value isKindOfClass:NSNumber.class] &&
+        ![value isKindOfClass:NSString.class])
+        value = [self defaults][key];
+    return [value respondsToSelector:@selector(boolValue)] ?
+        [value boolValue] : NO;
 }
 
 - (NSString *)stringForKey:(NSString *)key
 {
-    id value = [self valueForSettingKey:key];
+    id value = self.values[key];
+    if (![value isKindOfClass:NSString.class])
+        value = [self defaults][key];
     return [value isKindOfClass:NSString.class] ? value : nil;
 }
 
@@ -111,7 +113,7 @@ static CFStringRef const VZSettingsDarwinNotification =
 
 - (void)setString:(NSString *)value forKey:(NSString *)key
 {
-    if (value.length)
+    if ([value isKindOfClass:NSString.class] && value.length)
         self.values[key] = value;
     else
         [self.values removeObjectForKey:key];

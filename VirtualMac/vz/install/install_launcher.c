@@ -48,6 +48,28 @@ static const char *bootstrap_tool(const char *rootless, const char *rootful)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--diagnose") == 0) {
+        const char *script =
+            "/var/root/VirtualMac/install/start-install.sh";
+        struct stat info;
+        printf("launcher uid=%u euid=%u gid=%u egid=%u\n",
+               getuid(), geteuid(), getgid(), getegid());
+        if (stat(script, &info) == 0) {
+            printf("start-install mode=%04o uid=%u gid=%u executable=%d\n",
+                   info.st_mode & 07777, info.st_uid, info.st_gid,
+                   access(script, X_OK) == 0);
+        } else {
+            printf("start-install stat failed: errno=%d %s\n",
+                   errno, strerror(errno));
+        }
+        if (setgid(0) != 0 || setuid(0) != 0) {
+            printf("setuid failed: errno=%d %s\n", errno, strerror(errno));
+            return 1;
+        }
+        printf("after-setuid uid=%u euid=%u gid=%u egid=%u\n",
+               getuid(), geteuid(), getgid(), getegid());
+        return 0;
+    }
     if (argc == 4 && strcmp(argv[1], "--cancel-install") == 0) {
         const char *attempt = argv[3];
         if (!is_decimal(argv[2]) || !has_prefix(attempt,

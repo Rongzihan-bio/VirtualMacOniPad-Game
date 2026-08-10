@@ -47,7 +47,7 @@ mkdir -p "$APP"
 cp "$VZ_REPO_ROOT/vz/host/VirtualMac-Info.plist" "$APP/Info.plist"
 sips -Z 320 "$VZ_REPO_ROOT/assets/VirtualMacTemplate.png" \
     --out "$APP/VirtualMacTemplate.png" >/dev/null
-APP_VERSION="${VZ_RELEASE_VERSION:-1.1}"
+APP_VERSION="${VZ_RELEASE_VERSION:-1.1.1}"
 APP_BUILD="$(git -C "$VZ_REPO_ROOT" rev-list --count HEAD)"
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" \
     "$APP/Info.plist"
@@ -117,7 +117,7 @@ xcrun --sdk iphoneos clang \
     -o "$HOOK"
 xcrun --sdk iphoneos clang \
     -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" -fblocks \
-    -framework Foundation \
+    -framework Foundation -framework UIKit \
     "$VZ_REPO_ROOT/vz/host/VZAppSettings.m" \
     "$VZ_REPO_ROOT/vz/host/VZDiagnostics.m" \
     "$VZ_REPO_ROOT/vz/host/virtualmac_diagnostics_main.m" \
