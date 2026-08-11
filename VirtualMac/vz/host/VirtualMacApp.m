@@ -100,6 +100,7 @@ static void updateDisplayGeometry(void);
 static void logFramebufferState(id view, id framebuffer, const char *phase);
 static BOOL externalDisplayEnabled(void);
 static void connectExternalDisplay(void);
+static void connectExternalDisplayWithScreen(UIScreen *screen);
 static void disconnectExternalDisplay(void);
 static void startVirtualMachine(UIView *container, id delegate,
                                 NSString *bundlePath,
@@ -1932,10 +1933,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 
 - (void)externalScreenChanged:(NSNotification *)notification
 {
-    (void)notification;
     if ([notification.name isEqualToString:UIScreenDidConnectNotification]) {
-        if (externalDisplayEnabled())
-            connectExternalDisplay();
+        // Use the screen from the notification directly — UIScreen.screens
+        // may not be updated yet at the time this notification fires.
+        UIScreen *screen = notification.object;
+        if (screen && screen != UIScreen.mainScreen && externalDisplayEnabled())
+            connectExternalDisplayWithScreen(screen);
     } else {
         disconnectExternalDisplay();
     }
@@ -3884,16 +3887,17 @@ static BOOL externalDisplayEnabled(void) {
         && gFramebuffer != nil;
 }
 
-static void connectExternalDisplay(void) {
+static void connectExternalDisplayWithScreen(UIScreen *extScreen) {
     if (gExternalWindow)
         return;
     if (![VZAppSettings.sharedSettings boolForKey:VZExternalDisplayEnabledKey])
         return;
-    UIScreen *extScreen = nil;
-    for (UIScreen *s in UIScreen.screens) {
-        if (s != UIScreen.mainScreen) {
-            extScreen = s;
-            break;
+    if (!extScreen) {
+        for (UIScreen *s in UIScreen.screens) {
+            if (s != UIScreen.mainScreen) {
+                extScreen = s;
+                break;
+            }
         }
     }
     if (!extScreen)
@@ -3940,6 +3944,10 @@ static void connectExternalDisplay(void) {
     gExternalWindow.hidden = NO;
     printf("[VirtualMac] external window created frame=%s\n",
            NSStringFromCGRect(gExternalWindow.frame).UTF8String);
+}
+
+static void connectExternalDisplay(void) {
+    connectExternalDisplayWithScreen(nil);
 }
 
 static void disconnectExternalDisplay(void) {
