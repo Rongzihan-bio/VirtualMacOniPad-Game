@@ -12,6 +12,7 @@ NSString * const VZShowStatusLabelKey = @"ShowDebugStatusOverlay";
 NSString * const VZAutoDeleteRestoreImageKey = @"AutoDeleteRestoreImage";
 NSString * const VZHUDVisibilityKey = @"HUDVisibility";
 NSString * const VZHUDCornerKey = @"HUDCorner";
+NSString * const VZExternalDisplayEnabledKey = @"ExternalDisplayEnabled";
 NSString * const VZDisplayScalingKey = @"DisplayScaling";
 NSString * const VZTouchDoubleTapAccommodationKey = @"TouchDoubleTapAccommodation";
 NSString * const VZTouchTwoFingerScrollingKey = @"TouchTwoFingerScrolling";
@@ -62,6 +63,7 @@ static CFStringRef const VZSettingsDarwinNotification =
         VZAutoDeleteRestoreImageKey: @YES,
         VZHUDVisibilityKey: @"automatic",
         VZHUDCornerKey: @"top-right",
+        VZExternalDisplayEnabledKey: @NO,
         VZDisplayScalingKey: @"fit",
         VZTouchDoubleTapAccommodationKey: @YES,
         VZTouchTwoFingerScrollingKey: @YES,

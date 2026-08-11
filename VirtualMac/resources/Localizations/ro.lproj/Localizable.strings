@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Versiune veche";
 "%.0f%% complete" = "%.0f%% finalizat";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Forțați oprirea";
 "Force Shut Down Virtual Mac?" = "Forzare lo oprire di Mac virtual?";
 "Full Screen" = "Ecran complet";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "Generali";
 "Get Help" = "Obțineți ajutor";
 "Height" = "Înălțime";

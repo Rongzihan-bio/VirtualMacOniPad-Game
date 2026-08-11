@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Starší";
 "%.0f%% complete" = "%.0f %% dokončeno";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Vynutit vypnutí";
 "Force Shut Down Virtual Mac?" = "Vynutit vypnutí virtuálního Macu?";
 "Full Screen" = "Celá obrazovka";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "Obecné";
 "Get Help" = "Nápověda";
 "Height" = "Výška";

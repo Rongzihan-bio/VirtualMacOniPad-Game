@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Legacy";
 "%.0f%% complete" = "%.0f%% complete";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Force Shut Down";
 "Force Shut Down Virtual Mac?" = "Force Shut Down Virtual Mac?";
 "Full Screen" = "Full Screen";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "General";
 "Get Help" = "Get Help";
 "Height" = "Height";

@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · รุ่นเก่า";
 "%.0f%% complete" = "เสร็จแล้ว %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "CPU %@ ตัว · หน่วยความจำ %@ GB · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "บังคับปิดเครื่อง";
 "Force Shut Down Virtual Mac?" = "บังคับปิด Virtual Mac หรือไม่";
 "Full Screen" = "เต็มหน้าจอ";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "ทั่วไป";
 "Get Help" = "ขอความช่วยเหลือ";
 "Height" = "ความสูง";

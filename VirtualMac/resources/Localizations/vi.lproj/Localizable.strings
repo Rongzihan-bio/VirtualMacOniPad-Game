@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Cũ";
 "%.0f%% complete" = "Đã hoàn tất %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Buộc tắt";
 "Force Shut Down Virtual Mac?" = "Buộc tắt máy Mac ảo?";
 "Full Screen" = "Toàn màn hình";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "Cài đặt chung";
 "Get Help" = "Nhận trợ giúp";
 "Height" = "Chiều cao";

@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Régi";
 "%.0f%% complete" = "%.0f%% kész";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Kényszerített leállítás";
 "Force Shut Down Virtual Mac?" = "Kényszeríti a virtuális Mac leállítását?";
 "Full Screen" = "Teljes képernyő";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "Általános";
 "Get Help" = "Súgó";
 "Height" = "Magasság";

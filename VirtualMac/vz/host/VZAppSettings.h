@@ -14,6 +14,7 @@ FOUNDATION_EXPORT NSString * const VZShowStatusLabelKey;
 FOUNDATION_EXPORT NSString * const VZAutoDeleteRestoreImageKey;
 FOUNDATION_EXPORT NSString * const VZHUDVisibilityKey;
 FOUNDATION_EXPORT NSString * const VZHUDCornerKey;
+FOUNDATION_EXPORT NSString * const VZExternalDisplayEnabledKey;
 FOUNDATION_EXPORT NSString * const VZDisplayScalingKey;
 FOUNDATION_EXPORT NSString * const VZTouchDoubleTapAccommodationKey;
 FOUNDATION_EXPORT NSString * const VZTouchTwoFingerScrollingKey;

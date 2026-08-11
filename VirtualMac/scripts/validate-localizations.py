@@ -30,6 +30,7 @@ TECHNICAL_IDENTICAL_VALUES = {
     "%@ CPU · %@ GB RAM · %llu GB · %@%@",
     "Build %@ · %@ · %@",
     "Ethernet (%@)",
+    "Fullscreen Mirroring",
     "MAC Address",
     "Mac Keyboard",
     "Mac Trackpad",

@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · 旧版";
 "%.0f%% complete" = "已完成%.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@核CPU · %@ GB内存 · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "强制关机";
 "Force Shut Down Virtual Mac?" = "要强制关闭虚拟Mac吗？";
 "Full Screen" = "全屏";
+"Fullscreen Mirroring" = "Fullscreen Mirroring";
 "General" = "通用";
 "Get Help" = "获取帮助";
 "Height" = "高度";
