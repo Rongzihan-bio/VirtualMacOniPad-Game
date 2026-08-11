@@ -94,6 +94,7 @@ static void setStatus(NSString *status);
 // External display (Keynote-style: UIWindow.screen = externalScreen)
 static UIWindow *gExternalWindow;
 static UIView *gExternalMirrorView;
+static UIImageView *gExternalCursorView;
 
 static void updateDisplayGeometry(void);
 static void logFramebufferState(id view, id framebuffer, const char *phase);
@@ -2969,6 +2970,28 @@ static void updateCursorOverlay(VZFrameUpdateSharedPtr update) {
         // update reconciles it without the cursor jumping one frame backward.
         if (CACurrentMediaTime() - gLastPredictedCursorTime >= 0.05)
             gCursorView.frame = (CGRect){origin, size};
+        // Mirror cursor to external display if connected.
+        if (gExternalCursorView) {
+            CGRect viewport = aspectFitRect(gDisplayPixelSize,
+                                            gExternalWindow.bounds);
+            CGFloat extScaleX = viewport.size.width /
+                                gDisplayPixelSize.width;
+            CGFloat extScaleY = viewport.size.height /
+                                gDisplayPixelSize.height;
+            CGSize extSize = CGSizeMake(
+                gCursorPixelSize.width * extScaleX,
+                gCursorPixelSize.height * extScaleY);
+            CGPoint extOrigin = CGPointMake(
+                viewport.origin.x +
+                    ((CGFloat)guestX - gCursorHotspot.x) * extScaleX,
+                viewport.origin.y +
+                    ((CGFloat)guestY - gCursorHotspot.y) * extScaleY);
+            if (imageChanged) {
+                gExternalCursorView.image = gCursorView.image;
+                gExternalCursorView.hidden = gCursorView.hidden;
+            }
+            gExternalCursorView.frame = (CGRect){extOrigin, extSize};
+        }
         [image release];
     });
 }
@@ -3909,6 +3932,11 @@ static void connectExternalDisplay(void) {
     gExternalMirrorView = mirrorView;
     [mirrorView release];
 
+    gExternalCursorView = [[UIImageView alloc] initWithFrame:CGRectZero];
+    gExternalCursorView.backgroundColor = [UIColor clearColor];
+    gExternalCursorView.contentMode = UIViewContentModeScaleToFill;
+    [gExternalWindow addSubview:gExternalCursorView];
+
     gExternalWindow.hidden = NO;
     printf("[VirtualMac] external window created frame=%s\n",
            NSStringFromCGRect(gExternalWindow.frame).UTF8String);
@@ -3919,6 +3947,9 @@ static void disconnectExternalDisplay(void) {
         return;
     printf("[VirtualMac] external display disconnecting\n");
     gExternalMirrorView = nil;
+    [gExternalCursorView removeFromSuperview];
+    [gExternalCursorView release];
+    gExternalCursorView = nil;
     gExternalWindow.hidden = YES;
     [gExternalWindow release];
     gExternalWindow = nil;
