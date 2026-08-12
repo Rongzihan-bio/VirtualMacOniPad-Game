@@ -9,6 +9,7 @@
 #import "VZAppSettings.h"
 #import "VZDiagnostics.h"
 #import "VZFailureDetailsViewController.h"
+#import "VZGamepadBridge.h"
 #import "VZProgressViewController.h"
 #import "VZLocalization.h"
 #import "VZSupport.h"
@@ -54,6 +55,7 @@ static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
 static BOOL gDebugLogging;
+static VZGamepadBridge *gGamepadBridge;
 // Globe-held state, tracked from the Darwin relay (the tweak reports the
 // globe's raw HID press, which is reliable and prompt). The tweak translates
 // globe+<key> chords at the HID layer and relays the translated key; this flag
@@ -3918,6 +3920,8 @@ static void startVirtualMachine(UIView *container, id delegate,
     gMouseLocation = CGPointMake(CGRectGetMidX(inputView.bounds),
                                  CGRectGetMidY(inputView.bounds));
     installGCMouse();
+    gGamepadBridge = [VZGamepadBridge sharedBridge];
+    [gGamepadBridge start];
     startHealthMonitor();
     startControlMonitor();
     printf("[VirtualMac] VM picker ready inputWindow=%p\n", inputView.window);
@@ -4024,12 +4028,14 @@ static void startVirtualMachine(UIView *container, id delegate,
 {
     (void)application;
     resetPointerSession(YES);
+    [gGamepadBridge setForegroundActive:NO];
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application
 {
     (void)application;
     resetPointerSession(YES);
+    [gGamepadBridge setForegroundActive:YES];
     recoverNetworkingAfterResume();
     if (gInputView) {
         for (id interaction in gInputView.interactions)

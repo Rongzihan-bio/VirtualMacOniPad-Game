@@ -21,6 +21,8 @@ NSString * const VZIPadOS162KeyboardWorkaroundKey = @"IPadOS162KeyboardWorkaroun
 NSString * const VZNetworkResumeRecoveryKey = @"NetworkResumeRecovery";
 NSString * const VZHUDOpacityKey = @"HUDOpacity";
 NSString * const VZDebugLoggingKey = @"DebugLogging";
+NSString * const VZGamepadRelayEnabledKey = @"GamepadRelayEnabled";
+NSString * const VZGamepadDestinationKey = @"GamepadDestination";
 
 static NSString * const VZSettingsPath = @"/var/mobile/Media/VirtualMac/Settings.plist";
 static CFStringRef const VZSettingsDarwinNotification =
@@ -71,6 +73,8 @@ static CFStringRef const VZSettingsDarwinNotification =
         VZNetworkResumeRecoveryKey: @NO,
         VZHUDOpacityKey: @"0.55",
         VZDebugLoggingKey: @NO,
+        VZGamepadRelayEnabledKey: @NO,
+        VZGamepadDestinationKey: @"",
     };
 }
 

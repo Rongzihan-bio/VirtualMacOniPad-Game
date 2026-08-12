@@ -1,6 +1,8 @@
 #import "VZSettingsViewController.h"
 #import "VZAppSettings.h"
 #import "VZDiagnostics.h"
+#import "VZGamepadSettingsViewController.h"
+#import "VZGamepadBridge.h"
 #import "VZLocalization.h"
 #import "VZSupport.h"
 #import "VZVMLibraryViewController.h"
@@ -92,7 +94,7 @@
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
     (void)tableView;
-    return section == 0 ? 2 : section == 1 ? 10 : section == 2 ? 3 :
+    return section == 0 ? 2 : section == 1 ? 11 : section == 2 ? 3 :
         section == 3 ? 3 : section == 4 ? 2 : section == 5 ? 4 : 1;
 }
 
@@ -202,6 +204,14 @@
         cell.accessoryView = toggle;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
     } else if (indexPath.section == 1 && indexPath.row == 8) {
+        cell.textLabel.text = [NSString stringWithUTF8String:
+            "Network Gamepad Relay"];
+        NSDictionary *state = [[VZGamepadBridge sharedBridge] stateSnapshot];
+        cell.detailTextLabel.text = [state[@"controllerConnected"] boolValue]
+            ? [NSString stringWithUTF8String:"Controller Connected"]
+            : [NSString stringWithUTF8String:"No Controller"];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (indexPath.section == 1 && indexPath.row == 9) {
         cell.textLabel.text = VZL(@"Virtual Mac Controls");
         NSDictionary *names = @{@"automatic": VZL(@"Automatic"), @"always": VZL(@"Always Visible"),
                                 @"hidden": VZL(@"Always Hidden")};
@@ -457,7 +467,11 @@
         UIPasteboard.generalPasteboard.string = VZVMLibraryPath();
         UINotificationFeedbackGenerator *feedback = [[[UINotificationFeedbackGenerator alloc] init] autorelease];
         [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
-    } else if (indexPath.section == 1 && indexPath.row == 8)
+    } else if (indexPath.section == 1 && indexPath.row == 8) {
+        VZGamepadSettingsViewController *gamepad =
+            [[[VZGamepadSettingsViewController alloc] init] autorelease];
+        [self.navigationController pushViewController:gamepad animated:YES];
+    } else if (indexPath.section == 1 && indexPath.row == 9)
         [self chooseHUDVisibilityFrom:cell];
     else if (indexPath.section == 3 && indexPath.row == 1)
         [self confirmDeletePaths:VZInstallationArtifactPaths() title:VZL(@"Delete Temporary Installation Files?")];

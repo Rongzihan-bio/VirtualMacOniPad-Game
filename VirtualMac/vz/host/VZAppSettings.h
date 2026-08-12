@@ -23,6 +23,8 @@ FOUNDATION_EXPORT NSString * const VZIPadOS162KeyboardWorkaroundKey;
 FOUNDATION_EXPORT NSString * const VZNetworkResumeRecoveryKey;
 FOUNDATION_EXPORT NSString * const VZHUDOpacityKey;
 FOUNDATION_EXPORT NSString * const VZDebugLoggingKey;
+FOUNDATION_EXPORT NSString * const VZGamepadRelayEnabledKey;
+FOUNDATION_EXPORT NSString * const VZGamepadDestinationKey;
 
 @interface VZAppSettings : NSObject
 + (instancetype)sharedSettings;
