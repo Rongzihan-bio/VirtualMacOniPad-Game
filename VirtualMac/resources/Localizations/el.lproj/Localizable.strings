@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Παλαιό";
 "%.0f%% complete" = "Ολοκληρώθηκε το %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Εξαναγκασμένος τερματισμός";
 "Force Shut Down Virtual Mac?" = "Εξαναγκασμένος τερματισμός Εικονικού Mac;";
 "Full Screen" = "Πλήρης οθόνη";
+"Fullscreen Mirroring" = "Κατοπτρισμός Πλήρους Οθόνης";
 "General" = "Γενικά";
 "Get Help" = "Βοήθεια";
 "Height" = "Ύψος";

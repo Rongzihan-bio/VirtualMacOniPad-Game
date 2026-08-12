@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · ישן";
 "%.0f%% complete" = "%.0f%% הושלמו";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "אילוץ כיבוי";
 "Force Shut Down Virtual Mac?" = "לאלץ כיבוי של ה-Mac הווירטואלי?";
 "Full Screen" = "מסך מלא";
+"Fullscreen Mirroring" = "שיקוף במסך מלא";
 "General" = "כללי";
 "Get Help" = "קבלת עזרה";
 "Height" = "גובה";

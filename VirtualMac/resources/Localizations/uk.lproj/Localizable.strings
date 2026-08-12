@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Устаревшая";
 "%.0f%% complete" = "Виконано %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ ЦП · %@ ГБ ОЗУ · %llu ГБ · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Принудительно вимкнути";
 "Force Shut Down Virtual Mac?" = "Принудительно вимкнути віртуальний Mac?";
 "Full Screen" = "На весь екран";
+"Fullscreen Mirroring" = "Повноекранне Дзеркалення";
 "General" = "Загальні";
 "Get Help" = "Довідка";
 "Height" = "Висота";

@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Lama";
 "%.0f%% complete" = "%.0f%% selesai";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · RAM %@ GB · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Paksa Matikan";
 "Force Shut Down Virtual Mac?" = "Paksa Matikan Mac maya?";
 "Full Screen" = "Skrin Penuh";
+"Fullscreen Mirroring" = "Pencerminan Skrin Penuh";
 "General" = "Umum";
 "Get Help" = "Dapatkan Bantuan";
 "Height" = "Ketinggian";

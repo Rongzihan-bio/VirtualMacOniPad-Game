@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Eski";
 "%.0f%% complete" = "%.0f%% tamamlandı";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Kapatmaya Zorla";
 "Force Shut Down Virtual Mac?" = "Sanal Mac Kapatmaya Zorlansın mı?";
 "Full Screen" = "Tam Ekran";
+"Fullscreen Mirroring" = "Tam Ekran Yansıtma";
 "General" = "Genel";
 "Get Help" = "Yardım Al";
 "Height" = "Yükseklik";

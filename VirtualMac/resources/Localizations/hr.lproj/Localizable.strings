@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Starije";
 "%.0f%% complete" = "Dovršeno %.0f%%";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM-a · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Prisilno isključi";
 "Force Shut Down Virtual Mac?" = "Prisilno isključiti Virtualni Mac?";
 "Full Screen" = "Cijeli zaslon";
+"Fullscreen Mirroring" = "Potpuno Zrcaljenje Zaslona";
 "General" = "Općenito";
 "Get Help" = "Pomoć";
 "Height" = "Visina";

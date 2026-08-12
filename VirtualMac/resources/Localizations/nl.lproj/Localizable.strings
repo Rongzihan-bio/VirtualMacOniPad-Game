@@ -1,4 +1,3 @@
-/* Virtual Mac 1.1.1 localization. */
 " · Legacy" = " · Verouderd";
 "%.0f%% complete" = "%.0f%% voltooid";
 "%@ CPU · %@ GB RAM · %llu GB · %@%@" = "%@ CPU · %@ GB RAM · %llu GB · %@%@";
@@ -99,6 +98,7 @@
 "Force Shut Down" = "Forceer uitschakelen";
 "Force Shut Down Virtual Mac?" = "Uitschakelen van Virtual Mac forceren?";
 "Full Screen" = "Volledig scherm";
+"Fullscreen Mirroring" = "Volledige Schermspiegeling";
 "General" = "Algemeen";
 "Get Help" = "Hulp";
 "Height" = "Hoogte";

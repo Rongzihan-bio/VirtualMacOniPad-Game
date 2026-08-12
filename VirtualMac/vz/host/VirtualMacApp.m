@@ -91,8 +91,17 @@ static void setObj(id object, const char *selector, id value);
 static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed);
 static void sendPointer(CGPoint point, CGRect bounds, NSUInteger pressedButtons);
 static void setStatus(NSString *status);
+// External display (Keynote-style: UIWindow.screen = externalScreen)
+static UIWindow *gExternalWindow;
+static UIView *gExternalMirrorView;
+static UIImageView *gExternalCursorView;
+
 static void updateDisplayGeometry(void);
 static void logFramebufferState(id view, id framebuffer, const char *phase);
+static BOOL externalDisplayEnabled(void);
+static void connectExternalDisplay(void);
+static void connectExternalDisplayWithScreen(UIScreen *screen);
+static void disconnectExternalDisplay(void);
 static void startVirtualMachine(UIView *container, id delegate,
                                 NSString *bundlePath,
                                 NSDictionary *options);
@@ -1901,6 +1910,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     [NSNotificationCenter.defaultCenter addObserver:self
         selector:@selector(peripheralChanged:)
         name:GCMouseDidDisconnectNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+        selector:@selector(externalScreenChanged:)
+        name:UIScreenDidConnectNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+        selector:@selector(externalScreenChanged:)
+        name:UIScreenDidDisconnectNotification object:nil];
 }
 
 - (void)peripheralChanged:(NSNotification *)notification
@@ -1914,6 +1929,19 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         [gInputView resignFirstResponder];
     }
     [self updateHUDVisibility];
+}
+
+- (void)externalScreenChanged:(NSNotification *)notification
+{
+    if ([notification.name isEqualToString:UIScreenDidConnectNotification]) {
+        // Use the screen from the notification directly — UIScreen.screens
+        // may not be updated yet at the time this notification fires.
+        UIScreen *screen = notification.object;
+        if (screen && screen != UIScreen.mainScreen && externalDisplayEnabled())
+            connectExternalDisplayWithScreen(screen);
+    } else {
+        disconnectExternalDisplay();
+    }
 }
 
 - (void)appSettingsChanged:(NSNotification *)notification
@@ -2035,8 +2063,25 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         [placements addObject:move];
     }
     UIMenu *moveMenu = [UIMenu menuWithTitle:VZL(@"Move Controls") children:placements];
+    // External Display toggle
+    BOOL extEnabled = [VZAppSettings.sharedSettings
+        boolForKey:VZExternalDisplayEnabledKey];
+    UIAction *extToggle = [UIAction actionWithTitle:VZL(@"Fullscreen Mirroring")
+        image:[UIImage systemImageNamed:@"display"]
+        identifier:nil handler:^(UIAction *action) {
+        (void)action;
+        BOOL now = ![VZAppSettings.sharedSettings
+            boolForKey:VZExternalDisplayEnabledKey];
+        [VZAppSettings.sharedSettings setBool:now
+            forKey:VZExternalDisplayEnabledKey];
+        if (now && externalDisplayEnabled())
+            connectExternalDisplay();
+        else if (!now)
+            disconnectExternalDisplay();
+    }];
+    extToggle.state = extEnabled ? UIMenuElementStateOn : UIMenuElementStateOff;
     return [UIMenu menuWithTitle:@""
-        children:@[library, shutdown, hide, moveMenu]];
+        children:@[library, shutdown, hide, extToggle, moveMenu]];
 }
 
 - (void)confirmForceShutdown
@@ -2713,6 +2758,7 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
 
 - (void)finishVMAndShowLibraryWithError:(NSError *)error
 {
+    disconnectExternalDisplay();
     [gDisplayLayer removeFromSuperlayer];
     gDisplayLayer = nil;
     gDisplayContainer = nil;
@@ -2846,6 +2892,9 @@ static void traceFrameUpdate(id self, SEL selector, id framebuffer,
                shared ? shared->control : NULL);
     ((void(*)(id, SEL, id, VZFrameUpdateSharedPtr))gOriginalFrameUpdate)(
         self, selector, framebuffer, update);
+    // Mirror rendered frame to external display.
+    if (gExternalMirrorView && gDisplayLayer)
+        gExternalMirrorView.layer.contents = gDisplayLayer.contents;
 }
 
 static UIImage *copyCursorImage(const uint8_t *cursor) {
@@ -2924,6 +2973,28 @@ static void updateCursorOverlay(VZFrameUpdateSharedPtr update) {
         // update reconciles it without the cursor jumping one frame backward.
         if (CACurrentMediaTime() - gLastPredictedCursorTime >= 0.05)
             gCursorView.frame = (CGRect){origin, size};
+        // Mirror cursor to external display if connected.
+        if (gExternalCursorView) {
+            CGRect viewport = aspectFitRect(gDisplayPixelSize,
+                                            gExternalWindow.bounds);
+            CGFloat extScaleX = viewport.size.width /
+                                gDisplayPixelSize.width;
+            CGFloat extScaleY = viewport.size.height /
+                                gDisplayPixelSize.height;
+            CGSize extSize = CGSizeMake(
+                gCursorPixelSize.width * extScaleX,
+                gCursorPixelSize.height * extScaleY);
+            CGPoint extOrigin = CGPointMake(
+                viewport.origin.x +
+                    ((CGFloat)guestX - gCursorHotspot.x) * extScaleX,
+                viewport.origin.y +
+                    ((CGFloat)guestY - gCursorHotspot.y) * extScaleY);
+            if (imageChanged) {
+                gExternalCursorView.image = gCursorView.image;
+                gExternalCursorView.hidden = gCursorView.hidden;
+            }
+            gExternalCursorView.frame = (CGRect){extOrigin, extSize};
+        }
         [image release];
     });
 }
@@ -3591,6 +3662,8 @@ static void activateFramebuffer(void) {
         logFramebufferState(view, framebuffer, "after-2s");
     });
     setStatus(VZL(@"Virtual Mac running — native PVG framebuffer attached"));
+    if (externalDisplayEnabled())
+        connectExternalDisplay();
 }
 
 typedef struct {
@@ -3801,6 +3874,93 @@ static void startVirtualMachine(UIView *container, id delegate,
         return;
     }
     startVirtualMachineWorker(container, delegate, bundlePath, options);
+}
+
+// ─── External Display (Keynote-style) ────────────────────────────────────────
+// Keynote and other presentation apps use UIWindow.screen = externalScreen
+// to take over an external display without system-level borders. UIScene's
+// UIWindowSceneSessionRoleExternalDisplay can add display-specific insets
+// that appear as black bars.
+
+static BOOL externalDisplayEnabled(void) {
+    return [VZAppSettings.sharedSettings boolForKey:VZExternalDisplayEnabledKey]
+        && gFramebuffer != nil;
+}
+
+static void connectExternalDisplayWithScreen(UIScreen *extScreen) {
+    if (gExternalWindow)
+        return;
+    if (![VZAppSettings.sharedSettings boolForKey:VZExternalDisplayEnabledKey])
+        return;
+    if (!extScreen) {
+        for (UIScreen *s in UIScreen.screens) {
+            if (s != UIScreen.mainScreen) {
+                extScreen = s;
+                break;
+            }
+        }
+    }
+    if (!extScreen)
+        return;
+
+    // Disable overscan compensation so the system doesn't scale/inset
+    // the display output. Without this, nativeBounds may differ from
+    // bounds, introducing system-level black borders.
+    extScreen.overscanCompensation = 2;  // UIScreenOverscanCompensationNone
+
+    printf("[VirtualMac] external display connecting screen=%s "
+           "bounds=%.0fx%.0f native=%.0fx%.0f scale=%.3f "
+           "overscanCompensation=%ld\n",
+           extScreen.description.UTF8String,
+           extScreen.bounds.size.width, extScreen.bounds.size.height,
+           extScreen.nativeBounds.size.width, extScreen.nativeBounds.size.height,
+           extScreen.scale,
+           (long)extScreen.overscanCompensation);
+    for (UIScreenMode *mode in extScreen.availableModes) {
+        printf("[VirtualMac] ext screen mode size=%.0fx%.0f "
+               "pixelAspectRatio=%.3f\n",
+               mode.size.width, mode.size.height,
+               mode.pixelAspectRatio);
+    }
+
+    gExternalWindow = [[UIWindow alloc] initWithFrame:extScreen.bounds];
+    gExternalWindow.screen = extScreen;
+    gExternalWindow.backgroundColor = [UIColor blackColor];
+
+    UIView *mirrorView = [[UIView alloc] initWithFrame:gExternalWindow.bounds];
+    mirrorView.backgroundColor = [UIColor blackColor];
+    mirrorView.autoresizingMask = UIViewAutoresizingFlexibleWidth
+                                | UIViewAutoresizingFlexibleHeight;
+    mirrorView.layer.contentsGravity = kCAGravityResizeAspect;
+    [gExternalWindow addSubview:mirrorView];
+    gExternalMirrorView = mirrorView;
+    [mirrorView release];
+
+    gExternalCursorView = [[UIImageView alloc] initWithFrame:CGRectZero];
+    gExternalCursorView.backgroundColor = [UIColor clearColor];
+    gExternalCursorView.contentMode = UIViewContentModeScaleToFill;
+    [gExternalWindow addSubview:gExternalCursorView];
+
+    gExternalWindow.hidden = NO;
+    printf("[VirtualMac] external window created frame=%s\n",
+           NSStringFromCGRect(gExternalWindow.frame).UTF8String);
+}
+
+static void connectExternalDisplay(void) {
+    connectExternalDisplayWithScreen(nil);
+}
+
+static void disconnectExternalDisplay(void) {
+    if (!gExternalWindow)
+        return;
+    printf("[VirtualMac] external display disconnecting\n");
+    gExternalMirrorView = nil;
+    [gExternalCursorView removeFromSuperview];
+    [gExternalCursorView release];
+    gExternalCursorView = nil;
+    gExternalWindow.hidden = YES;
+    [gExternalWindow release];
+    gExternalWindow = nil;
 }
 
 @interface VirtualMacAppDelegate : UIResponder <UIApplicationDelegate>
