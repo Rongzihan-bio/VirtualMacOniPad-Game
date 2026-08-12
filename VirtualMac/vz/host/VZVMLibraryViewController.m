@@ -41,6 +41,72 @@ static NSString * const VZDisplayPPIKey = @"DisplayPixelsPerInch";
 static NSString * const VZMACAddressKey = @"MACAddress";
 static NSString * const VZVMNameKey = @"VMName";
 
+static NSArray<NSDictionary *> *VZFixedDisplayPresets(void)
+{
+    static NSArray *presets;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        presets = [@[
+            @{@"mode": @"1080p", @"title": VZL(@"1080p"),
+              @"width": @1920, @"height": @1080, @"ppi": @72},
+            @{@"mode": @"4KRetina", @"title": VZL(@"4K Retina"),
+              @"width": @3840, @"height": @2160, @"ppi": @218},
+            @{@"mode": @"5KRetina", @"title": VZL(@"5K Retina"),
+              @"width": @5120, @"height": @2880, @"ppi": @218},
+            @{@"mode": @"6KRetina", @"title": VZL(@"6K Retina"),
+              @"width": @6016, @"height": @3384, @"ppi": @218},
+        ] retain];
+    });
+    return presets;
+}
+
+static NSDictionary *VZFixedDisplayPresetForOptions(NSDictionary *options)
+{
+    NSInteger width = [options[VZDisplayWidthKey] integerValue];
+    NSInteger height = [options[VZDisplayHeightKey] integerValue];
+    NSInteger ppi = [options[VZDisplayPPIKey] integerValue];
+    for (NSDictionary *preset in VZFixedDisplayPresets())
+        if (width == [preset[@"width"] integerValue] &&
+            height == [preset[@"height"] integerValue] &&
+            ppi == [preset[@"ppi"] integerValue])
+            return preset;
+    return nil;
+}
+
+static NSString *VZDisplaySelectionForOptions(NSDictionary *options)
+{
+    NSString *mode = options[VZDisplayModeKey];
+    if ([mode isEqualToString:@"NativeRetina"] ||
+        [mode isEqualToString:@"FullScreen"] ||
+        [mode isEqualToString:@"LandscapeNativeRetina"] ||
+        [mode isEqualToString:@"PortraitNativeRetina"] ||
+        [mode isEqualToString:@"ExternalDisplay"] ||
+        [mode isEqualToString:@"WindowSizeAtStartup"])
+        return mode;
+    NSDictionary *preset = VZFixedDisplayPresetForOptions(options);
+    return preset ? preset[@"mode"] : @"Custom";
+}
+
+static NSString *VZDisplaySelectionTitle(NSDictionary *options)
+{
+    NSString *selection = VZDisplaySelectionForOptions(options);
+    if ([selection isEqualToString:@"NativeRetina"] ||
+        [selection isEqualToString:@"FullScreen"])
+        return VZL(@"Full Screen");
+    if ([selection isEqualToString:@"LandscapeNativeRetina"])
+        return VZL(@"Landscape iPad");
+    if ([selection isEqualToString:@"PortraitNativeRetina"])
+        return VZL(@"Portrait iPad");
+    if ([selection isEqualToString:@"ExternalDisplay"])
+        return VZL(@"External Display");
+    if ([selection isEqualToString:@"WindowSizeAtStartup"])
+        return VZL(@"Window Size");
+    for (NSDictionary *preset in VZFixedDisplayPresets())
+        if ([selection isEqualToString:preset[@"mode"]])
+            return preset[@"title"];
+    return VZL(@"Custom");
+}
+
 static uint64_t GiB(uint64_t value)
 {
     return value << 30;
@@ -775,35 +841,35 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
-    return 6;
+    return 7;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView
  numberOfRowsInSection:(NSInteger)section
 {
-    if (section == 0) {
-        NSInteger resourceRows = self.bundlePath ? 2 : 3;
-        return 1 + resourceRows + 1 +
-            [self.options[VZSharedDirectoriesKey] count];
-    }
+    if (section == 0)
+        return 1 + (self.bundlePath ? 2 : 3);
     if (section == 1)
-        return self.bundlePath ? 3 : 2;
+        return 1 + [self.options[VZSharedDirectoriesKey] count];
     if (section == 2)
-        return 2;
+        return self.bundlePath ? 3 : 2;
     if (section == 3)
-        return [self.options[VZDisplayModeKey] isEqualToString:@"Custom"]
-            ? 4 : 1;
+        return 2;
     if (section == 4)
+        return [VZDisplaySelectionForOptions(self.options)
+                   isEqualToString:@"Custom"]
+            ? 4 : 1;
+    if (section == 5)
         return 3;
-    return 1;
+    return self.bundlePath && self.running ? 0 : 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView
  titleForHeaderInSection:(NSInteger)section
 {
-    if (section == 5)
+    if (section == 6)
         return nil;
-    return @[VZL(@"Resources"),
+    return @[VZL(@"Resources"), VZL(@"Shared Folders"),
              self.bundlePath ? VZL(@"Boot and Network") : VZL(@"Network"),
              VZL(@"Input"), VZL(@"Display"),
              VZL(@"Audio and Acceleration")][section];
@@ -814,7 +880,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 {
     (void)tableView;
     if (self.running && section == 0)
-        return VZL(@"Configuration changes take effect after the Virtual Mac is shut down and started again. Renaming and deletion are unavailable while it is running.");
+        return VZL(@"Configuration changes take effect after the Virtual Mac is shut down and started again.");
     return nil;
 }
 
@@ -838,7 +904,6 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     cell.imageView.image = nil;
     cell.userInteractionEnabled = YES;
     if (indexPath.section == 0) {
-        NSInteger resourceRows = self.bundlePath ? 2 : 3;
         if (indexPath.row == 0) {
             cell.textLabel.text = VZL(@"Name");
             cell.detailTextLabel.text = self.vmName;
@@ -850,19 +915,6 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             return cell;
         }
         NSInteger resourceIndex = indexPath.row - 1;
-        if (resourceIndex == resourceRows) {
-            cell.textLabel.text = VZL(@"Add Shared Folder");
-            cell.detailTextLabel.text = nil;
-            return cell;
-        }
-        if (resourceIndex > resourceRows) {
-            NSDictionary *share = self.options[VZSharedDirectoriesKey]
-                [resourceIndex - resourceRows - 1];
-            cell.textLabel.text = [share[@"Path"] lastPathComponent];
-            cell.detailTextLabel.text = [share[@"ReadOnly"] boolValue]
-                ? VZL(@"Read Only") : VZL(@"Read & Write");
-            return cell;
-        }
         NSArray *names = self.bundlePath ? @[VZL(@"Processors"), VZL(@"Memory")]
                                          : @[VZL(@"Processors"), VZL(@"Memory"), VZL(@"Storage")];
         NSString *key = @[VZCPUCountKey, VZMemorySizeKey,
@@ -872,7 +924,18 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         cell.detailTextLabel.text = resourceIndex == 0
             ? [NSString stringWithFormat:@"%llu", value]
             : [NSString stringWithFormat:@"%llu GB", value >> 30];
-    } else if (indexPath.section == 1 && self.bundlePath &&
+    } else if (indexPath.section == 1) {
+        if (indexPath.row == 0) {
+            cell.textLabel.text = VZL(@"Add Shared Folder");
+            cell.detailTextLabel.text = nil;
+        } else {
+            NSDictionary *share = self.options[VZSharedDirectoriesKey]
+                [indexPath.row - 1];
+            cell.textLabel.text = [share[@"Path"] lastPathComponent];
+            cell.detailTextLabel.text = [share[@"ReadOnly"] boolValue]
+                ? VZL(@"Read Only") : VZL(@"Read & Write");
+        }
+    } else if (indexPath.section == 2 && self.bundlePath &&
                indexPath.row == 0) {
         cell.textLabel.text = VZL(@"Start in Recovery");
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
@@ -882,7 +945,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         cell.accessoryView = toggle;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.detailTextLabel.text = nil;
-    } else if (indexPath.section == 1 &&
+    } else if (indexPath.section == 2 &&
                indexPath.row == (self.bundlePath ? 1 : 0)) {
         cell.textLabel.text = VZL(@"Network");
         NSString *mode = VZEffectiveNetworkMode(self.options);
@@ -895,34 +958,30 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                     VZActiveInternetDisplayName()]
                 : [mode isEqualToString:@"Disabled"] ? VZL(@"Disabled")
                                                       : mode;
-    } else if (indexPath.section == 1) {
+    } else if (indexPath.section == 2) {
         cell.textLabel.text = VZL(@"MAC Address");
         cell.detailTextLabel.text = self.options[VZMACAddressKey];
-    } else if (indexPath.section == 2 && indexPath.row == 0) {
+    } else if (indexPath.section == 3 && indexPath.row == 0) {
         cell.textLabel.text = VZL(@"Keyboard");
         cell.detailTextLabel.text =
             [self.options[VZKeyboardDeviceKey] isEqualToString:@"USBKeyboard"]
             ? VZL(@"USB Keyboard") : VZL(@"Mac Keyboard");
-    } else if (indexPath.section == 2) {
+    } else if (indexPath.section == 3) {
         cell.textLabel.text = VZL(@"Pointing Device");
         cell.detailTextLabel.text =
             [self.options[VZPointingDeviceKey] isEqualToString:@"USBMouse"]
             ? VZL(@"USB Mouse") : VZL(@"Mac Trackpad");
-    } else if (indexPath.section == 3 && indexPath.row == 0) {
+    } else if (indexPath.section == 4 && indexPath.row == 0) {
         cell.textLabel.text = VZL(@"Resolution");
-        NSString *displayMode = self.options[VZDisplayModeKey];
-        cell.detailTextLabel.text = [displayMode isEqualToString:@"Custom"]
-            ? VZL(@"Custom")
-            : [displayMode isEqualToString:@"PortraitNativeRetina"]
-                ? VZL(@"Portrait Full Screen") : VZL(@"Full Screen");
-    } else if (indexPath.section == 3) {
+        cell.detailTextLabel.text = VZDisplaySelectionTitle(self.options);
+    } else if (indexPath.section == 4) {
         NSArray *names = @[VZL(@"Width"), VZL(@"Height"), VZL(@"Pixels Per Inch")];
         NSArray *keys = @[VZDisplayWidthKey, VZDisplayHeightKey,
                           VZDisplayPPIKey];
         cell.textLabel.text = names[indexPath.row - 1];
         cell.detailTextLabel.text = [self.options[keys[indexPath.row - 1]]
             stringValue];
-    } else if (indexPath.section == 4) {
+    } else if (indexPath.section == 5) {
         NSArray *names = @[VZL(@"Audio Output"), VZL(@"Microphone Input"),
                            VZL(@"Video Encoding and Decoding Acceleration")];
         NSArray *keys = @[VZAudioOutputEnabledKey, VZAudioInputEnabledKey,
@@ -944,11 +1003,8 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     } else {
         cell.textLabel.text = VZL(@"Delete Virtual Mac");
         cell.textLabel.textAlignment = NSTextAlignmentCenter;
-        cell.textLabel.textColor = self.running
-            ? UIColor.secondaryLabelColor : UIColor.systemRedColor;
+        cell.textLabel.textColor = UIColor.systemRedColor;
         cell.accessoryType = UITableViewCellAccessoryNone;
-        cell.selectionStyle = self.running ? UITableViewCellSelectionStyleNone
-                                           : UITableViewCellSelectionStyleDefault;
     }
     return cell;
 }
@@ -971,6 +1027,59 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
         style:UIAlertActionStyleCancel handler:nil]];
     sheet.popoverPresentationController.sourceView = cell;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)chooseDisplayResolutionFromCell:(UITableViewCell *)cell
+{
+    UIAlertController *sheet = [UIAlertController
+        alertControllerWithTitle:VZL(@"Display Resolution") message:nil
+                  preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray *dynamicChoices = @[
+        @{@"title": VZL(@"Full Screen"), @"mode": @"FullScreen"},
+        @{@"title": VZL(@"Window Size"),
+          @"mode": @"WindowSizeAtStartup"},
+        @{@"title": VZL(@"Landscape iPad"),
+          @"mode": @"LandscapeNativeRetina"},
+        @{@"title": VZL(@"Portrait iPad"),
+          @"mode": @"PortraitNativeRetina"},
+        @{@"title": VZL(@"External Display"),
+          @"mode": @"ExternalDisplay"},
+    ];
+    for (NSDictionary *choice in dynamicChoices) {
+        [sheet addAction:[UIAlertAction actionWithTitle:choice[@"title"]
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            (void)action;
+            self.options[VZDisplayModeKey] = choice[@"mode"];
+            [self.tableView reloadData];
+        }]];
+    }
+    for (NSDictionary *preset in VZFixedDisplayPresets()) {
+        [sheet addAction:[UIAlertAction actionWithTitle:preset[@"title"]
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            (void)action;
+            self.options[VZDisplayModeKey] = @"Fixed";
+            self.options[VZDisplayWidthKey] = preset[@"width"];
+            self.options[VZDisplayHeightKey] = preset[@"height"];
+            self.options[VZDisplayPPIKey] = preset[@"ppi"];
+            [self.tableView reloadData];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Custom")
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        (void)action;
+        // If the stored tuple exactly identifies a preset, change only its
+        // density to the established custom default so the editable fields
+        // become visible. Otherwise preserve the user's custom dimensions.
+        if (VZFixedDisplayPresetForOptions(self.options))
+            self.options[VZDisplayPPIKey] = @264;
+        self.options[VZDisplayModeKey] = @"Custom";
+        [self.tableView reloadData];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
+        style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = cell;
+    sheet.popoverPresentationController.sourceRect = cell.bounds;
     [self presentViewController:sheet animated:YES completion:nil];
 }
 
@@ -1129,21 +1238,33 @@ void VZRemovePaths(NSArray<NSString *> *paths)
 {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     if (indexPath.section == 0) {
-        NSInteger resourceRows = self.bundlePath ? 2 : 3;
         if (indexPath.row == 0) {
             [self editVMName];
             return;
         }
         NSInteger resourceIndex = indexPath.row - 1;
-        if (resourceIndex == resourceRows) {
+        if (resourceIndex == 0) {
+            NSUInteger maxCPU = MAX((NSUInteger)2,
+                MIN((NSUInteger)8, NSProcessInfo.processInfo.activeProcessorCount));
+            [self editNumberForKey:VZCPUCountKey title:VZL(@"Processors")
+                              min:2 max:maxCPU bytes:NO];
+        } else if (resourceIndex == 1) {
+            [self editNumberForKey:VZMemorySizeKey title:VZL(@"Memory")
+                              min:GiB(2) max:VZDeviceMemoryLimit() bytes:YES];
+        } else if (resourceIndex == 2) {
+            [self editNumberForKey:VZStorageSizeKey title:VZL(@"Storage")
+                              min:GiB(32) max:0 bytes:YES];
+        }
+    } else if (indexPath.section == 1) {
+        if (indexPath.row == 0) {
             UIDocumentPickerViewController *picker =
                 [[[UIDocumentPickerViewController alloc]
                     initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO]
                     autorelease];
             picker.delegate = self;
             [self presentViewController:picker animated:YES completion:nil];
-        } else if (resourceIndex > resourceRows) {
-            NSInteger shareIndex = resourceIndex - resourceRows - 1;
+        } else {
+            NSInteger shareIndex = indexPath.row - 1;
             NSDictionary *saved =
                 self.options[VZSharedDirectoriesKey][shareIndex];
             NSString *path = saved[@"Path"];
@@ -1180,19 +1301,8 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             sheet.popoverPresentationController.sourceView =
                 [tableView cellForRowAtIndexPath:indexPath];
             [self presentViewController:sheet animated:YES completion:nil];
-        } else if (resourceIndex == 0) {
-            NSUInteger maxCPU = MAX((NSUInteger)2,
-                MIN((NSUInteger)8, NSProcessInfo.processInfo.activeProcessorCount));
-            [self editNumberForKey:VZCPUCountKey title:VZL(@"Processors")
-                              min:2 max:maxCPU bytes:NO];
-        } else if (resourceIndex == 1) {
-            [self editNumberForKey:VZMemorySizeKey title:VZL(@"Memory")
-                              min:GiB(2) max:VZDeviceMemoryLimit() bytes:YES];
-        } else if (resourceIndex == 2) {
-            [self editNumberForKey:VZStorageSizeKey title:VZL(@"Storage")
-                              min:GiB(32) max:0 bytes:YES];
         }
-    } else if (indexPath.section == 1 &&
+    } else if (indexPath.section == 2 &&
                indexPath.row == (self.bundlePath ? 1 : 0)) {
         UIAlertController *sheet = [UIAlertController
             alertControllerWithTitle:VZL(@"Network Attachment") message:nil
@@ -1224,10 +1334,10 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         sheet.popoverPresentationController.sourceView =
             [tableView cellForRowAtIndexPath:indexPath];
         [self presentViewController:sheet animated:YES completion:nil];
-    } else if (indexPath.section == 1 &&
+    } else if (indexPath.section == 2 &&
                indexPath.row == (self.bundlePath ? 2 : 1)) {
         [self editMACAddress];
-    } else if (indexPath.section == 2 && indexPath.row == 0) {
+    } else if (indexPath.section == 3 && indexPath.row == 0) {
         [self chooseTitle:VZL(@"Keyboard") message:
             VZL(@"Use USB Keyboard for macOS Monterey. Newer guests support the Mac keyboard device.")
             choices:@[
@@ -1235,7 +1345,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
                 @{@"title": VZL(@"USB Keyboard"), @"value": @"USBKeyboard"},
             ] key:VZKeyboardDeviceKey
             fromCell:[tableView cellForRowAtIndexPath:indexPath]];
-    } else if (indexPath.section == 2 && indexPath.row == 1) {
+    } else if (indexPath.section == 3 && indexPath.row == 1) {
         [self chooseTitle:VZL(@"Pointing Device") message:
             VZL(@"Use USB Mouse for macOS Monterey. Newer guests support the Mac trackpad device.")
             choices:@[
@@ -1243,15 +1353,10 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             @{@"title": VZL(@"USB Mouse"), @"value": @"USBMouse"},
             ] key:VZPointingDeviceKey
             fromCell:[tableView cellForRowAtIndexPath:indexPath]];
-    } else if (indexPath.section == 3 && indexPath.row == 0) {
-        [self chooseTitle:VZL(@"Display Resolution") message:nil choices:@[
-            @{@"title": VZL(@"Full Screen"), @"value": @"NativeRetina"},
-            @{@"title": VZL(@"Portrait Full Screen"),
-              @"value": @"PortraitNativeRetina"},
-            @{@"title": VZL(@"Custom"), @"value": @"Custom"},
-        ] key:VZDisplayModeKey
-          fromCell:[tableView cellForRowAtIndexPath:indexPath]];
-    } else if (indexPath.section == 3 && indexPath.row > 0) {
+    } else if (indexPath.section == 4 && indexPath.row == 0) {
+        [self chooseDisplayResolutionFromCell:
+            [tableView cellForRowAtIndexPath:indexPath]];
+    } else if (indexPath.section == 4 && indexPath.row > 0) {
         NSArray *keys = @[VZDisplayWidthKey, VZDisplayHeightKey,
                           VZDisplayPPIKey];
         NSArray *titles = @[VZL(@"Display Width"), VZL(@"Display Height"),
@@ -1261,7 +1366,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         [self editNumberForKey:keys[indexPath.row - 1]
                          title:titles[indexPath.row - 1]
                            min:minimum max:maximum bytes:NO];
-    } else if (indexPath.section == 5) {
+    } else if (indexPath.section == 6) {
         if (self.bundlePath)
             [self confirmDeleteVirtualMac];
         else
@@ -2201,12 +2306,8 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
             play.translatesAutoresizingMaskIntoConstraints = NO;
             play.tag = machineIndex + 1;
             play.tintColor = UIColor.whiteColor;
-            NSString *resumeSymbol = [UIImage systemImageNamed:
-                @"rectangle.portrait.and.arrow.right"]
-                ? @"rectangle.portrait.and.arrow.right"
-                : @"arrow.right";
             NSString *symbolName = [self isMachineActive:machine]
-                ? resumeSymbol : @"play.fill";
+                ? @"arrow.right" : @"play.fill";
             UIImage *playImage = [[UIImage systemImageNamed:symbolName]
                 imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration
                     configurationWithPointSize:list ? 14 : 24
@@ -2365,8 +2466,7 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
     return [UIContextMenuConfiguration configurationWithIdentifier:nil
         previewProvider:nil actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
         (void)suggested;
-        UIImage *resumeImage = [UIImage systemImageNamed:
-            @"rectangle.portrait.and.arrow.right"] ?: [UIImage systemImageNamed:@"play.fill"];
+        UIImage *resumeImage = [UIImage systemImageNamed:@"arrow.right"];
         UIAction *start = [UIAction actionWithTitle:active ? VZL(@"Resume") : VZL(@"Start")
             image:active ? resumeImage : [UIImage systemImageNamed:@"play.fill"]
             identifier:nil handler:^(__kindof UIAction *action) {

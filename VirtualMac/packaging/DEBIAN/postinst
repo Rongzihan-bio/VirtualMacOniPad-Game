@@ -66,6 +66,7 @@ if test ! -x "$jbctl"; then
     for source_file in \
         "$universal_payload/usr/lib/libmrc.dylib" \
         "$universal_payload/usr/lib/AuthorizationCompat.dylib" \
+        "$universal_payload/usr/lib/NetworkMemoryPolicy.dylib" \
         "$universal_payload/usr/lib/OpenDirectoryCompat.dylib" \
         "$universal_payload/usr/lib/IOKit14Compat.dylib"; do
         replace_file "$source_file" "/usr/lib/VirtualMac/${source_file##*/}"
@@ -295,6 +296,7 @@ elif test -x /taurine/jbexec; then
         /usr/libexec/VirtualMac/InternetSharing.ipados14 \
         /usr/libexec/VirtualMac/bootpd \
         /usr/lib/VirtualMac/AuthorizationCompat.dylib \
+        /usr/lib/VirtualMac/NetworkMemoryPolicy.dylib \
         /usr/lib/VirtualMac/libmrc.dylib \
         /usr/lib/VirtualMac/OpenDirectoryCompat.dylib \
         /usr/lib/VirtualMac/IOKit14Compat.dylib \

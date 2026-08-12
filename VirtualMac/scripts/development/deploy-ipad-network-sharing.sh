@@ -9,6 +9,7 @@ OUT="$VZ_BUILD_ROOT/ipad-network-sharing"
 BIN="$OUT/InternetSharing"
 PLIST="$OUT/com.apple.NetworkSharing.plist"
 AUTH_COMPAT="$OUT/AuthorizationCompat.dylib"
+MEMORY_POLICY="$OUT/NetworkMemoryPolicy.dylib"
 HELPERS="$VZ_BUILD_ROOT/ipad-network-helpers"
 BOOTPD="$HELPERS/bootpd"
 RTADVD="$HELPERS/rtadvd"
@@ -21,6 +22,7 @@ need_command ldid
 need_file "$BIN"
 need_file "$PLIST"
 need_file "$AUTH_COMPAT"
+need_file "$MEMORY_POLICY"
 need_file "$BOOTPD"
 need_file "$RTADVD"
 need_file "$OD_COMPAT"
@@ -29,6 +31,7 @@ ensure_ipad_usb
 ipad_scp "$BIN" "$IPAD_TARGET:/tmp/InternetSharing"
 ipad_scp "$PLIST" "$IPAD_TARGET:/tmp/com.apple.NetworkSharing.plist"
 ipad_scp "$AUTH_COMPAT" "$IPAD_TARGET:/tmp/AuthorizationCompat.dylib"
+ipad_scp "$MEMORY_POLICY" "$IPAD_TARGET:/tmp/NetworkMemoryPolicy.dylib"
 ipad_scp "$BOOTPD" "$IPAD_TARGET:/tmp/bootpd"
 ipad_scp "$RTADVD" "$IPAD_TARGET:/tmp/rtadvd"
 ipad_scp "$OD_COMPAT" "$IPAD_TARGET:/tmp/OpenDirectoryCompat.dylib"
@@ -36,6 +39,7 @@ ipad_scp "$BOOTPD_PLIST" "$IPAD_TARGET:/tmp/com.apple.bootpd.plist"
 
 hash="$(ldid -h "$BIN" | sed -n 's/^CDHash=//p')"
 compat_hash="$(ldid -h "$AUTH_COMPAT" | sed -n 's/^CDHash=//p')"
+memory_policy_hash="$(ldid -h "$MEMORY_POLICY" | sed -n 's/^CDHash=//p')"
 bootpd_hash="$(ldid -h "$BOOTPD" | sed -n 's/^CDHash=//p')"
 rtadvd_hash="$(ldid -h "$RTADVD" | sed -n 's/^CDHash=//p')"
 od_compat_hash="$(ldid -h "$OD_COMPAT" | sed -n 's/^CDHash=//p')"
@@ -63,6 +67,8 @@ install -o root -g wheel -m 755 /tmp/InternetSharing \
   /var/jb/usr/libexec/InternetSharing
 install -o root -g wheel -m 755 /tmp/AuthorizationCompat.dylib \
   /var/jb/usr/lib/AuthorizationCompat.dylib
+install -o root -g wheel -m 755 /tmp/NetworkMemoryPolicy.dylib \
+  /var/jb/usr/lib/NetworkMemoryPolicy.dylib
 install -o root -g wheel -m 755 /tmp/bootpd \
   /var/jb/usr/libexec/bootpd
 install -o root -g wheel -m 755 /tmp/rtadvd \
@@ -81,11 +87,13 @@ install -o root -g wheel -m 644 /tmp/com.apple.NetworkSharing.plist \
   /var/jb/Library/LaunchDaemons/com.apple.NetworkSharing.plist
 install -o root -g wheel -m 644 /tmp/com.apple.NetworkSharing.plist \
   /var/jb/basebin/LaunchDaemons/com.apple.NetworkSharing.plist
-rm -f /tmp/InternetSharing /tmp/AuthorizationCompat.dylib /tmp/bootpd \
+rm -f /tmp/InternetSharing /tmp/AuthorizationCompat.dylib \
+  /tmp/NetworkMemoryPolicy.dylib /tmp/bootpd \
   /tmp/rtadvd /tmp/OpenDirectoryCompat.dylib /tmp/com.apple.bootpd.plist \
   /tmp/com.apple.NetworkSharing.plist
 jbctl trustcache add '$hash'
 jbctl trustcache add '$compat_hash'
+jbctl trustcache add '$memory_policy_hash'
 jbctl trustcache add '$bootpd_hash'
 jbctl trustcache add '$rtadvd_hash'
 jbctl trustcache add '$od_compat_hash'

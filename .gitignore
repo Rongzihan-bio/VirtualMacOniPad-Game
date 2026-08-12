@@ -20,5 +20,6 @@ VM.bundle/
 # Generated Apple binaries, signatures, diagnostics, and local manifests.
 payload/
 logs/
+DeviceCrashLogs/
 *.dSYM/
 *.ips

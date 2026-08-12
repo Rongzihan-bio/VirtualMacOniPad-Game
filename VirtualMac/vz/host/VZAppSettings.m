@@ -18,14 +18,36 @@ NSString * const VZTouchDoubleTapAccommodationKey = @"TouchDoubleTapAccommodatio
 NSString * const VZTouchTwoFingerScrollingKey = @"TouchTwoFingerScrolling";
 NSString * const VZTouchTwoFingerRightClickKey = @"TouchTwoFingerRightClick";
 NSString * const VZTouchLongPressRightClickKey = @"TouchLongPressRightClick";
-NSString * const VZIPadOS162KeyboardWorkaroundKey = @"IPadOS162KeyboardWorkaround";
-NSString * const VZNetworkResumeRecoveryKey = @"NetworkResumeRecovery";
+NSString * const VZKeyboardCrashWorkaroundKey = @"KeyboardCrashWorkaround";
+NSString * const VZExternalDisplayScrollFixKey = @"ExternalDisplayScrollFix";
+NSString * const VZScrollingSpeedKey = @"ScrollingSpeed";
 NSString * const VZHUDOpacityKey = @"HUDOpacity";
 NSString * const VZDebugLoggingKey = @"DebugLogging";
 
 static NSString * const VZSettingsPath = @"/var/mobile/Media/VirtualMac/Settings.plist";
 static CFStringRef const VZSettingsDarwinNotification =
     CFSTR("com.mac.virtual.settings-changed");
+
+NSString *VZRootHideJailbreakRootPath(void)
+{
+    NSString *path = NSBundle.mainBundle.bundlePath;
+    NSRange marker = [path rangeOfString:@"/.jbroot-"];
+    if (marker.location == NSNotFound)
+        return nil;
+    NSUInteger componentStart = marker.location + 1;
+    NSRange remainder = NSMakeRange(componentStart,
+        path.length - componentStart);
+    NSRange separator = [path rangeOfString:@"/" options:0 range:remainder];
+    NSUInteger end = separator.location == NSNotFound
+        ? path.length : separator.location;
+    NSString *root = [path substringToIndex:end];
+    return root.length ? root : nil;
+}
+
+BOOL VZIsRootHideEnvironment(void)
+{
+    return VZRootHideJailbreakRootPath() != nil;
+}
 
 @interface VZAppSettings ()
 @property(nonatomic, retain) NSMutableDictionary *values;
@@ -61,16 +83,17 @@ static CFStringRef const VZSettingsDarwinNotification =
         VZHomeIndicatorSuppressionKey: @YES,
         VZShowStatusLabelKey: @NO,
         VZAutoDeleteRestoreImageKey: @YES,
-        VZHUDVisibilityKey: @"automatic",
-        VZHUDCornerKey: @"top-right",
+        VZHUDVisibilityKey: @"always",
+        VZHUDCornerKey: @"bottom-right",
         VZExternalDisplayEnabledKey: @NO,
         VZDisplayScalingKey: @"fit",
         VZTouchDoubleTapAccommodationKey: @YES,
         VZTouchTwoFingerScrollingKey: @YES,
         VZTouchTwoFingerRightClickKey: @YES,
         VZTouchLongPressRightClickKey: @NO,
-        VZIPadOS162KeyboardWorkaroundKey: @NO,
-        VZNetworkResumeRecoveryKey: @NO,
+        VZKeyboardCrashWorkaroundKey: @YES,
+        VZExternalDisplayScrollFixKey: @YES,
+        VZScrollingSpeedKey: @"0.25",
         VZHUDOpacityKey: @"0.55",
         VZDebugLoggingKey: @NO,
     };
@@ -97,9 +120,15 @@ static CFStringRef const VZSettingsDarwinNotification =
 - (void)save
 {
     NSString *directory = VZSettingsPath.stringByDeletingLastPathComponent;
-    [NSFileManager.defaultManager createDirectoryAtPath:directory
-        withIntermediateDirectories:YES attributes:nil error:nil];
-    [self.values writeToFile:VZSettingsPath atomically:YES];
+    NSError *error = nil;
+    BOOL directoryReady = [NSFileManager.defaultManager
+        createDirectoryAtPath:directory withIntermediateDirectories:YES
+        attributes:nil error:&error];
+    BOOL written = directoryReady && [self.values writeToURL:
+        [NSURL fileURLWithPath:VZSettingsPath] error:&error];
+    printf("[VirtualMac] settings save success=%d keys=%lu error=%s\n",
+           written, (unsigned long)self.values.count,
+           error ? error.description.UTF8String : "(none)");
     CFNotificationCenterPostNotification(
         CFNotificationCenterGetDarwinNotifyCenter(),
         VZSettingsDarwinNotification, NULL, NULL, YES);

@@ -28,6 +28,9 @@ RAW_UI_PATTERNS = (
 )
 TECHNICAL_IDENTICAL_VALUES = {
     "%@ CPU · %@ GB RAM · %llu GB · %@%@",
+    "4K Retina",
+    "5K Retina",
+    "6K Retina",
     "Build %@ · %@ · %@",
     "Ethernet (%@)",
     "Fullscreen Mirroring",

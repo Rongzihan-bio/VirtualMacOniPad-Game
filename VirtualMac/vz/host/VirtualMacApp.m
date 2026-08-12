@@ -10,6 +10,7 @@
 #import "VZDiagnostics.h"
 #import "VZFailureDetailsViewController.h"
 #import "VZProgressViewController.h"
+#import "VZSettingsViewController.h"
 #import "VZLocalization.h"
 #import "VZSupport.h"
 #include <dlfcn.h>
@@ -41,8 +42,6 @@ static UIPinchGestureRecognizer *gPinchRecognizer;
 static UIRotationGestureRecognizer *gRotationRecognizer;
 static UITapGestureRecognizer *gSmartMagnifyRecognizer;
 static BOOL gSoftwareKeyboardRequested;
-static BOOL gHUDHiddenForBoot;
-static BOOL gHUDForcedVisibleForBoot;
 static NSLayoutConstraint *gHUDHorizontalConstraint;
 static NSLayoutConstraint *gHUDVerticalConstraint;
 static IMP gOriginalFrameUpdate;
@@ -54,6 +53,11 @@ static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
 static BOOL gDebugLogging;
+static BOOL gFixExternalDisplayScrollDirection;
+static CGFloat gScrollingSpeed = 0.25;
+static BOOL gRootHideInformationVisible;
+static BOOL gRootHidePivotalActionApproved;
+static NSMutableArray *gRootHideInformationCompletions;
 // Globe-held state, tracked from the Darwin relay (the tweak reports the
 // globe's raw HID press, which is reliable and prompt). The tweak translates
 // globe+<key> chords at the HID layer and relays the translated key; this flag
@@ -90,12 +94,14 @@ static SEL S(const char *name);
 static void setObj(id object, const char *selector, id value);
 static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed);
 static void sendPointer(CGPoint point, CGRect bounds, NSUInteger pressedButtons);
+static void updateExternalCursorForNormalizedLocation(CGPoint location);
 static void setStatus(NSString *status);
 // External display (Keynote-style: UIWindow.screen = externalScreen)
 static UIWindow *gExternalWindow;
 static UIView *gExternalMirrorView;
 static UIImageView *gExternalCursorView;
 
+static CGRect displayViewportRect(CGSize contentSize, CGRect bounds);
 static void updateDisplayGeometry(void);
 static void logFramebufferState(id view, id framebuffer, const char *phase);
 static BOOL externalDisplayEnabled(void);
@@ -120,6 +126,56 @@ static NSString *VZInstallationFailureExplanation(NSString *failure)
     return nil;
 }
 
+static UIViewController *VZTopPresentedController(UIViewController *controller)
+{
+    while (controller.presentedViewController &&
+           !controller.presentedViewController.isBeingDismissed)
+        controller = controller.presentedViewController;
+    return controller;
+}
+
+static void VZContinueAfterRootHideInformation(
+    UIViewController *presenter, void (^continuation)(void))
+{
+    if (!VZIsRootHideEnvironment()) {
+        if (continuation)
+            continuation();
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 150 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        if (continuation) {
+            if (!gRootHideInformationCompletions)
+                gRootHideInformationCompletions =
+                    [[NSMutableArray alloc] init];
+            id copied = [continuation copy];
+            [gRootHideInformationCompletions addObject:copied];
+            [copied release];
+        }
+        if (gRootHideInformationVisible)
+            return;
+        gRootHideInformationVisible = YES;
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:
+                VZL(@"Switch to the Official Version of Dopamine")
+            message:VZL(@"Virtual Mac does not support the Dopamine-roothide environment. Remove the roothide jailbreak from Dopamine-roothide > Settings > Remove Jailbreak, then switch to the official version of Dopamine.")
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            (void)action;
+            gRootHideInformationVisible = NO;
+            NSArray *callbacks = [[gRootHideInformationCompletions copy]
+                autorelease];
+            [gRootHideInformationCompletions removeAllObjects];
+            for (void (^callback)(void) in callbacks)
+                callback();
+        }]];
+        [VZTopPresentedController(presenter)
+            presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 // On iPadOS 15 and 16.2, CoreUI's candidate bar artwork can ask CoreImage for
 // its legacy EAGL backend. Platform/unsandboxed apps receive a null GL entry
 // point and crash in CI::GLContext before Virtual Mac code runs. CoreUI only
@@ -135,6 +191,7 @@ static id VZCoreUISharedMetalContext(id object, SEL selector) {
     return context;
 }
 
+#if 0
 static NSString *VZLatestKeyboardRenderingCrash(void) {
     NSString *root = @"/var/mobile/Library/Logs/CrashReporter";
     NSArray *directoryNames = [NSFileManager.defaultManager
@@ -184,16 +241,17 @@ static void VZEnableKeyboardRenderingFixAfterCrash(void) {
         return;
     [VZAppSettings.sharedSettings setString:crash forKey:processedCrashKey];
     [VZAppSettings.sharedSettings setBool:YES
-        forKey:VZIPadOS162KeyboardWorkaroundKey];
+        forKey:VZKeyboardCrashWorkaroundKey];
     printf("[VirtualMac] enabled keyboard-rendering fix after crash %s\n",
         crash.UTF8String);
 }
+#endif
 
 static void installKeyboardRenderingFix(void) {
     // This preference is either enabled explicitly or after the exact CoreUI
     // crash is observed on a previous launch. Do not guess from the OS version.
     if (![VZAppSettings.sharedSettings
-            boolForKey:VZIPadOS162KeyboardWorkaroundKey])
+            boolForKey:VZKeyboardCrashWorkaroundKey])
         return;
     dlopen("/System/Library/PrivateFrameworks/CoreUI.framework/CoreUI",
            RTLD_LAZY | RTLD_LOCAL);
@@ -313,17 +371,25 @@ static void sendPointer(CGPoint point, CGRect bounds,
     if (!gPointingDevice || bounds.size.width <= 0 ||
         bounds.size.height <= 0)
         return;
-    point = clampPointerLocation(point, bounds);
+    // gInputView covers the visible guest viewport normally, but expands to
+    // the complete iPad window while mirroring. Mapping its complete bounds
+    // then makes the iPad an edge-to-edge input surface for the external
+    // screen instead of leaving dead input regions in the iPad letterbox.
+    CGRect guestViewport = gExternalWindow
+        ? displayViewportRect(gDisplayPixelSize, bounds) : bounds;
+    point = clampPointerLocation(point, guestViewport);
     gMouseLocation = point;
     CGPoint normalized = CGPointMake(
-        fmin(1.0, fmax(0.0, point.x / bounds.size.width)),
-        fmin(1.0, fmax(0.0, point.y / bounds.size.height)));
+        fmin(1.0, fmax(0.0,
+            (point.x - guestViewport.origin.x) / guestViewport.size.width)),
+        fmin(1.0, fmax(0.0,
+            (point.y - guestViewport.origin.y) / guestViewport.size.height)));
     // Draw the already-decoded guest cursor at the host event location now.
     // Waiting for the pointer round-trip through VMM/PVG adds a very visible
     // frame or two of latency on an iPad trackpad.
     if (gCursorView && !gCursorView.hidden && gCursorView.image) {
-        CGFloat scaleX = bounds.size.width / gDisplayPixelSize.width;
-        CGFloat scaleY = bounds.size.height / gDisplayPixelSize.height;
+        CGFloat scaleX = guestViewport.size.width / gDisplayPixelSize.width;
+        CGFloat scaleY = guestViewport.size.height / gDisplayPixelSize.height;
         CGSize size = CGSizeMake(gCursorPixelSize.width * scaleX,
                                  gCursorPixelSize.height * scaleY);
         CGPoint origin = CGPointMake(
@@ -332,6 +398,7 @@ static void sendPointer(CGPoint point, CGRect bounds,
         gCursorView.frame = (CGRect){origin, size};
         gLastPredictedCursorTime = CACurrentMediaTime();
     }
+    updateExternalCursorForNormalizedLocation(normalized);
     BOOL buttonsChanged = pressedButtons != gLastPointerButtons;
     if (!buttonsChanged && CGPointEqualToPoint(normalized,
                                                gLastPointerLocation))
@@ -435,6 +502,25 @@ static void sendScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
                             NSUInteger phase) {
     if (!gPointingDevice)
         return;
+    UIScreen *inputScreen = gInputView.window.screen;
+    BOOL externalStageManager = inputScreen &&
+        inputScreen != UIScreen.mainScreen;
+    BOOL correctedExternalAxes = deviceCategory == 0 &&
+        gFixExternalDisplayScrollDirection && externalStageManager;
+    if (correctedExternalAxes) {
+        // Stage Manager on an external display transposes the hardware
+        // scroll axes and reverses the delta that becomes vertical after the
+        // transpose. Correct both before applying the normal VZ mapping.
+        rawDelta = CGVectorMake(-rawDelta.dy, rawDelta.dx);
+        acceleratedDelta = CGVectorMake(-acceleratedDelta.dy,
+                                        acceleratedDelta.dx);
+    }
+    if (deviceCategory == 1) {
+        rawDelta.dx *= gScrollingSpeed;
+        rawDelta.dy *= gScrollingSpeed;
+        acceleratedDelta.dx *= gScrollingSpeed;
+        acceleratedDelta.dy *= gScrollingSpeed;
+    }
     id event = ((id(*)(id, SEL, double, double, double, double,
                        NSUInteger, NSUInteger))objc_msgSend)(
         m0(CLS("_VZScrollWheelEvent"), "alloc"),
@@ -452,11 +538,11 @@ static void sendScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
     if (count <= 12 || (gDebugLogging && phase != 4))
         printf("[VirtualMac] input scroll=%llu raw=%.3f,%.3f "
                "accelerated=%.3f,%.3f inverted=%d device=%lu "
-               "phase=0x%lx\n",
+               "phase=0x%lx external-axis-fix=%d\n",
                (unsigned long long)count, rawDelta.dx, rawDelta.dy,
                acceleratedDelta.dx, acceleratedDelta.dy,
                directionInvertedFromDevice, (unsigned long)deviceCategory,
-               (unsigned long)phase);
+               (unsigned long)phase, correctedExternalAxes);
 }
 
 static void installGCMouse(void) {
@@ -493,37 +579,6 @@ static void installGCMouse(void) {
         (void)value;
         sendMouseButton(4, pressed);
     };
-}
-
-static void recoverNetworkingAfterResume(void)
-{
-    if (!gVirtualMachine || ![VZAppSettings.sharedSettings
-            boolForKey:VZNetworkResumeRecoveryKey])
-        return;
-    NSInteger hostMajor =
-        NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
-    const char *launchctl = hostMajor == 14
-        ? "/usr/bin/launchctl"
-        : (access("/var/jb/usr/bin/launchctl", X_OK) == 0
-            ? "/var/jb/usr/bin/launchctl" : "/var/jb/bin/launchctl");
-    if (access(launchctl, X_OK) != 0)
-        return;
-    const char *labels[] = {
-        hostMajor <= 15 ? "system/com.apple.NetworkSharing"
-                        : "user/501/com.apple.NetworkSharing",
-        hostMajor <= 15 ? "system/vzi.apple.bootpd"
-                        : "user/501/vzi.apple.bootpd",
-        NULL};
-    for (NSUInteger index = 0; labels[index]; index++) {
-        const char *label = labels[index];
-        char *arguments[] = {(char *)launchctl, "kickstart",
-                             (char *)label, NULL};
-        pid_t process = 0;
-        int result = posix_spawn(&process, launchctl, NULL, NULL,
-                                 arguments, environ);
-        printf("[VirtualMac] network resume kickstart label=%s result=%d pid=%d\n",
-               label, result, process);
-    }
 }
 
 static void scheduleInputSelfTest(void) {
@@ -1794,6 +1849,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 
 - (void)refreshMenu
 {
+    UIButton *keyboard = (UIButton *)[self viewWithTag:1703];
+    keyboard.hidden = GCKeyboard.coalescedKeyboard != nil;
+    // With the keyboard action removed, the remaining 46-point More button
+    // and four-point insets make a 54-point square. Match its radius so the
+    // compact hardware-keyboard control is circular rather than pill-shaped.
+    self.layer.cornerRadius = keyboard.hidden ? 27.0 : 18.0;
     UIButton *button = (UIButton *)[self viewWithTag:1702];
     if (!button || !self.menuTarget)
         return;
@@ -1847,6 +1908,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
                 button.showsMenuAsPrimaryAction = YES;
                 button.accessibilityLabel = VZL(@"Virtual Mac Controls");
             } else {
+                button.tag = 1703;
                 [button addTarget:target action:NSSelectorFromString(item[@"selector"])
                     forControlEvents:UIControlEventTouchUpInside];
             }
@@ -1861,6 +1923,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
             [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:4],
             [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-4],
         ]];
+        [self refreshMenu];
     }
     return self;
 }
@@ -1929,6 +1992,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         [gInputView resignFirstResponder];
     }
     [self updateHUDVisibility];
+    [(VZHUDView *)gHUDView refreshMenu];
 }
 
 - (void)externalScreenChanged:(NSNotification *)notification
@@ -1942,11 +2006,18 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     } else {
         disconnectExternalDisplay();
     }
+    [(VZHUDView *)gHUDView refreshMenu];
 }
 
 - (void)appSettingsChanged:(NSNotification *)notification
 {
     (void)notification;
+    gFixExternalDisplayScrollDirection = [VZAppSettings.sharedSettings
+        boolForKey:VZExternalDisplayScrollFixKey];
+    gScrollingSpeed = MAX(0.1, MIN(1.0,
+        [[VZAppSettings.sharedSettings stringForKey:VZScrollingSpeedKey]
+            doubleValue]));
+    printf("[VirtualMac] scroll settings speed=%.2f\n", gScrollingSpeed);
     if (gStatusLabel)
         gStatusLabel.hidden = !shouldShowStatusLabel();
     [self updateImmersivePresentation];
@@ -1976,7 +2047,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     if (gHUDVerticalConstraint)
         [gHUDVerticalConstraint setActive:NO];
     NSString *corner = [VZAppSettings.sharedSettings stringForKey:VZHUDCornerKey]
-        ?: @"top-right";
+        ?: @"bottom-right";
     BOOL left = [corner hasSuffix:@"left"];
     BOOL bottom = [corner hasPrefix:@"bottom"];
     UILayoutGuide *guide = self.view.safeAreaLayoutGuide;
@@ -1993,11 +2064,8 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 - (void)updateHUDVisibility
 {
     NSString *choice = [VZAppSettings.sharedSettings stringForKey:VZHUDVisibilityKey]
-        ?: @"automatic";
-    BOOL hidden = !self.isVMDisplayActive || (!gHUDForcedVisibleForBoot &&
-        (gHUDHiddenForBoot || [choice isEqualToString:@"hidden"]));
-    if (!gHUDForcedVisibleForBoot && [choice isEqualToString:@"automatic"])
-        hidden = hidden || (GCKeyboard.coalescedKeyboard != nil && GCMouse.current != nil);
+        ?: @"always";
+    BOOL hidden = !self.isVMDisplayActive || [choice isEqualToString:@"hidden"];
     CGFloat opacity = [[VZAppSettings.sharedSettings
         stringForKey:VZHUDOpacityKey] doubleValue];
     [(VZHUDView *)gHUDView setContentOpacity:opacity];
@@ -2019,69 +2087,118 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 
 - (UIMenu *)hudMenu
 {
-    UIAction *library = [UIAction actionWithTitle:VZL(@"Show Library")
-        image:[UIImage systemImageNamed:@"square.grid.2x2"] identifier:nil
-        handler:^(UIAction *action) { (void)action; [self presentVMLibrary]; }];
-    UIAction *shutdown = [UIAction actionWithTitle:VZL(@"Force Shut Down")
-        image:[UIImage systemImageNamed:@"power"] identifier:nil
-        handler:^(UIAction *action) { (void)action; [self confirmForceShutdown]; }];
-    shutdown.attributes = UIMenuElementAttributesDestructive;
-    UIAction *hide = [UIAction actionWithTitle:VZL(@"Hide for This Boot")
-        image:[UIImage systemImageNamed:@"eye.slash"] identifier:nil
-        handler:^(UIAction *action) { (void)action;
-        gHUDHiddenForBoot = YES;
-        [self updateHUDVisibility];
-        NSString *noticeKey = @"HUDHideRecoveryNoticeShown";
-        if (![VZAppSettings.sharedSettings boolForKey:noticeKey]) {
-            [VZAppSettings.sharedSettings setBool:YES forKey:noticeKey];
-            UIAlertController *notice = [UIAlertController
-                alertControllerWithTitle:VZL(@"Controls Hidden")
-                message:VZL(@"To show the controls again during this boot, touch and hold the Virtual Mac icon on the Home Screen, then choose Show Virtual Mac Controls.")
-                preferredStyle:UIAlertControllerStyleAlert];
-            [notice addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
-                style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:notice animated:YES completion:nil];
-        }
-    }];
-    NSMutableArray *placements = [NSMutableArray array];
+    NSString *visibility = [VZAppSettings.sharedSettings
+        stringForKey:VZHUDVisibilityKey] ?: @"always";
     NSString *current = [VZAppSettings.sharedSettings stringForKey:VZHUDCornerKey]
-        ?: @"top-right";
-    for (NSArray *placement in @[
-        @[VZL(@"Top Left"), @"top-left"], @[VZL(@"Top Right"), @"top-right"],
-        @[VZL(@"Bottom Left"), @"bottom-left"], @[VZL(@"Bottom Right"), @"bottom-right"],
+        ?: @"bottom-right";
+    BOOL bottom = [current hasPrefix:@"bottom"];
+    NSMutableArray *visibilityActions = [NSMutableArray array];
+    for (NSDictionary *choice in @[
+        @{@"title": VZL(@"On"), @"value": @"always", @"icon": @"eye"},
+        @{@"title": VZL(@"Off"), @"value": @"hidden", @"icon": @"eye.slash"},
     ]) {
-        UIAction *move = [UIAction actionWithTitle:placement[0] image:nil
+        UIAction *action = [UIAction actionWithTitle:choice[@"title"]
+            image:[UIImage systemImageNamed:choice[@"icon"]] identifier:nil
+            handler:^(UIAction *selected) {
+            (void)selected;
+            [VZAppSettings.sharedSettings setString:choice[@"value"]
+                forKey:VZHUDVisibilityKey];
+            [self updateHUDVisibility];
+            [(VZHUDView *)gHUDView refreshMenu];
+            if (![choice[@"value"] isEqualToString:@"always"]) {
+                UIAlertController *notice = [UIAlertController
+                    alertControllerWithTitle:VZL(@"Show Virtual Mac Controls")
+                    message:VZL(@"To show the controls, touch and hold the Virtual Mac icon on the Home Screen, then choose Show Virtual Mac Controls.")
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [notice addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+                    style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:notice animated:YES completion:nil];
+            }
+        }];
+        action.state = [visibility isEqualToString:choice[@"value"]]
+            ? UIMenuElementStateOn : UIMenuElementStateOff;
+        [visibilityActions addObject:action];
+    }
+    if (bottom)
+        visibilityActions = [NSMutableArray arrayWithArray:
+            visibilityActions.reverseObjectEnumerator.allObjects];
+    UIMenu *visibilityMenu = [UIMenu menuWithTitle:VZL(@"Show Controls")
+        children:visibilityActions];
+    NSMutableArray *placements = [NSMutableArray array];
+    for (NSDictionary *placement in @[
+        @{@"title": VZL(@"Top Left"), @"value": @"top-left", @"icon": @"arrow.up.left"},
+        @{@"title": VZL(@"Top Right"), @"value": @"top-right", @"icon": @"arrow.up.right"},
+        @{@"title": VZL(@"Bottom Left"), @"value": @"bottom-left", @"icon": @"arrow.down.left"},
+        @{@"title": VZL(@"Bottom Right"), @"value": @"bottom-right", @"icon": @"arrow.down.right"},
+    ]) {
+        UIAction *move = [UIAction actionWithTitle:placement[@"title"]
+            image:[UIImage systemImageNamed:placement[@"icon"]]
             identifier:nil handler:^(UIAction *action) {
             (void)action;
-            [VZAppSettings.sharedSettings setString:placement[1]
+            [VZAppSettings.sharedSettings setString:placement[@"value"]
                                               forKey:VZHUDCornerKey];
             [self updateHUDPosition];
             [(VZHUDView *)gHUDView refreshMenu];
         }];
-        move.state = [current isEqualToString:placement[1]]
+        move.state = [current isEqualToString:placement[@"value"]]
             ? UIMenuElementStateOn : UIMenuElementStateOff;
         [placements addObject:move];
     }
+    if (bottom)
+        placements = [NSMutableArray arrayWithArray:
+            placements.reverseObjectEnumerator.allObjects];
     UIMenu *moveMenu = [UIMenu menuWithTitle:VZL(@"Move Controls") children:placements];
-    // External Display toggle
-    BOOL extEnabled = [VZAppSettings.sharedSettings
-        boolForKey:VZExternalDisplayEnabledKey];
-    UIAction *extToggle = [UIAction actionWithTitle:VZL(@"Fullscreen Mirroring")
-        image:[UIImage systemImageNamed:@"display"]
-        identifier:nil handler:^(UIAction *action) {
-        (void)action;
-        BOOL now = ![VZAppSettings.sharedSettings
+    NSMutableArray *machineActions = [NSMutableArray array];
+    if (UIScreen.screens.count > 1) {
+        BOOL extEnabled = [VZAppSettings.sharedSettings
             boolForKey:VZExternalDisplayEnabledKey];
-        [VZAppSettings.sharedSettings setBool:now
-            forKey:VZExternalDisplayEnabledKey];
-        if (now && externalDisplayEnabled())
-            connectExternalDisplay();
-        else if (!now)
-            disconnectExternalDisplay();
+        UIAction *extToggle = [UIAction actionWithTitle:VZL(@"Full Screen Mirroring")
+            image:[UIImage systemImageNamed:@"display"]
+            identifier:nil handler:^(UIAction *action) {
+            (void)action;
+            BOOL now = ![VZAppSettings.sharedSettings
+                boolForKey:VZExternalDisplayEnabledKey];
+            [VZAppSettings.sharedSettings setBool:now
+                forKey:VZExternalDisplayEnabledKey];
+            if (now)
+                connectExternalDisplay();
+            else
+                disconnectExternalDisplay();
+            [(VZHUDView *)gHUDView refreshMenu];
+        }];
+        extToggle.state = extEnabled ? UIMenuElementStateOn : UIMenuElementStateOff;
+        [machineActions addObject:extToggle];
+    }
+    UIAction *shutdown = [UIAction actionWithTitle:VZL(@"Force Shut Down")
+        image:[UIImage systemImageNamed:@"power"] identifier:nil
+        handler:^(UIAction *action) { (void)action; [self confirmForceShutdown]; }];
+    shutdown.attributes = UIMenuElementAttributesDestructive;
+    [machineActions addObject:shutdown];
+    UIMenu *machineSection = [UIMenu menuWithTitle:@"" image:nil
+        identifier:nil options:UIMenuOptionsDisplayInline
+        children:machineActions];
+    UIAction *settings = [UIAction actionWithTitle:VZL(@"Settings")
+        image:[UIImage systemImageNamed:@"gearshape"] identifier:nil
+        handler:^(UIAction *action) {
+        (void)action;
+        VZSettingsViewController *controller = [[[VZSettingsViewController alloc]
+            initWithMachines:VZDiscoverVirtualMachines()] autorelease];
+        UINavigationController *navigation = [[[UINavigationController alloc]
+            initWithRootViewController:controller] autorelease];
+        navigation.modalPresentationStyle = UIModalPresentationFormSheet;
+        navigation.preferredContentSize = CGSizeMake(620, 720);
+        [self presentViewController:navigation animated:YES completion:nil];
     }];
-    extToggle.state = extEnabled ? UIMenuElementStateOn : UIMenuElementStateOff;
-    return [UIMenu menuWithTitle:@""
-        children:@[library, shutdown, hide, extToggle, moveMenu]];
+    UIAction *library = [UIAction actionWithTitle:VZL(@"Show Library")
+        image:[UIImage systemImageNamed:@"square.grid.2x2"] identifier:nil
+        handler:^(UIAction *action) { (void)action; [self presentVMLibrary]; }];
+    UIMenu *navigationSection = [UIMenu menuWithTitle:@"" image:nil
+        identifier:nil options:UIMenuOptionsDisplayInline
+        children:@[settings, library]];
+    NSArray *sections = bottom
+        ? @[navigationSection, machineSection, moveMenu, visibilityMenu]
+        : @[visibilityMenu, moveMenu, machineSection, navigationSection];
+    return [UIMenu menuWithTitle:@"" children:sections];
 }
 
 - (void)confirmForceShutdown
@@ -2259,8 +2376,6 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
 {
     printf("[VirtualMac] presenting VM library\n");
     BOOL crossfade = self.isVMDisplayActive;
-    gHUDHiddenForBoot = NO;
-    gHUDForcedVisibleForBoot = NO;
     if (!self.libraryNavigationController) {
         VZVMLibraryViewController *library =
             [[[VZVMLibraryViewController alloc] init] autorelease];
@@ -2347,11 +2462,36 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
 - (void)vmLibrary:(VZVMLibraryViewController *)library
     bootBundleAtPath:(NSString *)path options:(NSDictionary *)options
 {
-    (void)library;
+    if (gVirtualMachine) {
+        if ([self.activeVMBundlePath isEqualToString:path]) {
+            [self vmLibraryResumeActiveVM:library];
+            return;
+        }
+        UIAlertController *running = [UIAlertController
+            alertControllerWithTitle:VZL(@"Another Virtual Mac Is Running")
+            message:VZL(@"Switch to the running Virtual Mac and shut it down before starting another one.")
+            preferredStyle:UIAlertControllerStyleAlert];
+        [running addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+            style:UIAlertActionStyleCancel handler:nil]];
+        [running addAction:[UIAlertAction
+            actionWithTitle:VZL(@"Switch to Running Virtual Mac")
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                (void)action;
+                [self vmLibraryResumeActiveVM:library];
+            }]];
+        [self presentViewController:running animated:YES completion:nil];
+        return;
+    }
+    if (VZIsRootHideEnvironment() && !gRootHidePivotalActionApproved) {
+        VZContinueAfterRootHideInformation(self, ^{
+            gRootHidePivotalActionApproved = YES;
+            [self vmLibrary:library bootBundleAtPath:path options:options];
+            gRootHidePivotalActionApproved = NO;
+        });
+        return;
+    }
     printf("[VirtualMac] selected VM path=%s options=%s\n", path.UTF8String,
            options.description.UTF8String);
-    gHUDHiddenForBoot = NO;
-    gHUDForcedVisibleForBoot = NO;
     self.activeVMBundlePath = path;
     if (self.libraryNavigationController.view.window &&
         !self.libraryNavigationController.view.hidden) {
@@ -2408,6 +2548,15 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     (void)library;
     if (self.installationController || self.installationTimer) {
         printf("[VirtualMac] ignored duplicate installation request\n");
+        return;
+    }
+    if (VZIsRootHideEnvironment() && !gRootHidePivotalActionApproved) {
+        VZContinueAfterRootHideInformation(self, ^{
+            gRootHidePivotalActionApproved = YES;
+            [self vmLibrary:library installRestoreImageAtURL:url name:name
+                    options:options];
+            gRootHidePivotalActionApproved = NO;
+        });
         return;
     }
     NSError *imageError = nil;
@@ -2758,6 +2907,7 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
 
 - (void)finishVMAndShowLibraryWithError:(NSError *)error
 {
+    gSoftwareKeyboardRequested = NO;
     disconnectExternalDisplay();
     [gDisplayLayer removeFromSuperlayer];
     gDisplayLayer = nil;
@@ -2845,6 +2995,31 @@ static CGRect displayViewportRect(CGSize contentSize, CGRect bounds) {
                 : aspectFitRect(contentSize, bounds);
 }
 
+static void updateExternalCursorForNormalizedLocation(CGPoint location)
+{
+    if (!gExternalCursorView || !gExternalWindow ||
+        !gCursorView.image || gCursorView.hidden)
+        return;
+    if (!isfinite(location.x) || !isfinite(location.y))
+        location = CGPointMake(0.5, 0.5);
+    location.x = fmin(1.0, fmax(0.0, location.x));
+    location.y = fmin(1.0, fmax(0.0, location.y));
+    CGRect viewport = aspectFitRect(gDisplayPixelSize,
+                                    gExternalWindow.bounds);
+    CGFloat scaleX = viewport.size.width / gDisplayPixelSize.width;
+    CGFloat scaleY = viewport.size.height / gDisplayPixelSize.height;
+    CGSize size = CGSizeMake(gCursorPixelSize.width * scaleX,
+                             gCursorPixelSize.height * scaleY);
+    CGPoint origin = CGPointMake(
+        viewport.origin.x + location.x * viewport.size.width -
+            gCursorHotspot.x * scaleX,
+        viewport.origin.y + location.y * viewport.size.height -
+            gCursorHotspot.y * scaleY);
+    gExternalCursorView.image = gCursorView.image;
+    gExternalCursorView.hidden = NO;
+    gExternalCursorView.frame = (CGRect){origin, size};
+}
+
 static void updateDisplayGeometry(void) {
     static CGRect lastViewport = {{NAN, NAN}, {NAN, NAN}};
     static CGSize lastContainer = {NAN, NAN};
@@ -2855,7 +3030,8 @@ static void updateDisplayGeometry(void) {
     if (gDisplayLayer)
         gDisplayLayer.frame = viewport;
     if (gInputView)
-        gInputView.frame = viewport;
+        gInputView.frame = gExternalWindow
+            ? gDisplayContainer.bounds : viewport;
     if (!CGRectEqualToRect(viewport, lastViewport) ||
         !CGSizeEqualToSize(gDisplayContainer.bounds.size, lastContainer)) {
         printf("[VirtualMac] display viewport %.0fx%.0f at %.0f,%.0f "
@@ -2957,44 +3133,25 @@ static void updateCursorOverlay(VZFrameUpdateSharedPtr update) {
             gCursorHotspot = image
                 ? CGPointMake(hotspotX, hotspotY) : CGPointZero;
         }
-        CGFloat scaleX = gInputView.bounds.size.width /
-                         gDisplayPixelSize.width;
-        CGFloat scaleY = gInputView.bounds.size.height /
-                         gDisplayPixelSize.height;
+        CGRect inputViewport = displayViewportRect(
+            gDisplayPixelSize, gInputView.bounds);
+        CGFloat scaleX = inputViewport.size.width / gDisplayPixelSize.width;
+        CGFloat scaleY = inputViewport.size.height / gDisplayPixelSize.height;
         CGSize size = CGSizeMake(gCursorPixelSize.width * scaleX,
                                  gCursorPixelSize.height * scaleY);
         CGPoint origin = CGPointMake(
-            gInputView.frame.origin.x +
+            gInputView.frame.origin.x + inputViewport.origin.x +
                 ((CGFloat)guestX - gCursorHotspot.x) * scaleX,
-            gInputView.frame.origin.y +
+            gInputView.frame.origin.y + inputViewport.origin.y +
                 ((CGFloat)guestY - gCursorHotspot.y) * scaleY);
         // A just-sent host pointer event is newer than this asynchronous PVG
         // callback. Keep the predicted position briefly; a subsequent guest
         // update reconciles it without the cursor jumping one frame backward.
         if (CACurrentMediaTime() - gLastPredictedCursorTime >= 0.05)
             gCursorView.frame = (CGRect){origin, size};
-        // Mirror cursor to external display if connected.
-        if (gExternalCursorView) {
-            CGRect viewport = aspectFitRect(gDisplayPixelSize,
-                                            gExternalWindow.bounds);
-            CGFloat extScaleX = viewport.size.width /
-                                gDisplayPixelSize.width;
-            CGFloat extScaleY = viewport.size.height /
-                                gDisplayPixelSize.height;
-            CGSize extSize = CGSizeMake(
-                gCursorPixelSize.width * extScaleX,
-                gCursorPixelSize.height * extScaleY);
-            CGPoint extOrigin = CGPointMake(
-                viewport.origin.x +
-                    ((CGFloat)guestX - gCursorHotspot.x) * extScaleX,
-                viewport.origin.y +
-                    ((CGFloat)guestY - gCursorHotspot.y) * extScaleY);
-            if (imageChanged) {
-                gExternalCursorView.image = gCursorView.image;
-                gExternalCursorView.hidden = gCursorView.hidden;
-            }
-            gExternalCursorView.frame = (CGRect){extOrigin, extSize};
-        }
+        updateExternalCursorForNormalizedLocation(CGPointMake(
+            gDisplayPixelSize.width > 0 ? guestX / gDisplayPixelSize.width : 0,
+            gDisplayPixelSize.height > 0 ? guestY / gDisplayPixelSize.height : 0));
         [image release];
     });
 }
@@ -3463,43 +3620,59 @@ static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
            memorySize >> 20);
     setObj(configuration, "setBootLoader:", NEW("VZMacOSBootLoader"));
 
-    UIScreen *screen = UIScreen.mainScreen;
-    CGSize hostSize = screen.bounds.size;
-    CGFloat nativeScale = screen.nativeScale > 0
-        ? screen.nativeScale : screen.scale;
-    // The app is landscape-only, so multiplying the oriented UIKit bounds by
-    // nativeScale produces the panel's exact native landscape pixel size
-    // (2388x1668 on the connected 11-inch iPad Pro). A Retina-density PPI
-    // makes macOS expose this as a 2x logical desktop instead of a scaled
-    // low-density monitor.
     NSString *displayMode = options[@"DisplayMode"];
-    BOOL customDisplay = [displayMode isEqualToString:@"Custom"];
+    BOOL storedDisplay = [displayMode isEqualToString:@"Custom"] ||
+        [displayMode isEqualToString:@"Fixed"];
+    BOOL landscapeDisplay = [displayMode isEqualToString:
+        @"LandscapeNativeRetina"];
     BOOL portraitDisplay = [displayMode isEqualToString:
         @"PortraitNativeRetina"];
-    CGSize nativePixelSize = screen.nativeBounds.size;
-    NSInteger displayWidth = customDisplay
+    BOOL externalDisplay = [displayMode isEqualToString:
+        @"ExternalDisplay"];
+    BOOL startupWindowDisplay = [displayMode isEqualToString:
+        @"WindowSizeAtStartup"];
+    NSString *widthKey = startupWindowDisplay
+        ? @"_HostWindowPixelWidth"
+        : externalDisplay ? @"_ExternalScreenPixelWidth"
+        : landscapeDisplay ? @"_BuiltInLandscapePixelWidth"
+        : portraitDisplay ? @"_BuiltInPortraitPixelWidth"
+                          : @"_ActiveScreenPixelWidth";
+    NSString *heightKey = startupWindowDisplay
+        ? @"_HostWindowPixelHeight"
+        : externalDisplay ? @"_ExternalScreenPixelHeight"
+        : landscapeDisplay ? @"_BuiltInLandscapePixelHeight"
+        : portraitDisplay ? @"_BuiltInPortraitPixelHeight"
+                          : @"_ActiveScreenPixelHeight";
+    NSInteger displayWidth = storedDisplay
         ? [options[@"DisplayWidth"] integerValue]
-        : portraitDisplay
-            ? (NSInteger)llround(MIN(nativePixelSize.width,
-                                     nativePixelSize.height))
-            : (NSInteger)llround(hostSize.width * nativeScale);
-    NSInteger displayHeight = customDisplay
+        : [options[widthKey] integerValue];
+    NSInteger displayHeight = storedDisplay
         ? [options[@"DisplayHeight"] integerValue]
-        : portraitDisplay
-            ? (NSInteger)llround(MAX(nativePixelSize.width,
-                                     nativePixelSize.height))
-            : (NSInteger)llround(hostSize.height * nativeScale);
-    NSInteger pixelsPerInch = customDisplay
-        ? [options[@"DisplayPixelsPerInch"] integerValue] : 264;
-    displayWidth = MAX(800, MIN(7680, displayWidth));
-    displayHeight = MAX(800, MIN(7680, displayHeight));
+        : [options[heightKey] integerValue];
+    NSString *ppiKey = startupWindowDisplay
+        ? @"_HostWindowPixelsPerInch"
+        : externalDisplay ? @"_ExternalScreenPixelsPerInch"
+        : landscapeDisplay || portraitDisplay
+            ? @"_BuiltInScreenPixelsPerInch"
+            : @"_ActiveScreenPixelsPerInch";
+    NSInteger pixelsPerInch = storedDisplay
+        ? [options[@"DisplayPixelsPerInch"] integerValue]
+        : [options[ppiKey] integerValue];
+    // A narrow Slide Over window can be smaller than the editor's 800-pixel
+    // custom minimum. Preserve its exact startup size; the other modes retain
+    // the established guard against malformed configuration files.
+    NSInteger minimumDimension = startupWindowDisplay ? 1 : 800;
+    displayWidth = MAX(minimumDimension, MIN(7680, displayWidth));
+    displayHeight = MAX(minimumDimension, MIN(7680, displayHeight));
     pixelsPerInch = MAX(72, MIN(600, pixelsPerInch));
     gDisplayPixelSize = CGSizeMake(displayWidth, displayHeight);
     printf("[VirtualMac] configured guest display %ldx%ld at %ld ppi "
-           "for host %.0fx%.0f scale=%.3f\n",
+           "mode=%s active-screen=%s startup-window=%sx%s\n",
            (long)displayWidth, (long)displayHeight,
-           (long)pixelsPerInch, hostSize.width, hostSize.height,
-           nativeScale);
+           (long)pixelsPerInch, displayMode.UTF8String,
+           [options[@"_ActiveScreenDescription"] UTF8String],
+           [options[@"_HostWindowPixelWidth"] stringValue].UTF8String,
+           [options[@"_HostWindowPixelHeight"] stringValue].UTF8String);
     id graphics = NEW("VZMacGraphicsDeviceConfiguration");
     id display = ((id(*)(id, SEL, NSInteger, NSInteger, NSInteger))objc_msgSend)(
         m0(CLS("VZMacGraphicsDisplayConfiguration"), "alloc"),
@@ -3855,9 +4028,117 @@ static void startVirtualMachineOnBackgroundQueue(void *opaque) {
     [pool drain];
 }
 
+static CGSize orientPixelSizeForBounds(CGSize pixels, CGSize bounds)
+{
+    BOOL landscape = bounds.width >= bounds.height;
+    CGFloat shortSide = MIN(pixels.width, pixels.height);
+    CGFloat longSide = MAX(pixels.width, pixels.height);
+    return landscape ? CGSizeMake(longSide, shortSide)
+                     : CGSizeMake(shortSide, longSide);
+}
+
+static NSInteger pixelsPerInchForScreen(UIScreen *screen)
+{
+    // Every supported built-in iPad display is 264 PPI. UIKit does not expose
+    // an external panel's physical dimensions, so use its logical display
+    // scale to preserve the density selected by iPadOS for that screen.
+    if (!screen || screen == UIScreen.mainScreen)
+        return 264;
+    CGFloat scale = screen.nativeScale > 0
+        ? screen.nativeScale : MAX(screen.scale, 1.0);
+    return MAX(72, MIN(600, (NSInteger)llround(72.0 * scale)));
+}
+
+static NSDictionary *runtimeDisplayOptions(NSDictionary *options,
+                                            UIView *container)
+{
+    NSMutableDictionary *runtime =
+        [NSMutableDictionary dictionaryWithDictionary:options ?: @{}];
+    UIWindow *window = container.window;
+    UIScreen *activeScreen = window.screen ?: UIScreen.mainScreen;
+    CGRect windowBounds = window ? window.bounds : container.bounds;
+    CGFloat activeScale = activeScreen.nativeScale > 0
+        ? activeScreen.nativeScale : MAX(activeScreen.scale, 1.0);
+    CGSize activePixels = activeScreen.nativeBounds.size;
+    if (activePixels.width <= 0 || activePixels.height <= 0)
+        activePixels = CGSizeMake(activeScreen.bounds.size.width * activeScale,
+                                  activeScreen.bounds.size.height * activeScale);
+    activePixels = orientPixelSizeForBounds(activePixels, windowBounds.size);
+
+    UIScreen *builtInScreen = UIScreen.mainScreen;
+    CGSize builtInPixels = builtInScreen.nativeBounds.size;
+    if (builtInPixels.width <= 0 || builtInPixels.height <= 0) {
+        CGFloat scale = builtInScreen.nativeScale > 0
+            ? builtInScreen.nativeScale : MAX(builtInScreen.scale, 1.0);
+        builtInPixels = CGSizeMake(builtInScreen.bounds.size.width * scale,
+                                   builtInScreen.bounds.size.height * scale);
+    }
+
+    runtime[@"_ActiveScreenPixelWidth"] =
+        @((NSInteger)llround(activePixels.width));
+    runtime[@"_ActiveScreenPixelHeight"] =
+        @((NSInteger)llround(activePixels.height));
+    runtime[@"_ActiveScreenPixelsPerInch"] =
+        @(pixelsPerInchForScreen(activeScreen));
+    runtime[@"_BuiltInLandscapePixelWidth"] =
+        @((NSInteger)llround(MAX(builtInPixels.width, builtInPixels.height)));
+    runtime[@"_BuiltInLandscapePixelHeight"] =
+        @((NSInteger)llround(MIN(builtInPixels.width, builtInPixels.height)));
+    runtime[@"_BuiltInPortraitPixelWidth"] =
+        @((NSInteger)llround(MIN(builtInPixels.width, builtInPixels.height)));
+    runtime[@"_BuiltInPortraitPixelHeight"] =
+        @((NSInteger)llround(MAX(builtInPixels.width, builtInPixels.height)));
+    runtime[@"_BuiltInScreenPixelsPerInch"] =
+        @(pixelsPerInchForScreen(builtInScreen));
+
+    // Prefer the screen hosting the app when that is external; otherwise use
+    // the first connected external screen. If none is available, retain the
+    // active-screen dimensions so a saved configuration always remains
+    // bootable when the display is disconnected.
+    UIScreen *externalScreen = activeScreen != builtInScreen
+        ? activeScreen : nil;
+    if (!externalScreen) {
+        for (UIScreen *candidate in UIScreen.screens) {
+            if (candidate != builtInScreen) {
+                externalScreen = candidate;
+                break;
+            }
+        }
+    }
+    CGSize externalPixels = activePixels;
+    if (externalScreen) {
+        CGFloat externalScale = externalScreen.nativeScale > 0
+            ? externalScreen.nativeScale : MAX(externalScreen.scale, 1.0);
+        externalPixels = externalScreen.nativeBounds.size;
+        if (externalPixels.width <= 0 || externalPixels.height <= 0)
+            externalPixels = CGSizeMake(
+                externalScreen.bounds.size.width * externalScale,
+                externalScreen.bounds.size.height * externalScale);
+        externalPixels = orientPixelSizeForBounds(
+            externalPixels, externalScreen.bounds.size);
+    }
+    runtime[@"_ExternalScreenPixelWidth"] =
+        @((NSInteger)llround(externalPixels.width));
+    runtime[@"_ExternalScreenPixelHeight"] =
+        @((NSInteger)llround(externalPixels.height));
+    runtime[@"_ExternalScreenPixelsPerInch"] =
+        @(pixelsPerInchForScreen(externalScreen ?: activeScreen));
+    runtime[@"_ExternalScreenDescription"] =
+        externalScreen.description ?: @"(not connected; using active screen)";
+    runtime[@"_HostWindowPixelWidth"] =
+        @((NSInteger)llround(windowBounds.size.width * activeScale));
+    runtime[@"_HostWindowPixelHeight"] =
+        @((NSInteger)llround(windowBounds.size.height * activeScale));
+    runtime[@"_HostWindowPixelsPerInch"] =
+        @(pixelsPerInchForScreen(activeScreen));
+    runtime[@"_ActiveScreenDescription"] = activeScreen.description ?: @"";
+    return runtime;
+}
+
 static void startVirtualMachine(UIView *container, id delegate,
                                 NSString *bundlePath,
                                 NSDictionary *options) {
+    NSDictionary *runtimeOptions = runtimeDisplayOptions(options, container);
     // Ventura's VZ startup performs synchronous XPC and device construction.
     // On iPadOS 14, doing that from a tap blocks UIKit long enough to trip the
     // 10-second scene-update watchdog. Keep iPadOS 15/16 on their proven path.
@@ -3867,13 +4148,13 @@ static void startVirtualMachine(UIView *container, id delegate,
         context->container = [container retain];
         context->delegate = [delegate retain];
         context->bundlePath = [bundlePath copy];
-        context->options = [options copy];
+        context->options = [runtimeOptions copy];
         dispatch_async_f(
             dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), context,
             startVirtualMachineOnBackgroundQueue);
         return;
     }
-    startVirtualMachineWorker(container, delegate, bundlePath, options);
+    startVirtualMachineWorker(container, delegate, bundlePath, runtimeOptions);
 }
 
 // ─── External Display (Keynote-style) ────────────────────────────────────────
@@ -3934,14 +4215,18 @@ static void connectExternalDisplayWithScreen(UIScreen *extScreen) {
     mirrorView.layer.contentsGravity = kCAGravityResizeAspect;
     [gExternalWindow addSubview:mirrorView];
     gExternalMirrorView = mirrorView;
+    mirrorView.layer.contentsScale = extScreen.scale;
     [mirrorView release];
 
     gExternalCursorView = [[UIImageView alloc] initWithFrame:CGRectZero];
     gExternalCursorView.backgroundColor = [UIColor clearColor];
     gExternalCursorView.contentMode = UIViewContentModeScaleToFill;
     [gExternalWindow addSubview:gExternalCursorView];
+    updateExternalCursorForNormalizedLocation(gLastPointerLocation);
 
     gExternalWindow.hidden = NO;
+    updateDisplayGeometry();
+    updateExternalCursorForNormalizedLocation(gLastPointerLocation);
     printf("[VirtualMac] external window created frame=%s\n",
            NSStringFromCGRect(gExternalWindow.frame).UTF8String);
 }
@@ -3961,6 +4246,7 @@ static void disconnectExternalDisplay(void) {
     gExternalWindow.hidden = YES;
     [gExternalWindow release];
     gExternalWindow = nil;
+    updateDisplayGeometry();
 }
 
 @interface VirtualMacAppDelegate : UIResponder <UIApplicationDelegate>
@@ -3986,10 +4272,16 @@ static void disconnectExternalDisplay(void) {
     freopen("/tmp/VirtualMac.log", "a", stdout);
     freopen("/tmp/VirtualMac.log", "a", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
+#if 0
     VZEnableKeyboardRenderingFixAfterCrash();
+#endif
     installKeyboardRenderingFix();
     installShellShortcutRelay();
-
+    gFixExternalDisplayScrollDirection = [VZAppSettings.sharedSettings
+        boolForKey:VZExternalDisplayScrollFixKey];
+    gScrollingSpeed = MAX(0.1, MIN(1.0,
+        [[VZAppSettings.sharedSettings stringForKey:VZScrollingSpeedKey]
+            doubleValue]));
     self.window = [[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]
         autorelease];
     VZViewController *controller =
@@ -4102,6 +4394,7 @@ static void disconnectExternalDisplay(void) {
         [controller.view bringSubviewToFront:gStatusLabel];
 
     [self.window makeKeyAndVisible];
+    VZContinueAfterRootHideInformation(controller, nil);
     UIApplicationShortcutIcon *libraryIcon = [UIApplicationShortcutIcon
         iconWithSystemImageName:@"square.grid.2x2"];
     UIApplicationShortcutIcon *controlsIcon = [UIApplicationShortcutIcon
@@ -4230,7 +4523,6 @@ static void disconnectExternalDisplay(void) {
 {
     (void)application;
     resetPointerSession(YES);
-    recoverNetworkingAfterResume();
     if (gInputView) {
         for (id interaction in gInputView.interactions)
             if ([interaction respondsToSelector:@selector(invalidate)])
@@ -4252,8 +4544,8 @@ static void disconnectExternalDisplay(void) {
     if ([shortcutItem.type isEqualToString:@"com.mac.virtual.show-library"]) {
         [controller presentVMLibrary];
     } else if ([shortcutItem.type isEqualToString:@"com.mac.virtual.show-controls"]) {
-        gHUDHiddenForBoot = NO;
-        gHUDForcedVisibleForBoot = YES;
+        [VZAppSettings.sharedSettings setString:@"always"
+            forKey:VZHUDVisibilityKey];
         [controller updateHUDVisibility];
     }
     if (completionHandler) completionHandler(handled);

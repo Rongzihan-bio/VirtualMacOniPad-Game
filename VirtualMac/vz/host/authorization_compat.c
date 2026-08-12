@@ -31,10 +31,6 @@ extern Boolean SMJobSetEnabled(CFStringRef domain,
                                Boolean enabled,
                                CFErrorRef *error);
 
-extern int memorystatus_control(uint32_t command, int32_t pid,
-                                uint32_t flags, void *buffer,
-                                size_t buffer_size);
-
 typedef struct {
     int listener;
     struct sockaddr_storage client;
@@ -166,19 +162,7 @@ static void startLegacyDNSRelayIfNeeded(void) {
         pthread_detach(thread);
 }
 
-__attribute__((constructor)) static void raiseInternetSharingMemoryLimit(void) {
-    // iPadOS rootless launch daemons have a 6 MiB default jetsam limit.
-    // Ventura's InternetSharing loads its desktop framework graph before main
-    // and cannot even allocate its first dispatch queue within that budget.
-    // XNU command 5 sets both active and inactive soft limits; flags are MiB.
-    // Original XNU 20 declaration and command definition:
-    // https://github.com/apple-oss-distributions/xnu/blob/xnu-7195.141.2/bsd/sys/kern_memorystatus.h#L335-L343
-    const uint32_t memoryStatusSetHighWaterMark = 5;
-    int result = memorystatus_control(memoryStatusSetHighWaterMark,
-                                      getpid(), 128, NULL, 0);
-    dprintf(STDERR_FILENO,
-            "AuthorizationCompat: set 128 MiB jetsam limit result=%d\n",
-            result);
+__attribute__((constructor)) static void initializeInternetSharingCompat(void) {
     startLegacyDNSRelayIfNeeded();
 
     typedef CFTypeRef (*SecTaskCreateFromSelfFn)(CFAllocatorRef);

@@ -47,7 +47,7 @@ mkdir -p "$APP"
 cp "$VZ_REPO_ROOT/vz/host/VirtualMac-Info.plist" "$APP/Info.plist"
 sips -Z 320 "$VZ_REPO_ROOT/assets/VirtualMacTemplate.png" \
     --out "$APP/VirtualMacTemplate.png" >/dev/null
-APP_VERSION="${VZ_RELEASE_VERSION:-1.1.1}"
+APP_VERSION="${VZ_RELEASE_VERSION:-1.1.2}"
 APP_BUILD="$(git -C "$VZ_REPO_ROOT" rev-list --count HEAD)"
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" \
     "$APP/Info.plist"

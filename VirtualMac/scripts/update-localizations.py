@@ -38,7 +38,7 @@ for path in sorted(RESOURCE_ROOT.glob("*.lproj/Localizable.strings")):
     missing = [key for key in keys if key not in entries]
     for key in missing:
         entries[key] = key
-    lines = ["/* Virtual Mac 1.1.1 localization. */"]
+    lines = []
     lines.extend(
         f'"{quote(key)}" = "{quote(entries[key])}";'
         for key in keys

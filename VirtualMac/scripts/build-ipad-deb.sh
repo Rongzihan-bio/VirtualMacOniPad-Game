@@ -31,7 +31,7 @@ app_build="$(plutil -extract CFBundleVersion raw \
     "$VZ_BUILD_ROOT/ipad-app/VirtualMac.app/Info.plist")"
 [[ "$app_build" == "$commit_count" ]] ||
     die "app build $app_build does not match repository build $commit_count; rebuild the app"
-RELEASE_VERSION="${VZ_RELEASE_VERSION:-1.1.1}"
+RELEASE_VERSION="${VZ_RELEASE_VERSION:-1.1.2}"
 if [[ -n "${VZ_PACKAGE_VERSION:-}" ]]; then
     VERSION="$VZ_PACKAGE_VERSION"
 else
@@ -106,6 +106,8 @@ install -m 755 "$VZ_BUILD_ROOT/ipad-network-sharing/libmrc.ipados15-auth.dylib" 
     "$STAGE/var/jb/usr/lib/libmrc.ipados15-auth.dylib"
 install -m 755 "$VZ_BUILD_ROOT/ipad-network-sharing/AuthorizationCompat.dylib" \
     "$STAGE/var/jb/usr/lib/AuthorizationCompat.dylib"
+install -m 755 "$VZ_BUILD_ROOT/ipad-network-sharing/NetworkMemoryPolicy.dylib" \
+    "$STAGE/var/jb/usr/lib/NetworkMemoryPolicy.dylib"
 install -m 755 "$VZ_BUILD_ROOT/ipad-network-helpers/bootpd" \
     "$STAGE/var/jb/usr/libexec/bootpd"
 install -m 755 "$VZ_BUILD_ROOT/ipad-network-helpers/rtadvd" \
@@ -154,6 +156,9 @@ for name in InternetSharing.ipados14; do
     install_name_tool -change @loader_path/../lib/AuthorizationCompat.dylib \
         /usr/lib/VirtualMac/AuthorizationCompat.dylib \
         "$ROOTFUL/usr/libexec/VirtualMac/$name"
+    install_name_tool -change @loader_path/../lib/NetworkMemoryPolicy.dylib \
+        /usr/lib/VirtualMac/NetworkMemoryPolicy.dylib \
+        "$ROOTFUL/usr/libexec/VirtualMac/$name"
     codesign --force --sign - \
         --entitlements "$VZ_REPO_ROOT/vz/patches/internet-sharing.ents.xml" \
         --generate-entitlement-der "$ROOTFUL/usr/libexec/VirtualMac/$name"
@@ -163,6 +168,12 @@ done
 # is preflighted by Taurine; Apple's /usr/libexec/bootpd remains untouched.
 install -m 755 "$VZ_BUILD_ROOT/ipad-network-helpers/bootpd.ipados14" \
     "$ROOTFUL/usr/libexec/VirtualMac/bootpd"
+install_name_tool -change @loader_path/../lib/NetworkMemoryPolicy.dylib \
+    /usr/lib/VirtualMac/NetworkMemoryPolicy.dylib \
+    "$ROOTFUL/usr/libexec/VirtualMac/bootpd"
+codesign --force --sign - \
+    --entitlements "$VZ_REPO_ROOT/vz/patches/network-helper.ents.xml" \
+    --generate-entitlement-der "$ROOTFUL/usr/libexec/VirtualMac/bootpd"
 install -m 755 "$VZ_REPO_ROOT/packaging/rootful/bootpd-controller.sh" \
     "$ROOTFUL/usr/libexec/VirtualMac/bootpd-controller.sh"
 install -m 644 "$VZ_BUILD_ROOT/ipad-network-helpers/com.apple.bootpd.plist" \

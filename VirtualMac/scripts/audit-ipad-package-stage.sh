@@ -113,6 +113,24 @@ for variant in \
 done
 [[ -f "$STAGE/var/jb/usr/lib/libmrc.ipados15-auth.dylib" ]] ||
     die "missing authenticated iPadOS 15 libmrc variant"
+[[ -f "$STAGE/var/jb/usr/lib/NetworkMemoryPolicy.dylib" ]] ||
+    die "missing network memory policy"
+for executable in \
+    "$STAGE/var/jb/usr/libexec/InternetSharing.ipados14" \
+    "$STAGE/var/jb/usr/libexec/InternetSharing.ipados15" \
+    "$STAGE/var/jb/usr/libexec/InternetSharing.ipados16" \
+    "$STAGE/var/jb/usr/libexec/bootpd"; do
+    otool -L "$executable" | grep -Fq \
+        @loader_path/../lib/NetworkMemoryPolicy.dylib ||
+        die "network helper is missing memory policy: ${executable#"$STAGE/"}"
+done
+for executable in \
+    "$ROOTFUL_BOOTSTRAP/usr/libexec/VirtualMac/InternetSharing.ipados14" \
+    "$ROOTFUL_BOOTSTRAP/usr/libexec/VirtualMac/bootpd"; do
+    otool -L "$executable" | grep -Fq \
+        /usr/lib/VirtualMac/NetworkMemoryPolicy.dylib ||
+        die "rootful helper is missing memory policy: ${executable#"$STAGE/"}"
+done
 
 for name in Hypervisor ParavirtualizedGraphics Virtualization MetalSerializer \
     VideoToolbox DiskImages2; do

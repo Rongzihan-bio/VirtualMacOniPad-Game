@@ -13,6 +13,7 @@ SOURCE_BOOTPD_PLIST="$SOURCE_ROOT/System/Library/LaunchDaemons/bootps.plist"
 ENTS="$VZ_REPO_ROOT/vz/patches/network-helper.ents.xml"
 COMPAT_PATCH="$VZ_REPO_ROOT/vz/patches/patch_network_helper.py"
 IPADOS14_PATCH="$VZ_REPO_ROOT/vz/patches/patch_ipados14_bootpd.py"
+ADD_DYLIB="$VZ_REPO_ROOT/vz/patches/add_macho_dylib.py"
 OUT="$VZ_BUILD_ROOT/ipad-network-helpers"
 BOOTPD="$OUT/bootpd"
 BOOTPD_IPADOS14="$OUT/bootpd.ipados14"
@@ -33,6 +34,7 @@ need_file "$SOURCE_BOOTPD_PLIST"
 need_file "$ENTS"
 need_file "$COMPAT_PATCH"
 need_file "$IPADOS14_PATCH"
+need_file "$ADD_DYLIB"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -82,6 +84,8 @@ for name in bootpd rtadvd; do
 done
 
 "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$COMPAT_PATCH" "$BOOTPD"
+"$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$ADD_DYLIB" "$BOOTPD" \
+    @loader_path/../lib/NetworkMemoryPolicy.dylib
 codesign --force --sign - --entitlements "$ENTS" \
     --generate-entitlement-der "$BOOTPD"
 codesign --verify --strict "$BOOTPD"
@@ -91,11 +95,18 @@ codesign --verify --strict "$BOOTPD"
 cp "$SOURCE_IPADOS14_BOOTPD" "$BOOTPD_IPADOS14"
 "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$IPADOS14_PATCH" \
     "$BOOTPD_IPADOS14"
+"$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$ADD_DYLIB" \
+    "$BOOTPD_IPADOS14" @loader_path/../lib/NetworkMemoryPolicy.dylib
 codesign --force --sign - --entitlements "$ENTS" \
     --generate-entitlement-der "$BOOTPD_IPADOS14"
 codesign --verify --strict "$BOOTPD_IPADOS14"
 codesign --verify --strict "$OD_COMPAT"
 codesign --verify --strict "$IOKIT14_COMPAT"
+for executable in "$BOOTPD" "$BOOTPD_IPADOS14"; do
+    otool -L "$executable" | grep -Fq \
+        @loader_path/../lib/NetworkMemoryPolicy.dylib ||
+        die "network memory policy is not loaded by $executable"
+done
 python3 "$VZ_REPO_ROOT/scripts/audit-entitlements.py" \
     "$ENTS" "$BOOTPD" \
     "$ENTS" "$BOOTPD_IPADOS14" \

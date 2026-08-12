@@ -90,6 +90,26 @@
     self.navigationItem.rightBarButtonItem = [[[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self
         action:@selector(done:)] autorelease];
+    [NSNotificationCenter.defaultCenter addObserver:self
+        selector:@selector(settingsChanged:)
+        name:VZSettingsDidChangeNotification object:nil];
+}
+
+- (void)settingsChanged:(NSNotification *)notification
+{
+    (void)notification;
+    // HUD menu actions and the Home Screen quick action can change this value
+    // while the sheet is visible. Update just that value: reloading the whole
+    // table here would replace sliders while the user is dragging them.
+    NSIndexPath *path = [NSIndexPath indexPathForRow:2 inSection:0];
+    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:path];
+    if (!cell)
+        return;
+    NSDictionary *names = @{ @"always": VZL(@"On"),
+                             @"hidden": VZL(@"Off") };
+    NSString *visibility = [VZAppSettings.sharedSettings
+        stringForKey:VZHUDVisibilityKey];
+    cell.detailTextLabel.text = names[visibility] ?: VZL(@"On");
 }
 
 - (void)done:(id)sender
@@ -101,33 +121,34 @@
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
     (void)tableView;
-    return 7;
+    return 8;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
     (void)tableView;
-    return section == 0 ? 2 : section == 1 ? 10 : section == 2 ? 3 :
-        section == 3 ? 3 : section == 4 ? 2 : section == 5 ? 4 : 1;
+    return section == 0 ? 4 : section == 1 ? 5 : section == 2 ? 4 :
+        section == 3 ? 3 : section == 4 ? 3 : section == 5 ? 2 :
+        section == 6 ? 1 : 4;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
 {
     (void)tableView;
-    return @[VZL(@"General"), VZL(@"Input While a Virtual Mac Is Running"),
+    return @[VZL(@"General"), VZL(@"Touch"), VZL(@"Input"),
              VZL(@"Compatibility"), VZL(@"Storage"), VZL(@"About"),
-             VZL(@"Support"), VZL(@"Developers")][section];
+             VZL(@"Developers"), VZL(@"Support")][section];
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
 {
     (void)tableView;
-    if (section == 5)
+    if (section == 4)
         return [NSString stringWithFormat:VZL(@"Virtual Mac devices are stored in %@."), VZVMLibraryPath()];
-    if (section == 1)
-        return VZL(@"These options affect iPadOS only while Virtual Mac is frontmost and a Virtual Mac is running.");
     if (section == 2)
-        return VZL(@"Keyboard Crash Workaround takes effect the next time Virtual Mac opens. Debug Logging takes effect the next time a Virtual Mac starts.");
+        return VZL(@"These options affect iPadOS only while Virtual Mac is frontmost and a Virtual Mac is running.");
+    if (section == 3)
+        return VZL(@"Debug Logging takes effect the next time a Virtual Mac starts.");
     return nil;
 }
 
@@ -199,34 +220,15 @@
         cell.detailTextLabel.text = [[settings stringForKey:VZDisplayScalingKey]
             isEqualToString:@"fill"] ? VZL(@"Fill Window") : VZL(@"Fit in Window");
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    } else if (indexPath.section == 1 && indexPath.row < 8) {
-        NSArray *titles = @[VZL(@"Mac Keyboard Shortcuts"), VZL(@"Suppress iPadOS System Edge Gestures"),
-                   VZL(@"Suppress iPadOS Multitasking Gestures"), VZL(@"Suppress iPadOS Home Indicator"),
-                   VZL(@"Accommodate Finger Double-Taps"), VZL(@"Two-Finger Touch Scrolling"),
-                   VZL(@"Two-Finger Tap for Secondary Click"), VZL(@"Touch and Hold for Secondary Click")];
-        NSArray *keys = @[VZKeyboardShortcutCaptureKey, VZSystemGestureSuppressionKey,
-                          VZMultitaskingGestureSuppressionKey, VZHomeIndicatorSuppressionKey,
-                          VZTouchDoubleTapAccommodationKey, VZTouchTwoFingerScrollingKey,
-                          VZTouchTwoFingerRightClickKey, VZTouchLongPressRightClickKey];
-        cell.textLabel.text = titles[indexPath.row];
-        UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
-        toggle.tag = indexPath.row;
-        toggle.on = [settings boolForKey:keys[indexPath.row]];
-        [toggle addTarget:self action:@selector(inputToggleChanged:)
-            forControlEvents:UIControlEventValueChanged];
-        cell.accessoryView = toggle;
-        cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 1 && indexPath.row == 8) {
+    } else if (indexPath.section == 0 && indexPath.row == 2) {
         cell.textLabel.text = VZL(@"Virtual Mac Controls");
-        NSDictionary *names = @{@"automatic": VZL(@"Automatic"), @"always": VZL(@"Always Visible"),
-                                @"hidden": VZL(@"Always Hidden")};
+        NSDictionary *names = @{@"always": VZL(@"On"),
+                                @"hidden": VZL(@"Off")};
         NSString *visibility = [settings stringForKey:VZHUDVisibilityKey];
-        cell.detailTextLabel.text = visibility ? names[visibility] : nil;
-        if (!cell.detailTextLabel.text)
-            cell.detailTextLabel.text = VZL(@"Automatic");
+        cell.detailTextLabel.text = names[visibility] ?: VZL(@"On");
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    } else if (indexPath.section == 1) {
-        cell.textLabel.text = VZL(@"Controls Opacity");
+    } else if (indexPath.section == 0) {
+        cell.textLabel.text = VZL(@"Virtual Mac Controls Opacity");
         UISlider *slider = [[[UISlider alloc] initWithFrame:
             CGRectMake(0, 0, 180, 32)] autorelease];
         slider.minimumValue = 0.0;
@@ -236,12 +238,65 @@
             forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = slider;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 2 && indexPath.row < 3) {
-        NSArray *titles = @[VZL(@"Keyboard Crash Workaround"),
-                            VZL(@"Recover Networking After Sleep"),
+    } else if (indexPath.section == 1 && indexPath.row < 4) {
+        NSArray *titles = @[VZL(@"Scroll with Two Fingers"),
+                            VZL(@"Accommodate Double Tap"),
+                            VZL(@"Two Finger Tap to Secondary Click"),
+                            VZL(@"Touch and Hold to Secondary Click")];
+        NSArray *keys = @[VZTouchTwoFingerScrollingKey,
+                          VZTouchDoubleTapAccommodationKey,
+                          VZTouchTwoFingerRightClickKey,
+                          VZTouchLongPressRightClickKey];
+        cell.textLabel.text = titles[indexPath.row];
+        UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
+        toggle.tag = indexPath.row;
+        toggle.on = [settings boolForKey:keys[indexPath.row]];
+        [toggle addTarget:self action:@selector(inputToggleChanged:)
+            forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    } else if (indexPath.section == 1) {
+        cell.textLabel.text = VZL(@"Scrolling Speed");
+        UISlider *slider = [[[UISlider alloc] initWithFrame:
+            CGRectMake(0, 0, 180, 32)] autorelease];
+        slider.minimumValue = 0.1;
+        slider.maximumValue = 1.0;
+        slider.value = [[settings stringForKey:VZScrollingSpeedKey]
+            floatValue];
+        [slider addTarget:self action:@selector(scrollingSpeedChanged:)
+            forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = slider;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    } else if (indexPath.section == 2 && indexPath.row == 0) {
+        cell.textLabel.text = VZL(@"Mac Keyboard Shortcuts");
+        UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
+        toggle.tag = 20;
+        toggle.on = [settings boolForKey:VZKeyboardShortcutCaptureKey];
+        [toggle addTarget:self action:@selector(inputToggleChanged:)
+            forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    } else if (indexPath.section == 2) {
+        NSArray *titles = @[VZL(@"Suppress iPadOS System Edge Gestures"),
+                            VZL(@"Suppress iPadOS Multitasking Gestures"),
+                            VZL(@"Suppress iPadOS Home Indicator")];
+        NSArray *keys = @[VZSystemGestureSuppressionKey,
+                          VZMultitaskingGestureSuppressionKey,
+                          VZHomeIndicatorSuppressionKey];
+        cell.textLabel.text = titles[indexPath.row - 1];
+        UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
+        toggle.tag = 30 + indexPath.row - 1;
+        toggle.on = [settings boolForKey:keys[indexPath.row - 1]];
+        [toggle addTarget:self action:@selector(inputToggleChanged:)
+            forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    } else if (indexPath.section == 3) {
+        NSArray *titles = @[VZL(@"Fix Keyboard Crash"),
+                            VZL(@"Fix External Display Scroll Direction"),
                             VZL(@"Debug Logging")];
-        NSArray *keys = @[VZIPadOS162KeyboardWorkaroundKey,
-                          VZNetworkResumeRecoveryKey,
+        NSArray *keys = @[VZKeyboardCrashWorkaroundKey,
+                          VZExternalDisplayScrollFixKey,
                           VZDebugLoggingKey];
         cell.textLabel.text = titles[indexPath.row];
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
@@ -251,7 +306,7 @@
             forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = toggle;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 3 && indexPath.row == 0) {
+    } else if (indexPath.section == 4 && indexPath.row == 0) {
         cell.textLabel.text = VZL(@"Delete IPSW After Successful Installation");
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
         toggle.on = [settings boolForKey:VZAutoDeleteRestoreImageKey];
@@ -259,16 +314,16 @@
             forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = toggle;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 3) {
-        NSArray *paths = indexPath.row == 1 ? VZInstallationArtifactPaths()
-                                            : VZCachedRestoreImagePaths();
-        cell.textLabel.text = indexPath.row == 1 ? VZL(@"Delete Temporary Installation Files")
-                                                 : VZL(@"Delete Cached Install Images");
+    } else if (indexPath.section == 4) {
+        NSArray *paths = indexPath.row == 1 ? VZCachedRestoreImagePaths()
+                                            : VZInstallationArtifactPaths();
+        cell.textLabel.text = indexPath.row == 1 ? VZL(@"Delete Cached IPSW")
+                                                 : VZL(@"Delete Temporary Installation Files");
         cell.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)paths.count];
         cell.textLabel.textColor = paths.count ? UIColor.systemRedColor : UIColor.secondaryLabelColor;
         cell.selectionStyle = paths.count ? UITableViewCellSelectionStyleDefault
                                           : UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 4 && indexPath.row == 0) {
+    } else if (indexPath.section == 5 && indexPath.row == 0) {
         NSDictionary *info = NSBundle.mainBundle.infoDictionary;
         NSString *version = info[@"CFBundleShortVersionString"] ?: @"—";
         NSString *build = info[@"CFBundleVersion"] ?: @"—";
@@ -276,11 +331,11 @@
         cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ (%@)",
             version, build];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 4) {
+    } else if (indexPath.section == 5) {
         cell.textLabel.text = VZL(@"Reset Settings");
         cell.textLabel.textColor = UIColor.systemRedColor;
         cell.textLabel.textAlignment = NSTextAlignmentCenter;
-    } else if (indexPath.section == 5) {
+    } else if (indexPath.section == 7) {
         NSArray *titles = @[VZL(@"Copy Library Path"), VZL(@"Export Diagnostics"),
                             VZL(@"Get Help"), VZL(@"Report Issue")];
         NSArray *images = @[@"doc.on.doc", @"square.and.arrow.up",
@@ -294,15 +349,20 @@
 
 - (void)inputToggleChanged:(UISwitch *)sender
 {
-    NSArray *keys = @[VZKeyboardShortcutCaptureKey, VZSystemGestureSuppressionKey,
-                      VZMultitaskingGestureSuppressionKey, VZHomeIndicatorSuppressionKey,
-                      VZTouchDoubleTapAccommodationKey, VZTouchTwoFingerScrollingKey,
-                      VZTouchTwoFingerRightClickKey, VZTouchLongPressRightClickKey];
-    NSArray *compatibilityKeys = @[VZIPadOS162KeyboardWorkaroundKey,
-                                   VZNetworkResumeRecoveryKey,
+    NSArray *touchKeys = @[VZTouchTwoFingerScrollingKey,
+                           VZTouchDoubleTapAccommodationKey,
+                           VZTouchTwoFingerRightClickKey,
+                           VZTouchLongPressRightClickKey];
+    NSArray *iPadOSKeys = @[VZSystemGestureSuppressionKey,
+                            VZMultitaskingGestureSuppressionKey,
+                            VZHomeIndicatorSuppressionKey];
+    NSArray *compatibilityKeys = @[VZKeyboardCrashWorkaroundKey,
+                                   VZExternalDisplayScrollFixKey,
                                    VZDebugLoggingKey];
     NSString *key = sender.tag >= 100 ? compatibilityKeys[sender.tag - 100]
-                                      : keys[sender.tag];
+        : sender.tag >= 30 ? iPadOSKeys[sender.tag - 30]
+        : sender.tag == 20 ? VZKeyboardShortcutCaptureKey
+                           : touchKeys[sender.tag];
     [VZAppSettings.sharedSettings setBool:sender.on forKey:key];
 }
 
@@ -342,19 +402,35 @@
         forKey:VZHUDOpacityKey];
 }
 
+- (void)scrollingSpeedChanged:(UISlider *)sender
+{
+    [VZAppSettings.sharedSettings setString:
+        [NSString stringWithFormat:@"%.2f", sender.value]
+        forKey:VZScrollingSpeedKey];
+}
+
 - (void)chooseHUDVisibilityFrom:(UITableViewCell *)cell
 {
     UIAlertController *picker = [UIAlertController alertControllerWithTitle:VZL(@"Virtual Mac Controls")
-        message:VZL(@"Automatic hides the controls when an external keyboard and pointing device are connected.")
+        message:nil
         preferredStyle:UIAlertControllerStyleActionSheet];
-    NSArray *titles = @[VZL(@"Automatic"), VZL(@"Always Visible"), VZL(@"Always Hidden")];
-    NSArray *values = @[@"automatic", @"always", @"hidden"];
+    NSArray *titles = @[VZL(@"On"), VZL(@"Off")];
+    NSArray *values = @[@"always", @"hidden"];
     for (NSUInteger index = 0; index < titles.count; index++) {
         [picker addAction:[UIAlertAction actionWithTitle:titles[index]
             style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                 (void)action;
                 [VZAppSettings.sharedSettings setString:values[index] forKey:VZHUDVisibilityKey];
                 [self.tableView reloadData];
+                if (![values[index] isEqualToString:@"always"]) {
+                    UIAlertController *notice = [UIAlertController
+                        alertControllerWithTitle:VZL(@"Show Virtual Mac Controls")
+                        message:VZL(@"To show the controls, touch and hold the Virtual Mac icon on the Home Screen, then choose Show Virtual Mac Controls.")
+                        preferredStyle:UIAlertControllerStyleAlert];
+                    [notice addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+                        style:UIAlertActionStyleDefault handler:nil]];
+                    [self presentViewController:notice animated:YES completion:nil];
+                }
             }]];
     }
     [picker addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
@@ -468,26 +544,27 @@
         [self chooseAutoBootFrom:cell];
     else if (indexPath.section == 0 && indexPath.row == 1)
         [self chooseDisplayScalingFrom:cell];
-    else if (indexPath.section == 5 && indexPath.row == 0) {
+    else if (indexPath.section == 0 && indexPath.row == 2)
+        [self chooseHUDVisibilityFrom:cell];
+    else if (indexPath.section == 7 && indexPath.row == 0) {
         UIPasteboard.generalPasteboard.string = VZVMLibraryPath();
         UINotificationFeedbackGenerator *feedback = [[[UINotificationFeedbackGenerator alloc] init] autorelease];
         [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
-    } else if (indexPath.section == 1 && indexPath.row == 8)
-        [self chooseHUDVisibilityFrom:cell];
-    else if (indexPath.section == 3 && indexPath.row == 1)
+    } else if (indexPath.section == 4 && indexPath.row == 1)
+        [self confirmDeletePaths:VZCachedRestoreImagePaths() title:VZL(@"Delete Cached IPSW?")];
+    else if (indexPath.section == 4 && indexPath.row == 2)
         [self confirmDeletePaths:VZInstallationArtifactPaths() title:VZL(@"Delete Temporary Installation Files?")];
-    else if (indexPath.section == 3 && indexPath.row == 2)
-        [self confirmDeletePaths:VZCachedRestoreImagePaths() title:VZL(@"Delete Cached Install Images?")];
-    else if (indexPath.section == 5 && indexPath.row == 1)
+    else if (indexPath.section == 7 && indexPath.row == 1)
         [self exportDiagnosticsFrom:cell];
-    else if (indexPath.section == 4 && indexPath.row == 1)
+    else if (indexPath.section == 5 && indexPath.row == 1)
         [self confirmResetSettings];
-    else if (indexPath.section == 5 && indexPath.row >= 2)
+    else if (indexPath.section == 7 && indexPath.row >= 2)
         VZOpenSupportURL(indexPath.row == 2 ? VZGetHelpURLString : VZReportIssueURLString);
 }
 
 - (void)dealloc
 {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     [_machines release];
     [super dealloc];
 }

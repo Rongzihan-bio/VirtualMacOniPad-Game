@@ -14,10 +14,12 @@ DSC="${VZ_MACOS_DSC:-$SOURCE_ROOT/dyld_shared_cache_arm64e}"
 ENTS="$VZ_REPO_ROOT/vz/patches/internet-sharing.ents.xml"
 COMPAT_PATCH="$VZ_REPO_ROOT/vz/patches/patch_internet_sharing.py"
 IPADOS14_PATCH="$VZ_REPO_ROOT/vz/patches/patch_ipados14_internet_sharing.py"
+ADD_DYLIB="$VZ_REPO_ROOT/vz/patches/add_macho_dylib.py"
 OUT="$VZ_BUILD_ROOT/ipad-network-sharing"
 BIN="$OUT/InternetSharing"
 PLIST="$OUT/com.apple.NetworkSharing.plist"
 AUTH_COMPAT="$OUT/AuthorizationCompat.dylib"
+MEMORY_POLICY="$OUT/NetworkMemoryPolicy.dylib"
 LIBMRC="$OUT/libmrc.dylib"
 LIBMRC_IPADOS15_AUTH="$OUT/libmrc.ipados15-auth.dylib"
 LIBMRC_CACHE="$VZ_BUILD_ROOT/cache/network-sharing"
@@ -44,6 +46,7 @@ need_file "$IPSW"
 need_file "$ENTS"
 need_file "$COMPAT_PATCH"
 need_file "$IPADOS14_PATCH"
+need_file "$ADD_DYLIB"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -59,6 +62,13 @@ xcrun --sdk iphoneos clang \
     -install_name @rpath/AuthorizationCompat.dylib \
     "$VZ_REPO_ROOT/vz/host/authorization_compat.c" \
     -o "$AUTH_COMPAT"
+xcrun --sdk iphoneos clang \
+    -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" \
+    -isysroot "$SDK" -dynamiclib \
+    -install_name @loader_path/../lib/NetworkMemoryPolicy.dylib \
+    "$VZ_REPO_ROOT/vz/host/network_memory_policy.c" \
+    -o "$MEMORY_POLICY"
+codesign --force --sign - "$MEMORY_POLICY"
 
 install_name_tool \
     -change /System/Library/PrivateFrameworks/PacketFilter.framework/Versions/A/PacketFilter \
@@ -81,6 +91,8 @@ install_name_tool \
     "$VZ_REPO_ROOT/vz/stamp_ios.py" "$BIN.macos" "$BIN" \
     "$VZ_IPADOS_MIN_VERSION"
 "$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$COMPAT_PATCH" "$BIN"
+"$VZ_BUILD_ROOT/toolchain/venv/bin/python3" "$ADD_DYLIB" "$BIN" \
+    @loader_path/../lib/NetworkMemoryPolicy.dylib
 # Use Apple's signer so the entitlements are encoded in both the XML and DER
 # slots consumed by iOS 16 AMFI, with a valid modern ad-hoc CodeDirectory.
 codesign --force --sign - --entitlements "$ENTS" \
@@ -132,6 +144,8 @@ install_name_tool \
 "$PYTHON" "$VZ_REPO_ROOT/vz/stamp_ios.py" \
     "$BIN.ipados14.macos" "$BIN.ipados14" 14.5
 "$PYTHON" "$IPADOS14_PATCH" "$BIN.ipados14"
+"$PYTHON" "$ADD_DYLIB" "$BIN.ipados14" \
+    @loader_path/../lib/NetworkMemoryPolicy.dylib
 codesign --force --sign - --entitlements "$ENTS" \
     --generate-entitlement-der "$BIN.ipados14"
 rm -f "$BIN.ipados14.macos"
@@ -150,8 +164,6 @@ plutil -insert ExecuteAllowed -bool YES "$PLIST"
 if [[ "${VZ_NETWORK_SHARING_DOMAIN:-user/501}" == system ]]; then
     plutil -insert LimitLoadToSessionType -string System "$PLIST"
 fi
-plutil -insert JetsamProperties -json \
-    '{"JetsamMemoryLimit":131072,"JetsamPriority":40}' "$PLIST"
 plutil -insert StandardOutPath -string /tmp/InternetSharing.out "$PLIST"
 plutil -insert StandardErrorPath -string /tmp/InternetSharing.err "$PLIST"
 if [[ "${VZ_NETWORK_SHARING_WAIT_FOR_DEBUGGER:-0}" == 1 ]]; then
@@ -161,8 +173,14 @@ plutil -lint "$PLIST"
 
 otool -L "$BIN" | grep -Fq \
     /System/Library/PrivateFrameworks/ServiceManagement.framework/ServiceManagement
+for executable in "$BIN" "$BIN.ipados14" "$BIN.ipados15" "$BIN.ipados16"; do
+    otool -L "$executable" | grep -Fq \
+        @loader_path/../lib/NetworkMemoryPolicy.dylib ||
+        die "network memory policy is not loaded by $executable"
+done
 ldid -h "$BIN" >/dev/null
 ldid -h "$AUTH_COMPAT" >/dev/null
+ldid -h "$MEMORY_POLICY" >/dev/null
 codesign --verify --strict "$BIN"
 codesign --verify --strict "$BIN.ipados14"
 codesign --verify --strict "$BIN.ipados15"
@@ -176,6 +194,7 @@ python3 "$VZ_REPO_ROOT/scripts/audit-entitlements.py" \
     "$ENTS" "$BIN.ipados16" \
     - "$LIBMRC" \
     - "$LIBMRC_IPADOS15_AUTH" \
-    - "$AUTH_COMPAT"
+    - "$AUTH_COMPAT" \
+    - "$MEMORY_POLICY"
 "$SCRIPT_DIR/build-ipad-network-helpers.sh"
 echo "iPad NetworkSharing daemon built: $OUT"

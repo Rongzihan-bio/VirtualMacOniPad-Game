@@ -108,6 +108,15 @@ static NSData *VZInstallerPreflightData(void)
         @"/var/root/VirtualMac/install/start-install.sh"];
     for (NSString *path in paths)
         VZAppendPathStatus(report, path);
+    NSString *rootHideRoot = VZRootHideJailbreakRootPath();
+    if (rootHideRoot.length) {
+        [report appendFormat:@"RootHide jailbreak root=%@\n", rootHideRoot];
+        for (NSString *suffix in @[@"var/root/VirtualMac",
+                                    @"rootfs/var/root/VirtualMac",
+                                    @"usr/libexec/VirtualMac"])
+            VZAppendPathStatus(report,
+                [rootHideRoot stringByAppendingPathComponent:suffix]);
+    }
 
     struct statfs fileSystem = {0};
     if (statfs("/var/root", &fileSystem) == 0) {
@@ -247,10 +256,16 @@ static NSString *VZFirstExecutablePath(NSArray<NSString *> *paths)
 static NSData *VZBootstrapData(void)
 {
     NSFileManager *manager = NSFileManager.defaultManager;
-    BOOL rootless = [manager fileExistsAtPath:@"/var/jb"];
+    NSString *rootHideRoot = VZRootHideJailbreakRootPath();
+    BOOL rootless = [manager fileExistsAtPath:@"/var/jb"] ||
+        rootHideRoot.length;
     NSString *brand = @"Unknown";
     NSString *versionPath = nil;
-    if ([manager fileExistsAtPath:@"/var/jb/basebin/dopamine"]) {
+    if (rootHideRoot.length) {
+        brand = @"Dopamine RootHide";
+        versionPath = [rootHideRoot stringByAppendingPathComponent:
+            @"basebin/.version"];
+    } else if ([manager fileExistsAtPath:@"/var/jb/basebin/dopamine"]) {
         brand = @"Dopamine";
         versionPath = @"/var/jb/basebin/.version";
     } else if ([manager fileExistsAtPath:@"/taurine"]) {
@@ -270,6 +285,11 @@ static NSData *VZBootstrapData(void)
          "uid=%u euid=%u gid=%u egid=%u\n",
         brand, version, rootless ? @"rootless" : @"rootful",
         getuid(), geteuid(), getgid(), getegid()];
+    [report appendFormat:@"Bundle path=%@\nExecutable path=%@\n",
+        NSBundle.mainBundle.bundlePath,
+        NSBundle.mainBundle.executablePath ?: @"(unknown)"];
+    if (rootHideRoot.length)
+        [report appendFormat:@"RootHide jailbreak root=%@\n", rootHideRoot];
     for (NSString *name in @[@"JB_ROOT_PATH", @"PATH",
                               @"DYLD_INSERT_LIBRARIES"]) {
         const char *value = getenv(name.UTF8String);
@@ -285,6 +305,16 @@ static NSData *VZBootstrapData(void)
         char resolved[PATH_MAX] = {0};
         if (realpath(path.fileSystemRepresentation, resolved))
             [report appendFormat:@"  resolved=%s\n", resolved];
+    }
+    if (rootHideRoot.length) {
+        for (NSString *suffix in @[@"basebin", @"basebin/.version",
+                                    @"usr/bin/dpkg-query",
+                                    @"var/lib/dpkg/status",
+                                    @"Applications/VirtualMac.app",
+                                    @"var/root/VirtualMac",
+                                    @"rootfs/var/root/VirtualMac"])
+            VZAppendPathStatus(report,
+                [rootHideRoot stringByAppendingPathComponent:suffix]);
     }
     for (NSString *path in @[@"/var/jb/basebin/.version",
                               @"/var/jb/.procursus_strapped",
@@ -304,12 +334,19 @@ static NSData *VZBootstrapData(void)
 static NSData *VZTweakInventoryData(void)
 {
     NSMutableString *report = [NSMutableString string];
-    NSArray *directories = @[
+    NSMutableArray *directories = [NSMutableArray arrayWithArray:@[
         @"/var/jb/Library/MobileSubstrate/DynamicLibraries",
         @"/var/jb/usr/lib/TweakInject",
         @"/Library/MobileSubstrate/DynamicLibraries",
         @"/usr/lib/TweakInject",
-    ];
+    ]];
+    NSString *rootHideRoot = VZRootHideJailbreakRootPath();
+    if (rootHideRoot.length) {
+        [directories addObject:[rootHideRoot stringByAppendingPathComponent:
+            @"Library/MobileSubstrate/DynamicLibraries"]];
+        [directories addObject:[rootHideRoot stringByAppendingPathComponent:
+            @"usr/lib/TweakInject"]];
+    }
     for (NSString *directory in directories) {
         NSArray *entries = [[NSFileManager.defaultManager
             contentsOfDirectoryAtPath:directory error:nil]
@@ -434,6 +471,17 @@ static NSData *VZRuntimePathData(void)
         if (realpath(path.fileSystemRepresentation, resolved))
             [report appendFormat:@"  resolved=%s\n", resolved];
     }
+    NSString *rootHideRoot = VZRootHideJailbreakRootPath();
+    if (rootHideRoot.length) {
+        [report appendFormat:@"RootHide jailbreak root=%@\n", rootHideRoot];
+        for (NSString *suffix in @[@"Applications/VirtualMac.app",
+                                    @"var/root/VirtualMac",
+                                    @"rootfs/var/root/VirtualMac",
+                                    @"usr/libexec/VirtualMac",
+                                    @"usr/lib/TweakInject/VZKeyboardPassthrough.dylib"])
+            VZAppendPathStatus(report,
+                [rootHideRoot stringByAppendingPathComponent:suffix]);
+    }
     return [report dataUsingEncoding:NSUTF8StringEncoding];
 }
 
@@ -460,7 +508,8 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
          "Total storage: %@\nUptime: %.0f seconds\nThermal state: %ld\n"
          "Low Power Mode: %@\nProtected data available: %@\n"
          "Application state: %ld\nScreen bounds: %@\nNative bounds: %@\n"
-         "Screen scale: %.2f\nNative scale: %.2f\n",
+         "Screen scale: %.2f\nNative scale: %.2f\nBundle path: %@\n"
+         "Executable path: %@\nRootHide jailbreak root: %@\n",
         NSDate.date, bundleInfo[@"CFBundleShortVersionString"] ?: @"unknown",
         bundleInfo[@"CFBundleVersion"] ?: @"unknown", systemInfo.machine,
         NSProcessInfo.processInfo.operatingSystemVersionString, osBuild,
@@ -473,7 +522,9 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
         UIApplication.sharedApplication.protectedDataAvailable ? @"yes" : @"no",
         (long)UIApplication.sharedApplication.applicationState,
         NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
-        screen.scale, screen.nativeScale];
+        screen.scale, screen.nativeScale, NSBundle.mainBundle.bundlePath,
+        NSBundle.mainBundle.executablePath ?: @"(unknown)",
+        VZRootHideJailbreakRootPath() ?: @"(none)"];
     VZAddEntry(handler, @"manifest.txt",
         [manifest dataUsingEncoding:NSUTF8StringEncoding]);
     VZAddEntry(handler, @"installer/preflight.txt",
@@ -489,8 +540,13 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
     VZAddEntry(handler, @"jailbreak/environment.txt", VZBootstrapData());
     VZAddEntry(handler, @"jailbreak/tweak-injection-files.txt",
         VZTweakInventoryData());
-    NSString *dpkgQuery = VZFirstExecutablePath(
-        @[@"/var/jb/usr/bin/dpkg-query", @"/usr/bin/dpkg-query"]);
+    NSString *rootHideRoot = VZRootHideJailbreakRootPath();
+    NSMutableArray *dpkgQueryPaths = [NSMutableArray arrayWithArray:
+        @[@"/var/jb/usr/bin/dpkg-query", @"/usr/bin/dpkg-query"]];
+    if (rootHideRoot.length)
+        [dpkgQueryPaths insertObject:[rootHideRoot
+            stringByAppendingPathComponent:@"usr/bin/dpkg-query"] atIndex:0];
+    NSString *dpkgQuery = VZFirstExecutablePath(dpkgQueryPaths);
     if (dpkgQuery) {
         VZAddEntry(handler, @"jailbreak/packages.txt",
             VZCommandOutput(dpkgQuery, @[@"-W",
@@ -498,8 +554,12 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
         VZAddEntry(handler, @"package/metadata.txt",
             VZCommandOutput(dpkgQuery, @[@"-s", @"com.mac.virtual"]));
     }
-    NSString *dpkg = VZFirstExecutablePath(
-        @[@"/var/jb/usr/bin/dpkg", @"/usr/bin/dpkg"]);
+    NSMutableArray *dpkgPaths = [NSMutableArray arrayWithArray:
+        @[@"/var/jb/usr/bin/dpkg", @"/usr/bin/dpkg"]];
+    if (rootHideRoot.length)
+        [dpkgPaths insertObject:[rootHideRoot
+            stringByAppendingPathComponent:@"usr/bin/dpkg"] atIndex:0];
+    NSString *dpkg = VZFirstExecutablePath(dpkgPaths);
     if (dpkg)
         VZAddEntry(handler, @"package/verification.txt",
             VZCommandOutput(dpkg, @[@"--verify", @"com.mac.virtual"]));

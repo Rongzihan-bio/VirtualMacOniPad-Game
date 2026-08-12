@@ -20,10 +20,17 @@ FOUNDATION_EXPORT NSString * const VZTouchDoubleTapAccommodationKey;
 FOUNDATION_EXPORT NSString * const VZTouchTwoFingerScrollingKey;
 FOUNDATION_EXPORT NSString * const VZTouchTwoFingerRightClickKey;
 FOUNDATION_EXPORT NSString * const VZTouchLongPressRightClickKey;
-FOUNDATION_EXPORT NSString * const VZIPadOS162KeyboardWorkaroundKey;
-FOUNDATION_EXPORT NSString * const VZNetworkResumeRecoveryKey;
+FOUNDATION_EXPORT NSString * const VZKeyboardCrashWorkaroundKey;
+FOUNDATION_EXPORT NSString * const VZExternalDisplayScrollFixKey;
+FOUNDATION_EXPORT NSString * const VZScrollingSpeedKey;
 FOUNDATION_EXPORT NSString * const VZHUDOpacityKey;
 FOUNDATION_EXPORT NSString * const VZDebugLoggingKey;
+
+// RootHide relocates jailbreak applications below a randomized .jbroot
+// directory. Keep this probe independent of its SDK so the same executable
+// remains valid on Taurine and official Dopamine.
+FOUNDATION_EXPORT NSString * _Nullable VZRootHideJailbreakRootPath(void);
+FOUNDATION_EXPORT BOOL VZIsRootHideEnvironment(void);
 
 @interface VZAppSettings : NSObject
 + (instancetype)sharedSettings;
