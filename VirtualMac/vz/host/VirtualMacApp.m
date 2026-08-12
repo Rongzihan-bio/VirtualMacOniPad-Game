@@ -2001,8 +2001,13 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         // Use the screen from the notification directly — UIScreen.screens
         // may not be updated yet at the time this notification fires.
         UIScreen *screen = notification.object;
-        if (screen && screen != UIScreen.mainScreen && externalDisplayEnabled())
-            connectExternalDisplayWithScreen(screen);
+        if (screen && screen != UIScreen.mainScreen && externalDisplayEnabled()) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                         (int64_t)(0.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                 connectExternalDisplayWithScreen(screen);
+            });
+        }
     } else {
         disconnectExternalDisplay();
     }
@@ -4224,7 +4229,7 @@ static void connectExternalDisplayWithScreen(UIScreen *extScreen) {
     [gExternalWindow addSubview:gExternalCursorView];
     updateExternalCursorForNormalizedLocation(gLastPointerLocation);
 
-    gExternalWindow.hidden = NO;
+    [gExternalWindow makeKeyAndVisible];
     updateDisplayGeometry();
     updateExternalCursorForNormalizedLocation(gLastPointerLocation);
     printf("[VirtualMac] external window created frame=%s\n",
