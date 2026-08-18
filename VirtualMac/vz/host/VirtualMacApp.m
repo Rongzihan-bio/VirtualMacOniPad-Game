@@ -19,6 +19,10 @@
 #include <mach-o/loader.h>
 #include <errno.h>
 #include <pthread.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -1699,6 +1703,201 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     [self resetDeferredDirectTouch];
 }
 
+// --- Pencil vsock relay configuration ---
+//
+// The guest (macOS VM) runs pencil-probe, which listens on a vsock
+// port. The host (iPad) connects via VZVirtioSocketDevice. No IP
+// address or network configuration is needed — vsock is VM-internal.
+
+static const uint32_t kPencilVsockPort = 9949;
+static const int kPencilPacketSize = 21;
+
+// Wire protocol event types. Must match PencilEventType in pencil-probe.
+static const uint8_t kPencilEventPoint = 0;
+static const uint8_t kPencilEventProximityEnter = 1;
+static const uint8_t kPencilEventProximityLeave = 2;
+
+// Wire protocol byte offsets. Must match PencilPacket offsets in pencil-probe.
+static const int kPencilOffsetPressure = 1;
+static const int kPencilOffsetX = 5;
+static const int kPencilOffsetY = 9;
+static const int kPencilOffsetAltitude = 13;
+static const int kPencilOffsetAzimuth = 17;
+
+// VZVirtioSocketDevice from the running VM.
+// Set after VM start via pencilVsockSetup().
+static id gPencilVsockDevice = nil;
+
+// Retained VZVirtioSocketConnection. Must stay alive while we use
+// its file descriptor; releasing it invalidates the fd.
+static id gPencilVsockConnection = nil;
+
+// --- Pencil vsock relay logging ---
+//
+// Write timestamped log entries to a fixed path so behavior can be
+// reviewed after testing. GUI apps on iOS don't reliably send printf
+// output anywhere accessible, so we append to a file instead.
+
+#include <sys/time.h>
+#include <stdarg.h>
+
+static void pencilLog(const char *fmt, ...) {
+    static FILE *logFile = NULL;
+    if (!logFile) {
+        logFile = fopen("/var/mobile/Documents/pencil-vsock.log", "a");
+        if (!logFile) return;
+        setlinebuf(logFile);
+    }
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm *tm = localtime(&tv.tv_sec);
+    fprintf(logFile, "%02d:%02d:%02d.%03d ",
+            tm->tm_hour, tm->tm_min, tm->tm_sec,
+            (int)(tv.tv_usec / 1000));
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(logFile, fmt, ap);
+    va_end(ap);
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+}
+
+// --- Pencil vsock relay ---
+//
+// Virtualization.framework only exposes mouse events to the guest —
+// there is no API for tablet pressure or tilt. This relay works around
+// that limitation by sending Apple Pencil data over vsock to a small
+// receiver (pencil-probe) running inside the guest VM. The receiver
+// injects synthetic macOS tablet events via CGEventPost, which drawing
+// apps (e.g. Clip Studio Paint) recognize as pen pressure.
+//
+// Wire format (little-endian, 21 bytes per event):
+//   [0]      uint8   type (0=point, 1=proximity_enter, 2=proximity_leave)
+//   [1..4]   float32 pressure (0.0–1.0, normalized)
+//   [5..8]   float32 x (0.0–1.0, screen-relative)
+//   [9..12]  float32 y (0.0–1.0, screen-relative)
+//   [13..16] float32 altitude (0=parallel, π/2=perpendicular)
+//   [17..20] float32 azimuth  (0–2π, tilt direction)
+//
+// Coordinates are normalized so the protocol works regardless of
+// screen resolution differences between host and guest.
+// Altitude/azimuth are raw UITouch angles; the guest converts
+// them to CGEvent tiltX/tiltY.
+
+static int gPencilVsockFd = -1;
+
+// After a failed connect, suppress retries for this many seconds.
+// Without this, every Pencil touch would trigger an async connect
+// attempt.
+static CFAbsoluteTime gPencilRetryAfter = 0;
+static const CFTimeInterval kPencilRetryInterval = 5.0;
+
+// Prevent concurrent connection attempts. The connect is async
+// (VZVirtioSocketDevice.connectToPort:completionHandler:), so
+// multiple touch events could trigger concurrent calls.
+static volatile int gPencilVsockConnecting = 0;
+
+/// Grab the VZVirtioSocketDevice from the running VM.
+/// Call once after the VM starts successfully.
+static void pencilVsockSetup(void) {
+    NSArray *devices = m0(gVirtualMachine, "socketDevices");
+    if (devices.count > 0) {
+        gPencilVsockDevice = [devices[0] retain];
+        pencilLog("[Pencil] vsock device found, relay enabled\n");
+    } else {
+        pencilLog("[Pencil] no vsock device, relay disabled\n");
+    }
+}
+
+static void pencilVsockConnect(void) {
+    if (gPencilVsockFd >= 0) return;
+    if (gPencilVsockConnecting) return;
+    if (!gPencilVsockDevice) return;
+
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now < gPencilRetryAfter) return;
+
+    gPencilVsockConnecting = 1;
+
+    void (^handler)(id, NSError *) = ^(id connection, NSError *error) {
+        if (error || !connection) {
+            pencilLog("[Pencil] vsock connect port %u failed: %s\n",
+                     kPencilVsockPort,
+                     error ? error.localizedDescription.UTF8String
+                           : "nil connection");
+            gPencilRetryAfter = CFAbsoluteTimeGetCurrent()
+                              + kPencilRetryInterval;
+            gPencilVsockConnecting = 0;
+            return;
+        }
+        int fd = (int)((NSInteger(*)(id, SEL))objc_msgSend)(
+            connection, S("fileDescriptor"));
+
+        // SO_NOSIGPIPE: prevent SIGPIPE when the relay disconnects.
+        int nsp = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nsp, sizeof(nsp));
+
+        // Retain the connection object — releasing it invalidates
+        // the file descriptor.
+        if (gPencilVsockConnection) [gPencilVsockConnection release];
+        gPencilVsockConnection = [connection retain];
+        gPencilVsockFd = fd;
+        gPencilVsockConnecting = 0;
+        pencilLog("[Pencil] vsock connected port %u fd=%d\n",
+                 kPencilVsockPort, fd);
+    };
+
+    ((void(*)(id, SEL, uint32_t, id))objc_msgSend)(
+        gPencilVsockDevice,
+        S("connectToPort:completionHandler:"),
+        kPencilVsockPort, handler);
+}
+
+static void pencilWriteLE32(uint8_t *buf, float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    buf[0] = (uint8_t)(bits);
+    buf[1] = (uint8_t)(bits >> 8);
+    buf[2] = (uint8_t)(bits >> 16);
+    buf[3] = (uint8_t)(bits >> 24);
+}
+
+/// Send a single Pencil event to the guest relay.
+/// Returns true if the event was successfully sent, false if the relay
+/// is not connected. Callers use this to decide whether to fall through
+/// to normal mouse handling — when the relay is down, the Pencil should
+/// still work as a regular pointing device.
+static bool pencilVsockSend(uint8_t type, float pressure,
+                             float nx, float ny,
+                             float altitude, float azimuth) {
+    if (gPencilVsockFd < 0) pencilVsockConnect();
+    // Connect is async, so the fd may not be ready yet on the first
+    // touch. Fall through to mouse mode until the connection completes.
+    if (gPencilVsockFd < 0) return false;
+
+    uint8_t buf[kPencilPacketSize];
+    buf[0] = type;
+    pencilWriteLE32(buf + kPencilOffsetPressure, pressure);
+    pencilWriteLE32(buf + kPencilOffsetX, nx);
+    pencilWriteLE32(buf + kPencilOffsetY, ny);
+    pencilWriteLE32(buf + kPencilOffsetAltitude, altitude);
+    pencilWriteLE32(buf + kPencilOffsetAzimuth, azimuth);
+
+    ssize_t n = write(gPencilVsockFd, buf, kPencilPacketSize);
+    if (n <= 0) {
+        pencilLog("[Pencil] vsock write failed, disconnecting\n");
+        close(gPencilVsockFd);
+        gPencilVsockFd = -1;
+        if (gPencilVsockConnection) {
+            [gPencilVsockConnection release];
+            gPencilVsockConnection = nil;
+        }
+        return false;
+    }
+    return true;
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches
            withEvent:(UIEvent *)event
 {
@@ -1706,6 +1905,30 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
         [self beginDeferredDirectTouches:touches withEvent:event];
         return;
+    }
+    // Handle Apple Pencil separately from finger/trackpad input.
+    // Pencil pressure is not available through Virtualization.framework,
+    // so we send it over vsock to pencil-probe in the guest, which
+    // injects synthetic tablet events via CGEventPost.
+    // Early-return only if vsock send succeeds: if the Pencil event also
+    // fell through to the normal sendPointer() path, the guest would see
+    // both a tablet event (with pressure) and a plain mouse event
+    // (without), causing duplicate strokes or overriding the pressure.
+    // When the relay is not running, fall through so the Pencil still
+    // works as a regular pointing device (no pressure, but usable).
+    for (UITouch *t in touches) {
+        if (t.type == UITouchTypeStylus) {
+            CGPoint p = [t locationInView:self];
+            CGRect b = self.bounds;
+            float pressure = (t.maximumPossibleForce > 0)
+                ? (float)(t.force / t.maximumPossibleForce) : 0;
+            float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
+            float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
+            float altitude = (float)t.altitudeAngle;
+            float azimuth = (float)[t azimuthAngleInView:self];
+            if (pencilVsockSend(kPencilEventProximityEnter, pressure, nx, ny, altitude, azimuth)) return;
+            break;
+        }
     }
     if (touch) {
         // Hardware trackpad clicks reach a UIKit view as indirect-pointer
@@ -1756,6 +1979,22 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         [self moveDeferredDirectTouches:touches withEvent:event];
         return;
     }
+    // Same Pencil handling as touchesBegan — see comments there.
+    // type=0 (point) for continuous drag events.
+    for (UITouch *t in touches) {
+        if (t.type == UITouchTypeStylus) {
+            CGPoint p = [t locationInView:self];
+            CGRect b = self.bounds;
+            float pressure = (t.maximumPossibleForce > 0)
+                ? (float)(t.force / t.maximumPossibleForce) : 0;
+            float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
+            float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
+            float altitude = (float)t.altitudeAngle;
+            float azimuth = (float)[t azimuthAngleInView:self];
+            if (pencilVsockSend(kPencilEventPoint, pressure, nx, ny, altitude, azimuth)) return;
+            break;
+        }
+    }
     if (touch) {
         NSUInteger eventButtons = (NSUInteger)event.buttonMask & 0x7U;
         if (eventButtons)
@@ -1780,6 +2019,22 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 - (void)touchesEnded:(NSSet<UITouch *> *)touches
            withEvent:(UIEvent *)event
 {
+    // type=2 (proximity_leave): Pencil lifted off screen.
+    // Pressure is 0 because the pen is no longer touching.
+    // altitude=π/2 (perpendicular): the pen has no meaningful tilt
+    // at lift-off, and this gives tilt=(0,0) after conversion.
+    for (UITouch *t in touches) {
+        if (t.type == UITouchTypeStylus) {
+            CGPoint p = [t locationInView:self];
+            CGRect b = self.bounds;
+            float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
+            float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
+            float altitude = (float)t.altitudeAngle;
+            float azimuth = (float)[t azimuthAngleInView:self];
+            if (pencilVsockSend(kPencilEventProximityLeave, 0, nx, ny, altitude, azimuth)) return;
+            break;
+        }
+    }
     UITouch *touch = [touches anyObject];
     if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
         [self endDeferredDirectTouches:touches withEvent:event];
@@ -3723,6 +3978,16 @@ static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
     configureVideoToolbox(configuration, options);
     configureNetwork(configuration, options);
     configureDirectorySharing(configuration, options);
+
+    // Vsock: expose a VirtioSocket device so the guest can communicate
+    // with the host over AF_VSOCK without network configuration.
+    // Used by pencil-probe to relay Apple Pencil pressure data.
+    id socketDevice = NEW("VZVirtioSocketDeviceConfiguration");
+    if (socketDevice) {
+        setObj(configuration, "setSocketDevices:", @[socketDevice]);
+        printf("[VirtualMac] configured vsock device\n");
+    }
+
     return configuration;
 }
 
@@ -3977,6 +4242,7 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
                    gVirtualMachine, S("state")));
         dumpRPCHandlers(gVirtualMachine, "after-start");
         setStatus(VZL(@"Virtual Mac running — preparing native PVG display"));
+        pencilVsockSetup();
         gHostVMStarted();
         // Let the start reply return before exposing the registered display.
         dispatch_after(
