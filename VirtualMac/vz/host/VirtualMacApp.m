@@ -1710,6 +1710,17 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 // address or network configuration is needed — vsock is VM-internal.
 
 static const uint32_t kPencilVsockPort = 9949;
+static const int kPencilPacketSize = 13;
+
+// Wire protocol event types. Must match PencilEventType in pencil-probe.
+static const uint8_t kPencilEventPoint = 0;
+static const uint8_t kPencilEventProximityEnter = 1;
+static const uint8_t kPencilEventProximityLeave = 2;
+
+// Wire protocol byte offsets. Must match PencilPacket offsets in pencil-probe.
+static const int kPencilOffsetPressure = 1;
+static const int kPencilOffsetX = 5;
+static const int kPencilOffsetY = 9;
 
 // VZVirtioSocketDevice from the running VM.
 // Set after VM start via pencilVsockSetup().
@@ -1858,13 +1869,13 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     // touch. Fall through to mouse mode until the connection completes.
     if (gPencilVsockFd < 0) return false;
 
-    uint8_t buf[13];
+    uint8_t buf[kPencilPacketSize];
     buf[0] = type;
-    pencilWriteLE32(buf + 1, pressure);
-    pencilWriteLE32(buf + 5, nx);
-    pencilWriteLE32(buf + 9, ny);
+    pencilWriteLE32(buf + kPencilOffsetPressure, pressure);
+    pencilWriteLE32(buf + kPencilOffsetX, nx);
+    pencilWriteLE32(buf + kPencilOffsetY, ny);
 
-    ssize_t n = write(gPencilVsockFd, buf, 13);
+    ssize_t n = write(gPencilVsockFd, buf, kPencilPacketSize);
     if (n <= 0) {
         pencilLog("[Pencil] vsock write failed, disconnecting\n");
         close(gPencilVsockFd);
@@ -1904,7 +1915,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
                 ? (float)(t.force / t.maximumPossibleForce) : 0;
             float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            if (pencilVsockSend(1, pressure, nx, ny)) return;
+            if (pencilVsockSend(kPencilEventProximityEnter, pressure, nx, ny)) return;
             break;
         }
     }
@@ -1967,7 +1978,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
                 ? (float)(t.force / t.maximumPossibleForce) : 0;
             float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            if (pencilVsockSend(0, pressure, nx, ny)) return;
+            if (pencilVsockSend(kPencilEventPoint, pressure, nx, ny)) return;
             break;
         }
     }
@@ -2005,7 +2016,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
             CGRect b = self.bounds;
             float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            if (pencilVsockSend(2, 0, nx, ny)) return;
+            if (pencilVsockSend(kPencilEventProximityLeave, 0, nx, ny)) return;
             break;
         }
     }
