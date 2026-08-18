@@ -1710,7 +1710,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 // address or network configuration is needed — vsock is VM-internal.
 
 static const uint32_t kPencilVsockPort = 9949;
-static const int kPencilPacketSize = 13;
+static const int kPencilPacketSize = 21;
 
 // Wire protocol event types. Must match PencilEventType in pencil-probe.
 static const uint8_t kPencilEventPoint = 0;
@@ -1721,6 +1721,8 @@ static const uint8_t kPencilEventProximityLeave = 2;
 static const int kPencilOffsetPressure = 1;
 static const int kPencilOffsetX = 5;
 static const int kPencilOffsetY = 9;
+static const int kPencilOffsetAltitude = 13;
+static const int kPencilOffsetAzimuth = 17;
 
 // VZVirtioSocketDevice from the running VM.
 // Set after VM start via pencilVsockSetup().
@@ -1770,14 +1772,18 @@ static void pencilLog(const char *fmt, ...) {
 // injects synthetic macOS tablet events via CGEventPost, which drawing
 // apps (e.g. Clip Studio Paint) recognize as pen pressure.
 //
-// Wire format (little-endian, 13 bytes per event):
+// Wire format (little-endian, 21 bytes per event):
 //   [0]      uint8   type (0=point, 1=proximity_enter, 2=proximity_leave)
 //   [1..4]   float32 pressure (0.0–1.0, normalized)
 //   [5..8]   float32 x (0.0–1.0, screen-relative)
 //   [9..12]  float32 y (0.0–1.0, screen-relative)
+//   [13..16] float32 altitude (0=parallel, π/2=perpendicular)
+//   [17..20] float32 azimuth  (0–2π, tilt direction)
 //
 // Coordinates are normalized so the protocol works regardless of
 // screen resolution differences between host and guest.
+// Altitude/azimuth are raw UITouch angles; the guest converts
+// them to CGEvent tiltX/tiltY.
 
 static int gPencilVsockFd = -1;
 
@@ -1863,7 +1869,8 @@ static void pencilWriteLE32(uint8_t *buf, float value) {
 /// to normal mouse handling — when the relay is down, the Pencil should
 /// still work as a regular pointing device.
 static bool pencilVsockSend(uint8_t type, float pressure,
-                             float nx, float ny) {
+                             float nx, float ny,
+                             float altitude, float azimuth) {
     if (gPencilVsockFd < 0) pencilVsockConnect();
     // Connect is async, so the fd may not be ready yet on the first
     // touch. Fall through to mouse mode until the connection completes.
@@ -1874,6 +1881,8 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     pencilWriteLE32(buf + kPencilOffsetPressure, pressure);
     pencilWriteLE32(buf + kPencilOffsetX, nx);
     pencilWriteLE32(buf + kPencilOffsetY, ny);
+    pencilWriteLE32(buf + kPencilOffsetAltitude, altitude);
+    pencilWriteLE32(buf + kPencilOffsetAzimuth, azimuth);
 
     ssize_t n = write(gPencilVsockFd, buf, kPencilPacketSize);
     if (n <= 0) {
@@ -1915,7 +1924,9 @@ static bool pencilVsockSend(uint8_t type, float pressure,
                 ? (float)(t.force / t.maximumPossibleForce) : 0;
             float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            if (pencilVsockSend(kPencilEventProximityEnter, pressure, nx, ny)) return;
+            float altitude = (float)t.altitudeAngle;
+            float azimuth = (float)[t azimuthAngleInView:self];
+            if (pencilVsockSend(kPencilEventProximityEnter, pressure, nx, ny, altitude, azimuth)) return;
             break;
         }
     }
@@ -1978,7 +1989,9 @@ static bool pencilVsockSend(uint8_t type, float pressure,
                 ? (float)(t.force / t.maximumPossibleForce) : 0;
             float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            if (pencilVsockSend(kPencilEventPoint, pressure, nx, ny)) return;
+            float altitude = (float)t.altitudeAngle;
+            float azimuth = (float)[t azimuthAngleInView:self];
+            if (pencilVsockSend(kPencilEventPoint, pressure, nx, ny, altitude, azimuth)) return;
             break;
         }
     }
@@ -2008,15 +2021,17 @@ static bool pencilVsockSend(uint8_t type, float pressure,
 {
     // type=2 (proximity_leave): Pencil lifted off screen.
     // Pressure is 0 because the pen is no longer touching.
-    // The guest relay translates this into a mouse-up + tablet
-    // proximity-leave sequence.
+    // altitude=π/2 (perpendicular): the pen has no meaningful tilt
+    // at lift-off, and this gives tilt=(0,0) after conversion.
     for (UITouch *t in touches) {
         if (t.type == UITouchTypeStylus) {
             CGPoint p = [t locationInView:self];
             CGRect b = self.bounds;
             float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            if (pencilVsockSend(kPencilEventProximityLeave, 0, nx, ny)) return;
+            float altitude = (float)t.altitudeAngle;
+            float azimuth = (float)[t azimuthAngleInView:self];
+            if (pencilVsockSend(kPencilEventProximityLeave, 0, nx, ny, altitude, azimuth)) return;
             break;
         }
     }
