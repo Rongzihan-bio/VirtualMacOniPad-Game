@@ -2,9 +2,9 @@
 #import "VZFailureDetailsViewController.h"
 
 NSString * const VZGetHelpURLString =
-    @"https://github.com/nfzerox/VirtualMacOniPad#what-if-i-encounter-crashes-bugs-or-other-issues";
+    @"https://nfzerox.github.io/virtual-mac/help/";
 NSString * const VZReportIssueURLString =
-    @"https://github.com/nfzerox/VirtualMacOniPad/issues?q=is%3Aissue";
+    @"https://nfzerox.github.io/virtual-mac/issues/";
 
 void VZOpenSupportURL(NSString *urlString)
 {

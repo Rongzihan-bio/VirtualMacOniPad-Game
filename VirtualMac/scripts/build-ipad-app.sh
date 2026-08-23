@@ -35,19 +35,30 @@ need_file "$VZ_REPO_ROOT/scripts/validate-localizations.py"
 need_file "$VZ_REPO_ROOT/vz/host/VZNewVMViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZProgressViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZSettingsViewController.m"
+need_file "$VZ_REPO_ROOT/vz/host/VZGuestTools.m"
+need_file "$VZ_REPO_ROOT/vz/host/VZGuestRuntimePolicy.m"
 need_file "$VZ_REPO_ROOT/vz/host/VZVMLibraryViewController.m"
 need_file "$VZ_REPO_ROOT/vz/host/VirtualMacApp.m"
 need_file "$VZ_REPO_ROOT/vz/host/virtualmac_diagnostics_main.m"
 need_file "$VZ_REPO_ROOT/vz/host/vzxpchook.m"
 need_file "$ENTS"
 
+# Guest payloads are built from source and bundled with the host app. macOS's
+# built-in AppleQEMUGuestAgent installs them without network access or guest
+# credentials on first boot.
+"$VZ_REPO_ROOT/scripts/build-guest-tools.sh"
+need_file "$VZ_BUILD_ROOT/guest-tools/VirtualMacGuestTools.tar.gz"
+
 rm -rf "$APP"
 python3 "$VZ_REPO_ROOT/scripts/validate-localizations.py"
 mkdir -p "$APP"
 cp "$VZ_REPO_ROOT/vz/host/VirtualMac-Info.plist" "$APP/Info.plist"
+mkdir -p "$APP/GuestTools"
+cp "$VZ_BUILD_ROOT/guest-tools/VirtualMacGuestTools.tar.gz" \
+    "$APP/GuestTools/VirtualMacGuestTools.tar.gz"
 sips -Z 320 "$VZ_REPO_ROOT/assets/VirtualMacTemplate.png" \
     --out "$APP/VirtualMacTemplate.png" >/dev/null
-APP_VERSION="${VZ_RELEASE_VERSION:-1.1.2}"
+APP_VERSION="${VZ_RELEASE_VERSION:-1.2}"
 APP_BUILD="$(git -C "$VZ_REPO_ROOT" rev-list --count HEAD)"
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" \
     "$APP/Info.plist"
@@ -94,7 +105,7 @@ done
 xcrun --sdk iphoneos clang \
     -arch arm64 -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" -fblocks \
     -framework AVFAudio -framework CoreImage -framework Foundation \
-    -framework GameController -framework Metal -framework UIKit \
+    -framework GameController -framework Metal -framework Security -framework UIKit \
     -framework UniformTypeIdentifiers \
     -Wl,-export_dynamic -Wl,-undefined,dynamic_lookup \
     "$VZ_REPO_ROOT/vz/host/NSViewShim.m" \
@@ -103,6 +114,8 @@ xcrun --sdk iphoneos clang \
     "$VZ_REPO_ROOT/vz/host/VZFailureDetailsViewController.m" \
     "$VZ_REPO_ROOT/vz/host/VZRestoreCatalog.m" \
     "$VZ_REPO_ROOT/vz/host/VZSupport.m" \
+    "$VZ_REPO_ROOT/vz/host/VZGuestTools.m" \
+    "$VZ_REPO_ROOT/vz/host/VZGuestRuntimePolicy.m" \
     "$VZ_REPO_ROOT/vz/host/VZNewVMViewController.m" \
     "$VZ_REPO_ROOT/vz/host/VZProgressViewController.m" \
     "$VZ_REPO_ROOT/vz/host/VZSettingsViewController.m" \

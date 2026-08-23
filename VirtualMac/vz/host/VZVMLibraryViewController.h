@@ -3,6 +3,11 @@
 NS_ASSUME_NONNULL_BEGIN
 
 FOUNDATION_EXPORT NSString * const VZVMConfigurationFileName;
+FOUNDATION_EXPORT NSString * const VZApplePencilPressureTiltEnabledKey;
+FOUNDATION_EXPORT NSString * const VZVirtualMacGuestToolsEnabledKey;
+FOUNDATION_EXPORT NSString * const VZMetalBCSupportEnabledKey;
+FOUNDATION_EXPORT NSString * const VZOpenGLAccelerationEnabledKey;
+FOUNDATION_EXPORT NSString * const VZGuestToolsRemovalPendingKey;
 
 NSDictionary *VZVMDefaultOptions(void);
 NSDictionary *VZVMOptionsForBundle(NSString *bundlePath);

@@ -218,6 +218,12 @@ export VZ_INSTALL_CPU_COUNT="$cpu"
 export VZ_INSTALL_MEMORY_SIZE="$memory"
 export VZ_INSTALL_STORAGE_SIZE="$disk"
 export VZ_VMM_STDERR_LOG=/tmp/restore-vmm.stderr.log
+# RestoreOS must never inherit the normal-boot guest kernel policy from the
+# UIKit process. The app deliberately keeps that setting in its environment
+# for a running OpenGL-enabled VM, and install-launcher inherits the app's
+# environment. Without clearing it here, a later restore in the same app
+# process can run the SIP/CSR worker against the temporary RestoreOS kernel.
+unset VZ_GUEST_RUNTIME_POLICY
 # The setuid restore host must create its own rendezvous names. Inheriting the
 # UIKit app's mobile-owned names lets the root VMM replace them and can prevent
 # every later VM from starting. The host hook generates root-scoped paths.

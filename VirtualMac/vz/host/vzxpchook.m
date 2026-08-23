@@ -81,6 +81,7 @@ static dispatch_queue_t gVZConnectionQueue;
 static uint64_t gHostEventCount;
 static uint64_t gInputSendCount;
 static uint64_t gFrameAckCount;
+static uint64_t gSurfaceLookupCount;
 static bool gDebugLogging;
 
 static uint64_t diagnostic_sequence(uint64_t *counter, uint64_t limit) {
@@ -784,8 +785,10 @@ static void vz_xpc_connection_set_event_handler(
 
 // The frame RPC decoder returns false when IOSurfaceLookupFromXPCObject
 // rejects the cross-process object. Rebind this one import while porting so
-// every device run records the exact object and whether the native iOS
-// IOSurface implementation accepted it.
+// the first few lookups record the exact object and whether the native iOS
+// IOSurface implementation accepted it. This is a framebuffer hot path: a
+// file open, XPC description allocation, and write for every frame can build
+// an old-frame backlog under memory and storage pressure.
 static void *vz_IOSurfaceLookupFromXPCObject(xo_t object) {
     static void *(*realLookup)(xo_t);
     static void *(*lookupFromMachPort)(mach_port_t);
@@ -805,7 +808,6 @@ static void *vz_IOSurfaceLookupFromXPCObject(xo_t object) {
             ? (void *(*)(uint32_t))dlsym(image, "IOSurfaceLookup")
             : NULL;
     }
-    char *description = xpc_copy_description(object);
     void *type = xpc_get_type(object);
     void *surface = realLookup ? realLookup(object) : NULL;
     mach_port_t port = MACH_PORT_NULL;
@@ -821,12 +823,17 @@ static void *vz_IOSurfaceLookupFromXPCObject(xo_t object) {
         : 0;
     if (!surface && identifier && identifier <= UINT32_MAX && lookupFromID)
         surface = lookupFromID((uint32_t)identifier);
-    L("[vzxpchook] IOSurfaceLookupFromXPCObject(%s) -> %p "
-      "real=%p port=0x%x fallback=%p global-id=%llu lookup-id=%p",
-      description ?: "(no description)", surface, realLookup,
-      port, lookupFromMachPort, (unsigned long long)identifier,
-      lookupFromID);
-    free(description);
+    uint64_t count = diagnostic_sequence(&gSurfaceLookupCount, 8);
+    if (count && (count <= 8 || (gDebugLogging && count % 300 == 0))) {
+        char *description = xpc_copy_description(object);
+        L("[vzxpchook] IOSurfaceLookupFromXPCObject #%llu (%s) -> %p "
+          "real=%p port=0x%x fallback=%p global-id=%llu lookup-id=%p",
+          (unsigned long long)count,
+          description ?: "(no description)", surface, realLookup,
+          port, lookupFromMachPort, (unsigned long long)identifier,
+          lookupFromID);
+        free(description);
+    }
     return surface;
 }
 

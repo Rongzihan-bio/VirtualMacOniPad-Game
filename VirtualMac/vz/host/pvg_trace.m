@@ -7,6 +7,7 @@
 #import <fcntl.h>
 #import <ptrauth.h>
 #import <pthread.h>
+#import <notify.h>
 #import <stdint.h>
 #import <stdlib.h>
 #import <string.h>
@@ -40,15 +41,20 @@ static uint64_t gTaskLookupCount;
 static uint64_t gTaskLookupMissCount;
 static uint64_t gTaskMapCount;
 static uint64_t gTaskMapHighWater;
+static uint64_t gTaskMapFailures;
 static uint64_t gManagedTextureTranslations;
 static BOOL gDebugLogging;
 static pthread_mutex_t gLargeTaskLock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t gTaskCreateLock = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t gLargeTaskIDs[8];
+static void *gLargeTaskPointers[8];
+static bool gLargeTaskSlotUsed[8];
 static uint32_t gLargeTaskLimit;
-static uint64_t gLargeTaskReservationGB;
-static uint64_t gCreatingTaskReservationGB;
+static uint64_t gLargeTaskReservationMB;
+static uint64_t gMinimumTaskReservationMB;
+static uint64_t gTaskReservationFallbacks;
+static uint64_t gTaskReservationFailures;
 static id (*gOriginalGetBufferForReferenceNonNull)(id, SEL, uint32_t);
+static const char * const VZVideoMemoryExhaustedNotification =
+    "com.mac.virtual.video-memory-exhausted";
 
 extern id PGNewDeviceWithDescriptor(id descriptor);
 static void InstallMetalLibraryFallback(id<MTLDevice> device);
@@ -78,10 +84,366 @@ static NSString *HostMetalLibraryResourceName(void) {
     return @"default";
 }
 
+static void Trace(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+
 typedef void *(^PVGCreateTaskBlock)(uint64_t length, void **baseAddress);
+typedef void (^PVGDestroyTaskBlock)(void *task);
 typedef BOOL (^PVGMapMemoryBlock)(void *task, uint32_t segmentCount,
                                   uint64_t offset, BOOL readonly,
                                   const uint64_t *ranges);
+typedef BOOL (^PVGUnmapMemoryBlock)(void *task, uint64_t offset,
+                                    uint64_t length);
+
+// A macOS host can leave the complete 16 GiB guest GPU address space sparsely
+// reserved for every PGTask. iPadOS has only about 63 GiB of process VA, so
+// doing that for tens of guest clients is impossible. Keep the inexpensive
+// primary reservation and add large, discontiguous host reservations only for
+// tasks that actually cross it. PGTask's address helpers are translated to the
+// reservation containing the requested guest range; Metal resources therefore
+// retain stable host pointers for their full lifetime.
+#define PVG_SEGMENT_BUCKET_COUNT 64
+#define PVG_MAX_TASK_SEGMENTS 16
+
+typedef struct {
+    void *task;
+    void *base;
+    uint64_t logicalStart;
+    uint64_t length;
+} PVGTaskSegment;
+
+typedef struct PVGSegmentedTask {
+    void *primaryTask;
+    uint64_t logicalLength;
+    uint32_t segmentCount;
+    PVGCreateTaskBlock createTask;
+    pthread_mutex_t mutex;
+    PVGTaskSegment segments[PVG_MAX_TASK_SEGMENTS];
+    struct PVGSegmentedTask *next;
+} PVGSegmentedTask;
+
+static pthread_rwlock_t gSegmentedTaskLock = PTHREAD_RWLOCK_INITIALIZER;
+static PVGSegmentedTask *gSegmentedTaskBuckets[PVG_SEGMENT_BUCKET_COUNT];
+static uint64_t gTaskOverflowReservationMB;
+static Ivar gPGTaskHandleIvar;
+static SEL gOriginalAddressForOffsetSelector;
+static SEL gOriginalMappedAddressForOffsetSelector;
+static BOOL gSegmentedAddressHooksInstalled;
+
+static size_t SegmentedTaskBucket(void *task) {
+    return (((uintptr_t)task) >> 4) % PVG_SEGMENT_BUCKET_COUNT;
+}
+
+// The caller must hold gSegmentedTaskLock for reading or writing.
+static PVGSegmentedTask *FindSegmentedTaskLocked(void *task) {
+    if (task == NULL)
+        return NULL;
+    PVGSegmentedTask *entry =
+        gSegmentedTaskBuckets[SegmentedTaskBucket(task)];
+    while (entry != NULL && entry->primaryTask != task)
+        entry = entry->next;
+    return entry;
+}
+
+static BOOL RegisterSegmentedTask(void *task, void *base,
+                                  uint64_t reservedLength,
+                                  uint64_t logicalLength,
+                                  PVGCreateTaskBlock createTask) {
+    if (task == NULL || base == NULL || reservedLength == 0 ||
+        reservedLength >= logicalLength || gTaskOverflowReservationMB == 0 ||
+        createTask == nil)
+        return NO;
+    PVGSegmentedTask *entry = calloc(1, sizeof(*entry));
+    if (entry == NULL)
+        return NO;
+    entry->primaryTask = task;
+    entry->logicalLength = logicalLength;
+    entry->segmentCount = 1;
+    entry->createTask = [createTask copy];
+    if (entry->createTask == nil) {
+        free(entry);
+        return NO;
+    }
+    entry->segments[0] = (PVGTaskSegment){
+        .task = task,
+        .base = base,
+        .logicalStart = 0,
+        .length = reservedLength,
+    };
+    pthread_mutex_init(&entry->mutex, NULL);
+
+    size_t bucket = SegmentedTaskBucket(task);
+    pthread_rwlock_wrlock(&gSegmentedTaskLock);
+    entry->next = gSegmentedTaskBuckets[bucket];
+    gSegmentedTaskBuckets[bucket] = entry;
+    pthread_rwlock_unlock(&gSegmentedTaskLock);
+    return YES;
+}
+
+static PVGSegmentedTask *RemoveSegmentedTask(void *task) {
+    size_t bucket = SegmentedTaskBucket(task);
+    pthread_rwlock_wrlock(&gSegmentedTaskLock);
+    PVGSegmentedTask **cursor = &gSegmentedTaskBuckets[bucket];
+    while (*cursor != NULL && (*cursor)->primaryTask != task)
+        cursor = &(*cursor)->next;
+    PVGSegmentedTask *entry = *cursor;
+    if (entry != NULL)
+        *cursor = entry->next;
+    pthread_rwlock_unlock(&gSegmentedTaskLock);
+    return entry;
+}
+
+// The task mutex must be held. A returned segment always contains the entire
+// range; a single Metal allocation is never allowed to straddle unrelated host
+// reservations because Metal retains the resulting CPU pointer.
+static PVGTaskSegment *SegmentForRangeLocked(PVGSegmentedTask *entry,
+                                             uint64_t offset,
+                                             uint64_t length,
+                                             BOOL create) {
+    if (entry == NULL || length == 0 || UINT64_MAX - offset < length ||
+        offset + length > entry->logicalLength)
+        return NULL;
+    uint64_t end = offset + length;
+    for (uint32_t index = 0; index < entry->segmentCount; index++) {
+        PVGTaskSegment *segment = &entry->segments[index];
+        if (offset >= segment->logicalStart &&
+            end <= segment->logicalStart + segment->length)
+            return segment;
+    }
+    if (!create || entry->createTask == nil ||
+        entry->segmentCount >= PVG_MAX_TASK_SEGMENTS)
+        return NULL;
+
+    uint64_t primaryLength = entry->segments[0].length;
+    uint64_t overflowLength = gTaskOverflowReservationMB << 20;
+    if (offset < primaryLength || overflowLength == 0)
+        return NULL;
+    uint64_t logicalStart = primaryLength +
+        ((offset - primaryLength) / overflowLength) * overflowLength;
+    uint64_t reservationLength = MIN(
+        overflowLength, entry->logicalLength - logicalStart);
+    if (end > logicalStart + reservationLength)
+        return NULL;
+
+    void *base = NULL;
+    void *task = entry->createTask(reservationLength, &base);
+    if (task == NULL || base == NULL) {
+        dprintf(STDERR_FILENO,
+                "VirtualMac PVG: overflow reservation failed primary=%p "
+                "start=%llu length=%llu\n",
+                entry->primaryTask,
+                (unsigned long long)logicalStart,
+                (unsigned long long)reservationLength);
+        return NULL;
+    }
+    PVGTaskSegment *segment = &entry->segments[entry->segmentCount++];
+    *segment = (PVGTaskSegment){
+        .task = task,
+        .base = base,
+        .logicalStart = logicalStart,
+        .length = reservationLength,
+    };
+    Trace(@"TASK_OVERFLOW_RESERVE\tprimary=%p\tsegment=%p"
+          "\tbase=%p\tstart=%llu\tlength=%llu",
+          entry->primaryTask, task, base,
+          (unsigned long long)logicalStart,
+          (unsigned long long)reservationLength);
+    return segment;
+}
+
+static void *PGTaskHandle(id taskObject) {
+    if (taskObject == nil || gPGTaskHandleIvar == NULL)
+        return NULL;
+    void *task = NULL;
+    ptrdiff_t offset = ivar_getOffset(gPGTaskHandleIvar);
+    memcpy(&task, (const uint8_t *)(__bridge const void *)taskObject + offset,
+           sizeof(task));
+    return task;
+}
+
+static void *TranslatedTaskAddress(void *task, uint64_t offset,
+                                   uint64_t length, BOOL create) {
+    void *address = NULL;
+    pthread_rwlock_rdlock(&gSegmentedTaskLock);
+    PVGSegmentedTask *entry = FindSegmentedTaskLocked(task);
+    if (entry != NULL) {
+        pthread_mutex_lock(&entry->mutex);
+        PVGTaskSegment *segment = SegmentForRangeLocked(
+            entry, offset, length, create);
+        if (segment != NULL)
+            address = (uint8_t *)segment->base +
+                (offset - segment->logicalStart);
+        pthread_mutex_unlock(&entry->mutex);
+    }
+    pthread_rwlock_unlock(&gSegmentedTaskLock);
+    return address;
+}
+
+static void *SegmentedAddressForOffset(id self, SEL selector,
+                                       uint64_t offset, uint64_t length) {
+    // Preserve PGTask's native range validation and exception behavior.
+    void *nativeAddress = ((void *(*)(id, SEL, uint64_t, uint64_t))
+        objc_msgSend)(self, gOriginalAddressForOffsetSelector, offset, length);
+    void *translated = TranslatedTaskAddress(
+        PGTaskHandle(self), offset, length, YES);
+    return translated ?: nativeAddress;
+}
+
+static void *SegmentedMappedAddressForOffset(id self, SEL selector,
+                                             uint64_t offset,
+                                             uint64_t length) {
+    // The original method maintains PGTask's mapped-range tracker and invokes
+    // the descriptor callback. Discard only its base+offset result.
+    void *nativeAddress = ((void *(*)(id, SEL, uint64_t, uint64_t))
+        objc_msgSend)(self, gOriginalMappedAddressForOffsetSelector,
+                      offset, length);
+    void *translated = TranslatedTaskAddress(
+        PGTaskHandle(self), offset, length, NO);
+    return translated ?: nativeAddress;
+}
+
+static BOOL InstallSegmentedPGTaskAddressHooks(void) {
+    if (gSegmentedAddressHooksInstalled)
+        return YES;
+    Class taskClass = NSClassFromString(@"PGTask");
+    if (taskClass == Nil)
+        return NO;
+    gPGTaskHandleIvar = class_getInstanceVariable(taskClass, "_task");
+    Method addressMethod = class_getInstanceMethod(
+        taskClass, NSSelectorFromString(@"addressForOffset:length:"));
+    Method mappedMethod = class_getInstanceMethod(
+        taskClass, NSSelectorFromString(@"mappedAddressForOffset:length:"));
+    if (gPGTaskHandleIvar == NULL || addressMethod == NULL ||
+        mappedMethod == NULL)
+        return NO;
+    // iPadOS 14/15 cannot safely call a Ventura arm64e IMP returned by
+    // method_setImplementation through a plain C function pointer. Preserve
+    // each implementation as a private Objective-C method instead. Dispatch
+    // through objc_msgSend then uses the current runtime's own pointer-
+    // authentication convention on every supported host release.
+    gOriginalAddressForOffsetSelector = sel_registerName(
+        "_virtualMac_originalAddressForOffset:length:");
+    gOriginalMappedAddressForOffsetSelector = sel_registerName(
+        "_virtualMac_originalMappedAddressForOffset:length:");
+    if (!class_addMethod(taskClass, gOriginalAddressForOffsetSelector,
+                         method_getImplementation(addressMethod),
+                         method_getTypeEncoding(addressMethod)) ||
+        !class_addMethod(taskClass, gOriginalMappedAddressForOffsetSelector,
+                         method_getImplementation(mappedMethod),
+                         method_getTypeEncoding(mappedMethod))) {
+        return NO;
+    }
+    method_setImplementation(addressMethod, (IMP)SegmentedAddressForOffset);
+    method_setImplementation(mappedMethod,
+                             (IMP)SegmentedMappedAddressForOffset);
+    Trace(@"TASK_OVERFLOW_HOOKS\tinstalled=1");
+    gSegmentedAddressHooksInstalled = YES;
+    return YES;
+}
+
+static BOOL MapSegmentedTaskRange(PVGMapMemoryBlock originalMap,
+                                  void *task, uint32_t segmentCount,
+                                  uint64_t offset, uint64_t mappedLength,
+                                  BOOL readonly, const uint64_t *ranges) {
+    BOOL result = NO;
+    pthread_rwlock_rdlock(&gSegmentedTaskLock);
+    PVGSegmentedTask *entry = FindSegmentedTaskLocked(task);
+    if (entry != NULL) {
+        pthread_mutex_lock(&entry->mutex);
+        PVGTaskSegment *segment = SegmentForRangeLocked(
+            entry, offset, mappedLength, YES);
+        if (segment != NULL) {
+            result = originalMap(
+                segment->task, segmentCount,
+                offset - segment->logicalStart, readonly, ranges);
+        } else {
+            dprintf(STDERR_FILENO,
+                    "VirtualMac PVG: mapping cannot fit one reservation "
+                    "task=%p offset=%llu length=%llu\n",
+                    task, (unsigned long long)offset,
+                    (unsigned long long)mappedLength);
+        }
+        pthread_mutex_unlock(&entry->mutex);
+    }
+    pthread_rwlock_unlock(&gSegmentedTaskLock);
+    return result;
+}
+
+static BOOL UnmapSegmentedTaskRange(PVGUnmapMemoryBlock originalUnmap,
+                                    void *task, uint64_t offset,
+                                    uint64_t length) {
+    BOOL result = NO;
+    pthread_rwlock_rdlock(&gSegmentedTaskLock);
+    PVGSegmentedTask *entry = FindSegmentedTaskLocked(task);
+    if (entry != NULL) {
+        pthread_mutex_lock(&entry->mutex);
+        PVGTaskSegment *segment = SegmentForRangeLocked(
+            entry, offset, length, NO);
+        if (segment != NULL) {
+            result = originalUnmap(
+                segment->task, offset - segment->logicalStart, length);
+        }
+        pthread_mutex_unlock(&entry->mutex);
+    }
+    pthread_rwlock_unlock(&gSegmentedTaskLock);
+    return result;
+}
+
+static void *CreateTaskWithAdaptiveReservation(
+    PVGCreateTaskBlock createTask, uint64_t requestedLength,
+    uint64_t preferredLength, void **baseAddress) {
+    if (requestedLength != (16ULL << 30) || preferredLength == 0)
+        return createTask(requestedLength, baseAddress);
+
+    uint64_t minimumLength = MAX(gMinimumTaskReservationMB, 1) << 20;
+    minimumLength = MIN(minimumLength, preferredLength);
+    uint64_t candidate = preferredLength;
+    while (true) {
+        if (baseAddress != NULL)
+            *baseAddress = NULL;
+        void *task = createTask(candidate, baseAddress);
+        if (task != NULL) {
+            if (candidate != preferredLength) {
+                uint64_t fallback = __atomic_add_fetch(
+                    &gTaskReservationFallbacks, 1, __ATOMIC_RELAXED);
+                dprintf(STDERR_FILENO,
+                        "VirtualMac PVG: task reservation fell back from "
+                        "%llu to %llu bytes (fallback %llu)\n",
+                        (unsigned long long)preferredLength,
+                        (unsigned long long)candidate,
+                        (unsigned long long)fallback);
+            }
+            return task;
+        }
+        if (candidate == minimumLength)
+            break;
+        candidate = MAX(candidate / 2, minimumLength);
+    }
+
+    // Keep the VMM and guest alive long enough for the user to decide whether
+    // to save non-graphical work or force shutdown. A real 1 MiB task is safer
+    // than returning nil (which makes _PGDevice enter an unbounded Invalid
+    // task loop), while the host warning makes the degraded state explicit.
+    uint64_t failure = __atomic_add_fetch(
+        &gTaskReservationFailures, 1, __ATOMIC_RELAXED);
+    if (baseAddress != NULL)
+        *baseAddress = NULL;
+    void *emergencyTask = createTask(1ULL << 20, baseAddress);
+    notify_post(VZVideoMemoryExhaustedNotification);
+    if (emergencyTask != NULL) {
+        dprintf(STDERR_FILENO,
+                "VirtualMac PVG: graphics address space exhausted; using "
+                "1 MiB emergency task so the guest can remain alive "
+                "(failure %llu)\n",
+                (unsigned long long)failure);
+        return emergencyTask;
+    }
+    dprintf(STDERR_FILENO,
+            "VirtualMac PVG: graphics address space exhausted after "
+            "reservation retries, including the emergency task; stopping "
+            "VMM (failure %llu)\n",
+            (unsigned long long)failure);
+    abort();
+}
 
 static const char *TracePath(void) {
     const char *configured = getenv("PVG_TRACE_PATH");
@@ -188,32 +550,48 @@ static id TaskDictionary(id device) {
     return tasksIvar != NULL ? object_getIvar(device, tasksIvar) : nil;
 }
 
-static BOOL ReserveLargeTaskSlot(uint32_t taskID, uint64_t length) {
-    if (length != (16ULL << 30) || gLargeTaskReservationGB == 0 ||
+static int32_t ClaimLargeTaskSlot(uint64_t length) {
+    if (length != (16ULL << 30) || gLargeTaskReservationMB == 0 ||
         gLargeTaskLimit == 0)
-        return NO;
-    BOOL reserved = NO;
+        return -1;
+    int32_t claimedSlot = -1;
     pthread_mutex_lock(&gLargeTaskLock);
     for (uint32_t index = 0; index < gLargeTaskLimit; index++) {
-        if (gLargeTaskIDs[index] == taskID) {
-            reserved = YES;
-            break;
-        }
-        if (gLargeTaskIDs[index] == 0) {
-            gLargeTaskIDs[index] = taskID;
-            reserved = YES;
+        if (!gLargeTaskSlotUsed[index]) {
+            gLargeTaskSlotUsed[index] = true;
+            gLargeTaskPointers[index] = NULL;
+            claimedSlot = (int32_t)index;
             break;
         }
     }
     pthread_mutex_unlock(&gLargeTaskLock);
-    return reserved;
+    return claimedSlot;
 }
 
-static void ReleaseLargeTaskSlot(uint32_t taskID) {
+static void FinishLargeTaskSlot(int32_t slot, void *task) {
+    if (slot < 0)
+        return;
+    pthread_mutex_lock(&gLargeTaskLock);
+    if ((uint32_t)slot < gLargeTaskLimit) {
+        if (task != NULL) {
+            gLargeTaskPointers[slot] = task;
+        } else {
+            gLargeTaskSlotUsed[slot] = false;
+            gLargeTaskPointers[slot] = NULL;
+        }
+    }
+    pthread_mutex_unlock(&gLargeTaskLock);
+}
+
+static void ReleaseLargeTaskSlotForPointer(void *task) {
+    if (task == NULL)
+        return;
     pthread_mutex_lock(&gLargeTaskLock);
     for (uint32_t index = 0; index < gLargeTaskLimit; index++) {
-        if (gLargeTaskIDs[index] == taskID) {
-            gLargeTaskIDs[index] = 0;
+        if (gLargeTaskSlotUsed[index] &&
+            gLargeTaskPointers[index] == task) {
+            gLargeTaskSlotUsed[index] = false;
+            gLargeTaskPointers[index] = NULL;
             break;
         }
     }
@@ -223,30 +601,14 @@ static void ReleaseLargeTaskSlot(uint32_t taskID) {
 static void TraceCreateTaskID(id self, SEL selector, uint32_t taskID,
                               uint32_t taskRoot, uint64_t length,
                               BOOL restoring) {
-    BOOL largeTask = ReserveLargeTaskSlot(taskID, length);
     if (gDebugLogging) {
         Trace(@"TASK_CREATE\tbegin\tid=%u\troot=%u\tlength=%llu"
-              "\trestoring=%d\tlarge=%d\ttasks=%@",
+              "\trestoring=%d\ttasks=%@",
               taskID, taskRoot, (unsigned long long)length, restoring,
-              largeTask, TaskDictionary(self));
+              TaskDictionary(self));
     }
-    // The extracted framework invokes createTask on another thread while the
-    // createTaskWithID: call is in flight. Serialize creations and publish the
-    // selected tier process-wide so that callback sees it.
-    pthread_mutex_lock(&gTaskCreateLock);
-    __atomic_store_n(&gCreatingTaskReservationGB,
-                     largeTask ? gLargeTaskReservationGB : 0,
-                     __ATOMIC_RELEASE);
-    @try {
-        gOriginalCreateTaskID(
-            self, selector, taskID, taskRoot, length, restoring);
-    } @finally {
-        __atomic_store_n(&gCreatingTaskReservationGB, 0, __ATOMIC_RELEASE);
-        pthread_mutex_unlock(&gTaskCreateLock);
-    }
-    id createdTask = [TaskDictionary(self) objectForKey:@(taskID)];
-    if (largeTask && createdTask == nil)
-        ReleaseLargeTaskSlot(taskID);
+    gOriginalCreateTaskID(
+        self, selector, taskID, taskRoot, length, restoring);
     if (gDebugLogging)
         Trace(@"TASK_CREATE\tend\tid=%u\ttasks=%@",
               taskID, TaskDictionary(self));
@@ -257,8 +619,6 @@ static BOOL TraceDeleteTaskID(id self, SEL selector, uint32_t taskID) {
         Trace(@"TASK_DELETE\tbegin\tid=%u\ttasks=%@",
               taskID, TaskDictionary(self));
     BOOL result = gOriginalDeleteTaskID(self, selector, taskID);
-    if (result || [TaskDictionary(self) objectForKey:@(taskID)] == nil)
-        ReleaseLargeTaskSlot(taskID);
     if (gDebugLogging) {
         Trace(@"TASK_DELETE\tend\tid=%u\tresult=%d\ttasks=%@",
               taskID, result, TaskDictionary(self));
@@ -520,40 +880,95 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
     // Keep PVG's logical 16 GiB task size but reduce the VMM's sparse host
     // reservation. The map wrapper verifies whether the guest ever crosses
     // the physical reservation before forwarding each fixed remap.
-    const char *reservationText = getenv("PVG_TASK_RESERVATION_GB");
-    uint64_t reservationGB = reservationText && reservationText[0]
+    const char *reservationText = getenv("PVG_TASK_RESERVATION_MB");
+    uint64_t reservationMB = reservationText && reservationText[0]
         ? strtoull(reservationText, NULL, 10) : 0;
     const char *largeReservationText = getenv(
-        "PVG_LARGE_TASK_RESERVATION_GB");
-    gLargeTaskReservationGB = largeReservationText &&
+        "PVG_LARGE_TASK_RESERVATION_MB");
+    gLargeTaskReservationMB = largeReservationText &&
         largeReservationText[0]
         ? strtoull(largeReservationText, NULL, 10) : 0;
     const char *largeTaskCountText = getenv("PVG_LARGE_TASK_COUNT");
     uint64_t largeTaskCount = largeTaskCountText && largeTaskCountText[0]
         ? strtoull(largeTaskCountText, NULL, 10) : 0;
     gLargeTaskLimit = (uint32_t)MIN(
-        largeTaskCount, sizeof(gLargeTaskIDs) / sizeof(gLargeTaskIDs[0]));
+        largeTaskCount,
+        sizeof(gLargeTaskPointers) / sizeof(gLargeTaskPointers[0]));
+    const char *minimumReservationText = getenv(
+        "PVG_MIN_TASK_RESERVATION_MB");
+    gMinimumTaskReservationMB = minimumReservationText &&
+        minimumReservationText[0]
+        ? strtoull(minimumReservationText, NULL, 10) : 64;
+    const char *overflowReservationText = getenv(
+        "PVG_TASK_OVERFLOW_MB");
+    gTaskOverflowReservationMB = overflowReservationText &&
+        overflowReservationText[0]
+        ? strtoull(overflowReservationText, NULL, 10) : 0;
+    if (gTaskOverflowReservationMB != 0 &&
+        !InstallSegmentedPGTaskAddressHooks()) {
+        dprintf(STDERR_FILENO,
+                "VirtualMac PVG: segmented address hooks unavailable; "
+                "using the established 512 MiB fixed reservation\n");
+        gTaskOverflowReservationMB = 0;
+        reservationMB = MAX(reservationMB, 512);
+    }
     if (createTask != nil) {
         PVGCreateTaskBlock originalCreate = (PVGCreateTaskBlock)createTask;
         PVGCreateTaskBlock wrappedCreate = ^void *(uint64_t length,
                                                     void **baseAddress) {
             uint64_t effectiveLength = length;
-            uint64_t creatingReservationGB = __atomic_load_n(
-                &gCreatingTaskReservationGB, __ATOMIC_ACQUIRE);
-            uint64_t selectedReservationGB = creatingReservationGB
-                ? creatingReservationGB : reservationGB;
-            if (selectedReservationGB != 0 && length == (16ULL << 30))
-                effectiveLength = selectedReservationGB << 30;
-            void *task = originalCreate(effectiveLength, baseAddress);
+            int32_t largeSlot = ClaimLargeTaskSlot(length);
+            uint64_t selectedReservationMB = largeSlot >= 0
+                ? gLargeTaskReservationMB : reservationMB;
+            if (selectedReservationMB != 0 && length == (16ULL << 30))
+                effectiveLength = selectedReservationMB << 20;
+            void *task = CreateTaskWithAdaptiveReservation(
+                originalCreate, length, effectiveLength, baseAddress);
+            FinishLargeTaskSlot(largeSlot, task);
+            uint64_t actualLength = task != NULL
+                ? ((const uint64_t *)task)[1] : 0;
+            if (task != NULL && baseAddress != NULL &&
+                gTaskOverflowReservationMB != 0) {
+                RegisterSegmentedTask(
+                    task, *baseAddress, actualLength, length,
+                    originalCreate);
+            }
             Trace(@"TASK_RESERVE\trequested=%llu\teffective=%llu"
-                  "\tresult=%p\tbase=%p",
+                  "\tactual=%llu\tresult=%p\tbase=%p",
                   (unsigned long long)length,
                   (unsigned long long)effectiveLength,
+                  (unsigned long long)actualLength,
                   task,
                   baseAddress ? *baseAddress : NULL);
             return task;
         };
         [descriptor setValue:wrappedCreate forKey:@"createTask"];
+    }
+    if (destroyTask != nil) {
+        PVGDestroyTaskBlock originalDestroy =
+            (PVGDestroyTaskBlock)destroyTask;
+        PVGDestroyTaskBlock wrappedDestroy = ^(void *task) {
+            PVGSegmentedTask *segmented = RemoveSegmentedTask(task);
+            @try {
+                if (segmented != NULL) {
+                    pthread_mutex_lock(&segmented->mutex);
+                    for (uint32_t index = 1;
+                         index < segmented->segmentCount; index++) {
+                        originalDestroy(segmented->segments[index].task);
+                    }
+                    pthread_mutex_unlock(&segmented->mutex);
+                }
+                originalDestroy(task);
+            } @finally {
+                ReleaseLargeTaskSlotForPointer(task);
+                if (segmented != NULL) {
+                    [segmented->createTask release];
+                    pthread_mutex_destroy(&segmented->mutex);
+                    free(segmented);
+                }
+            }
+        };
+        [descriptor setValue:wrappedDestroy forKey:@"destroyTask"];
     }
     if (mapMemory != nil) {
         PVGMapMemoryBlock originalMap = (PVGMapMemoryBlock)mapMemory;
@@ -580,8 +995,30 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
             // VMM. Report a clean map failure instead of corrupting adjacent
             // virtual allocations.
             BOOL withinReservation = task && end <= reserved;
-            BOOL result = withinReservation && originalMap(
-                task, segmentCount, offset, readonly, ranges);
+            BOOL result = withinReservation
+                ? originalMap(task, segmentCount, offset, readonly, ranges)
+                : MapSegmentedTaskRange(
+                    originalMap, task, segmentCount, offset, mappedLength,
+                    readonly, ranges);
+            if (!result) {
+                uint64_t failure = __atomic_add_fetch(
+                    &gTaskMapFailures, 1, __ATOMIC_RELAXED);
+                dprintf(STDERR_FILENO,
+                        "VirtualMac PVG: task map failed task=%p "
+                        "base=0x%llx reserved=%llu offset=%llu length=%llu "
+                        "end=%llu within=%d segments=%u readonly=%d "
+                        "failure=%llu\n",
+                        task,
+                        (unsigned long long)base,
+                        (unsigned long long)reserved,
+                        (unsigned long long)offset,
+                        (unsigned long long)mappedLength,
+                        (unsigned long long)end,
+                        withinReservation,
+                        segmentCount,
+                        readonly,
+                        (unsigned long long)failure);
+            }
             if (gDebugLogging) {
                 uint64_t count = __atomic_add_fetch(
                     &gTaskMapCount, 1, __ATOMIC_RELAXED);
@@ -598,8 +1035,13 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
                 }
                 BOOL crossedHighWaterBucket = raisedHighWater &&
                     ((end >> 24) != (previousHighWater >> 24));
-                if (count <= 16 || !result || !withinReservation ||
-                    crossedHighWaterBucket) {
+                // Crossing the primary reservation is normal when segmented
+                // tasks are active. Logging every overflow page made debug
+                // mode open and append this file hundreds of thousands of
+                // times during boot, materially changing graphics timing.
+                // Segment creation plus high-water buckets retain enough
+                // evidence without putting I/O in the mapping hot path.
+                if (count <= 16 || !result || crossedHighWaterBucket) {
                     Trace(@"TASK_MAP\tcount=%llu\ttask=%p\tbase=0x%llx"
                           "\treserved=%llu\toffset=%llu\tlength=%llu"
                           "\tend=%llu\twithin=%d\thighwater=%d\tsegments=%u"
@@ -618,6 +1060,21 @@ static id TracePGNewDeviceWithDescriptor(id descriptor) {
             return result;
         };
         [descriptor setValue:wrappedMap forKey:@"mapMemory"];
+    }
+    if (unmapMemory != nil) {
+        PVGUnmapMemoryBlock originalUnmap =
+            (PVGUnmapMemoryBlock)unmapMemory;
+        PVGUnmapMemoryBlock wrappedUnmap = ^BOOL(
+            void *task, uint64_t offset, uint64_t length) {
+            uint64_t reserved = task ? ((const uint64_t *)task)[1] : 0;
+            if (task != NULL && UINT64_MAX - offset >= length &&
+                offset + length <= reserved) {
+                return originalUnmap(task, offset, length);
+            }
+            return UnmapSegmentedTaskRange(
+                originalUnmap, task, offset, length);
+        };
+        [descriptor setValue:wrappedUnmap forKey:@"unmapMemory"];
     }
     id result = PGNewDeviceWithDescriptor(descriptor);
     Trace(@"CALL\tPGNewDeviceWithDescriptor\tresult=%@", result);
@@ -938,14 +1395,12 @@ static void InstallPVGTrace(void) {
         if (gDebugLogging)
             InstallMetalSerializerReferenceTrace();
 
-        // The create/delete wrappers select and recycle the larger sparse
-        // reservations required by WindowServer. They are compatibility,
-        // not tracing, and must remain active when Debug Logging is off.
-        // Saved Ventura arm64e IMPs cannot safely round-trip through the
-        // older Objective-C runtimes, so iPadOS 14/15 retain their established
-        // factory-only compatibility path.
+        // Functional reservation selection and recycling use only the stable
+        // descriptor block ABI on every supported iPadOS release. These
+        // authenticated Objective-C method hooks are diagnostics only; saved
+        // Ventura arm64e IMPs cannot safely round-trip through older runtimes.
         BOOL canInstallAuthenticatedMethods = !HostPredatesIPadOS16();
-        if (canInstallAuthenticatedMethods) {
+        if (gDebugLogging && canInstallAuthenticatedMethods) {
             Method createTaskMethod = class_getInstanceMethod(
                 cls, createTaskSelector);
             if (createTaskMethod != NULL) {

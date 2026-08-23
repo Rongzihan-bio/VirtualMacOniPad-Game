@@ -21,6 +21,13 @@
 extern char **environ;
 
 NSString * const VZVMConfigurationFileName = @"VirtualMac.plist";
+NSString * const VZApplePencilPressureTiltEnabledKey =
+    @"ApplePencilPressureTiltEnabled";
+NSString * const VZVirtualMacGuestToolsEnabledKey =
+    @"VirtualMacGuestToolsEnabled";
+NSString * const VZMetalBCSupportEnabledKey = @"MetalBCSupportEnabled";
+NSString * const VZOpenGLAccelerationEnabledKey = @"OpenGLAccelerationEnabled";
+NSString * const VZGuestToolsRemovalPendingKey = @"GuestToolsRemovalPending";
 
 static NSString * const VZCPUCountKey = @"CPUCount";
 static NSString * const VZMemorySizeKey = @"MemorySize";
@@ -302,33 +309,14 @@ static NSString *VZActiveInternetDisplayName(void)
 
 BOOL VZRestoreImageUsesMontereyProfile(NSString *path)
 {
-    // Match both friendly bundle names and Apple's restore-image convention,
-    // for example UniversalMac_12.6_21G115_Restore.ipsw. Requiring a
-    // non-digit boundary avoids treating 112.x as Monterey.
-    NSString *name = path.lastPathComponent.lowercaseString ?: @"";
-    if ([name containsString:@"monterey"] ||
-        [name containsString:@"macos 12"] ||
-        [name containsString:@"macos_12"] ||
-        [name containsString:@"macos-12"])
-        return YES;
-    NSRange search = NSMakeRange(0, name.length);
-    while (search.length) {
-        NSRange version = [name rangeOfString:@"12." options:0 range:search];
-        if (version.location == NSNotFound)
-            break;
-        BOOL leftBoundary = version.location == 0 ||
-            ![NSCharacterSet.decimalDigitCharacterSet
-                characterIsMember:[name characterAtIndex:version.location - 1]];
-        NSUInteger digitIndex = NSMaxRange(version);
-        BOOL hasMinor = digitIndex < name.length &&
-            [NSCharacterSet.decimalDigitCharacterSet
-                characterIsMember:[name characterAtIndex:digitIndex]];
-        if (leftBoundary && hasMinor)
-            return YES;
-        NSUInteger next = NSMaxRange(version);
-        search = NSMakeRange(next, name.length - next);
-    }
-    return NO;
+    NSDictionary *image = @{ @"name": path.lastPathComponent ?: @"" };
+    return [VZRestoreCatalog majorVersionForImage:image] == 12;
+}
+
+static BOOL VZDefaultOpenGLAccelerationForRestoreImage(NSString *path)
+{
+    return [VZRestoreCatalog enablesOpenGLByDefaultForImage:
+        @{ @"name": path.lastPathComponent ?: @"" }];
 }
 
 static NSString *VZDefaultPointingDeviceForPath(NSString *path)
@@ -355,6 +343,11 @@ NSDictionary *VZVMDefaultOptions(void)
         VZSharedDirectoriesKey: @[],
         VZPointingDeviceKey: @"MacTrackpad",
         VZKeyboardDeviceKey: @"MacKeyboard",
+        VZApplePencilPressureTiltEnabledKey: @NO,
+        VZVirtualMacGuestToolsEnabledKey: @YES,
+        VZMetalBCSupportEnabledKey: @YES,
+        VZOpenGLAccelerationEnabledKey: @YES,
+        VZGuestToolsRemovalPendingKey: @NO,
         VZAudioOutputEnabledKey: @YES,
         VZAudioInputEnabledKey: @YES,
         VZVideoToolboxEnabledKey: @YES,
@@ -374,12 +367,17 @@ NSDictionary *VZVMOptionsForBundle(NSString *bundlePath)
         [bundlePath stringByAppendingPathComponent:VZVMConfigurationFileName]];
     if ([saved isKindOfClass:NSDictionary.class])
         [options addEntriesFromDictionary:saved];
+    [options removeObjectForKey:@"EnhancedMetalOpenGLEnabled"];
     if (![saved[VZPointingDeviceKey] isKindOfClass:NSString.class])
         options[VZPointingDeviceKey] =
             VZDefaultPointingDeviceForPath(bundlePath);
     if (![saved[VZKeyboardDeviceKey] isKindOfClass:NSString.class])
         options[VZKeyboardDeviceKey] =
             VZDefaultKeyboardDeviceForPath(bundlePath);
+    if (![saved[VZOpenGLAccelerationEnabledKey]
+            isKindOfClass:NSNumber.class])
+        options[VZOpenGLAccelerationEnabledKey] =
+            @(VZDefaultOpenGLAccelerationForRestoreImage(bundlePath));
     NSString *savedMAC = saved[VZMACAddressKey];
     if (![savedMAC isKindOfClass:NSString.class] ||
         [savedMAC isEqualToString:@"d6:a7:58:8e:78:d5"])
@@ -477,37 +475,6 @@ NSArray<NSDictionary *> *VZDiscoverVirtualMachines(void)
         return [left[@"name"] localizedStandardCompare:right[@"name"]];
     }];
     return machines;
-}
-
-static NSString *VZMarketingNameForRestoreImage(NSURL *url)
-{
-    NSString *base = url.lastPathComponent.stringByDeletingPathExtension;
-    NSString *lower = base.lowercaseString;
-    NSDictionary *named = @{
-        @"monterey": @"Monterey", @"ventura": @"Ventura",
-        @"sonoma": @"Sonoma", @"sequoia": @"Sequoia",
-        @"tahoe": @"Tahoe", @"golden gate": @"Golden Gate",
-        @"goldengate": @"Golden Gate",
-    };
-    for (NSString *token in named)
-        if ([lower containsString:token])
-            return named[token];
-
-    NSRegularExpression *version = [NSRegularExpression
-        regularExpressionWithPattern:@"(?:^|[^0-9])([0-9]{2})(?:\\.[0-9]+)(?:[^0-9]|$)"
-                              options:0 error:nil];
-    NSTextCheckingResult *match = [version firstMatchInString:base options:0
-        range:NSMakeRange(0, base.length)];
-    if (match.numberOfRanges > 1) {
-        NSString *major = [base substringWithRange:[match rangeAtIndex:1]];
-        NSDictionary *marketing = @{
-            @"12": @"Monterey", @"13": @"Ventura",
-            @"14": @"Sonoma", @"15": @"Sequoia",
-            @"26": @"Tahoe", @"27": @"Golden Gate",
-        };
-        return marketing[major] ?: [@"macOS " stringByAppendingString:major];
-    }
-    return base.length ? base : @"macOS";
 }
 
 static UIImage *VZInstallerArtworkForImage(NSDictionary *image)
@@ -852,15 +819,15 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     if (section == 1)
         return 1 + [self.options[VZSharedDirectoriesKey] count];
     if (section == 2)
-        return self.bundlePath ? 3 : 2;
+        return self.bundlePath ? 4 : 3;
     if (section == 3)
-        return 2;
+        return 3;
     if (section == 4)
         return [VZDisplaySelectionForOptions(self.options)
                    isEqualToString:@"Custom"]
             ? 4 : 1;
     if (section == 5)
-        return 3;
+        return 5;
     return self.bundlePath && self.running ? 0 : 1;
 }
 
@@ -873,15 +840,6 @@ void VZRemovePaths(NSArray<NSString *> *paths)
              self.bundlePath ? VZL(@"Boot and Network") : VZL(@"Network"),
              VZL(@"Input"), VZL(@"Display"),
              VZL(@"Audio and Acceleration")][section];
-}
-
-- (NSString *)tableView:(UITableView *)tableView
- titleForFooterInSection:(NSInteger)section
-{
-    (void)tableView;
-    if (self.running && section == 0)
-        return VZL(@"Configuration changes take effect after the Virtual Mac is shut down and started again.");
-    return nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -947,6 +905,16 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         cell.detailTextLabel.text = nil;
     } else if (indexPath.section == 2 &&
                indexPath.row == (self.bundlePath ? 1 : 0)) {
+        cell.textLabel.text = VZL(@"Virtual Mac Guest Tools");
+        UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
+        toggle.on = [self.options[VZVirtualMacGuestToolsEnabledKey] boolValue];
+        [toggle addTarget:self action:@selector(guestToolsChanged:)
+           forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.detailTextLabel.text = nil;
+    } else if (indexPath.section == 2 &&
+               indexPath.row == (self.bundlePath ? 2 : 1)) {
         cell.textLabel.text = VZL(@"Network");
         NSString *mode = VZEffectiveNetworkMode(self.options);
         NSString *interface = self.options[VZBridgeInterfaceKey];
@@ -966,11 +934,21 @@ void VZRemovePaths(NSArray<NSString *> *paths)
         cell.detailTextLabel.text =
             [self.options[VZKeyboardDeviceKey] isEqualToString:@"USBKeyboard"]
             ? VZL(@"USB Keyboard") : VZL(@"Mac Keyboard");
-    } else if (indexPath.section == 3) {
+    } else if (indexPath.section == 3 && indexPath.row == 1) {
         cell.textLabel.text = VZL(@"Pointing Device");
         cell.detailTextLabel.text =
             [self.options[VZPointingDeviceKey] isEqualToString:@"USBMouse"]
             ? VZL(@"USB Mouse") : VZL(@"Mac Trackpad");
+    } else if (indexPath.section == 3) {
+        cell.textLabel.text = VZL(@"Apple Pencil Pressure and Tilt");
+        UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
+        toggle.on = [self.options[VZApplePencilPressureTiltEnabledKey]
+            boolValue];
+        [toggle addTarget:self action:@selector(pencilRelayChanged:)
+           forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.detailTextLabel.text = nil;
     } else if (indexPath.section == 4 && indexPath.row == 0) {
         cell.textLabel.text = VZL(@"Resolution");
         cell.detailTextLabel.text = VZDisplaySelectionTitle(self.options);
@@ -983,12 +961,21 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             stringValue];
     } else if (indexPath.section == 5) {
         NSArray *names = @[VZL(@"Audio Output"), VZL(@"Microphone Input"),
+                           VZL(@"Metal BC Support"),
+                           VZL(@"OpenGL Acceleration"),
                            VZL(@"Video Encoding and Decoding Acceleration")];
         NSArray *keys = @[VZAudioOutputEnabledKey, VZAudioInputEnabledKey,
+                          VZMetalBCSupportEnabledKey,
+                          VZOpenGLAccelerationEnabledKey,
                           VZVideoToolboxEnabledKey];
         cell.textLabel.text = names[indexPath.row];
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
-        toggle.on = [self.options[keys[indexPath.row]] boolValue];
+        BOOL guestTools = [self.options[VZVirtualMacGuestToolsEnabledKey]
+            boolValue];
+        BOOL isOpenGL = indexPath.row == 3;
+        toggle.on = [self.options[keys[indexPath.row]] boolValue] &&
+            (!isOpenGL || guestTools);
+        toggle.enabled = YES;
         toggle.tag = indexPath.row;
         [toggle addTarget:self action:@selector(deviceToggleChanged:)
            forControlEvents:UIControlEventValueChanged];
@@ -1303,7 +1290,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             [self presentViewController:sheet animated:YES completion:nil];
         }
     } else if (indexPath.section == 2 &&
-               indexPath.row == (self.bundlePath ? 1 : 0)) {
+               indexPath.row == (self.bundlePath ? 2 : 1)) {
         UIAlertController *sheet = [UIAlertController
             alertControllerWithTitle:VZL(@"Network Attachment") message:nil
                       preferredStyle:UIAlertControllerStyleActionSheet];
@@ -1335,7 +1322,7 @@ void VZRemovePaths(NSArray<NSString *> *paths)
             [tableView cellForRowAtIndexPath:indexPath];
         [self presentViewController:sheet animated:YES completion:nil];
     } else if (indexPath.section == 2 &&
-               indexPath.row == (self.bundlePath ? 2 : 1)) {
+               indexPath.row == (self.bundlePath ? 3 : 2)) {
         [self editMACAddress];
     } else if (indexPath.section == 3 && indexPath.row == 0) {
         [self chooseTitle:VZL(@"Keyboard") message:
@@ -1393,12 +1380,114 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     self.options[VZBootRecoveryKey] = @(sender.on);
 }
 
+- (UISwitch *)switchForSection:(NSInteger)section row:(NSInteger)row
+{
+    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:row
+                                                inSection:section];
+    UIView *accessory = [self.tableView cellForRowAtIndexPath:indexPath]
+        .accessoryView;
+    return [accessory isKindOfClass:UISwitch.class]
+        ? (UISwitch *)accessory : nil;
+}
+
+- (void)setGuestToolsSwitchOn:(BOOL)guestToolsOn
+                    openGLOn:(BOOL)openGLOn
+                     animated:(BOOL)animated
+{
+    NSInteger guestToolsRow = self.bundlePath ? 1 : 0;
+    [[self switchForSection:2 row:guestToolsRow]
+        setOn:guestToolsOn animated:animated];
+    [[self switchForSection:5 row:3]
+        setOn:openGLOn animated:animated];
+}
+
+- (void)guestToolsChanged:(UISwitch *)sender
+{
+    if (sender.on || ![self.options[VZOpenGLAccelerationEnabledKey] boolValue]) {
+        self.options[VZVirtualMacGuestToolsEnabledKey] = @(sender.on);
+        self.options[VZGuestToolsRemovalPendingKey] = @(!sender.on);
+        [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+                      withRowAnimation:UITableViewRowAnimationNone];
+        return;
+    }
+    // Keep the model unchanged until the dependency change is confirmed, but
+    // leave both controls in the state the user requested while the alert is
+    // visible. Cancel animates the pair back together.
+    [self setGuestToolsSwitchOn:NO openGLOn:NO animated:YES];
+    NSString *dependencyMessage = VZL(@"Because OpenGL acceleration requires Virtual Mac guest tools, turning off Virtual Mac guest tools will also turn off OpenGL acceleration. Apps such as Final Cut Pro mostly use Metal, but they check for OpenGL capabilities in order to launch.");
+    for (NSString *boundary in @[@". ", @"。", @"।"]) {
+        NSRange range = [dependencyMessage rangeOfString:boundary];
+        if (range.location == NSNotFound)
+            continue;
+        NSString *prefix = [dependencyMessage substringToIndex:
+            NSMaxRange(range) - ([boundary hasSuffix:@" "] ? 1 : 0)];
+        NSString *suffix = [dependencyMessage substringFromIndex:
+            NSMaxRange(range)];
+        dependencyMessage = [NSString stringWithFormat:@"%@\n\n%@",
+            prefix, suffix];
+        break;
+    }
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:VZL(@"Turn Off Virtual Mac Guest Tools?")
+        message:dependencyMessage
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
+        style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        (void)action;
+        [self setGuestToolsSwitchOn:YES openGLOn:YES animated:YES];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        (void)action;
+        self.options[VZVirtualMacGuestToolsEnabledKey] = @NO;
+        self.options[VZGuestToolsRemovalPendingKey] = @YES;
+        [self setGuestToolsSwitchOn:NO openGLOn:NO animated:YES];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)deviceToggleChanged:(UISwitch *)sender
 {
     NSArray *keys = @[VZAudioOutputEnabledKey, VZAudioInputEnabledKey,
+                      VZMetalBCSupportEnabledKey,
+                      VZOpenGLAccelerationEnabledKey,
                       VZVideoToolboxEnabledKey];
-    if (sender.tag < (NSInteger)keys.count)
-        self.options[keys[sender.tag]] = @(sender.on);
+    if (sender.tag >= (NSInteger)keys.count)
+        return;
+    if (sender.tag == 3 && sender.on &&
+        ![self.options[VZVirtualMacGuestToolsEnabledKey] boolValue]) {
+        self.options[VZVirtualMacGuestToolsEnabledKey] = @YES;
+        self.options[VZGuestToolsRemovalPendingKey] = @NO;
+        [self setGuestToolsSwitchOn:YES openGLOn:YES animated:YES];
+    }
+    self.options[keys[sender.tag]] = @(sender.on);
+}
+
+- (void)pencilRelayChanged:(UISwitch *)sender
+{
+    self.options[VZApplePencilPressureTiltEnabledKey] = @(sender.on);
+    if (!sender.on)
+        return;
+
+    NSString *name = VZSanitizedVMName(self.vmName);
+    NSString *message = [NSString stringWithFormat:
+        VZL(@"To use Apple Pencil pressure and tilt, download pencil-probe in %@ Virtual Mac."),
+        name];
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:VZL(@"Apple Pencil Pressure and Tilt")
+                         message:message
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"Learn More")
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        (void)action;
+        NSURL *url = [NSURL URLWithString:
+            @"https://github.com/ma-syu/pencil-probe"];
+        [UIApplication.sharedApplication openURL:url options:@{}
+            completionHandler:nil];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+        style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)done:(id)sender
@@ -2279,7 +2368,8 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
             options[VZCPUCountKey], @([options[VZMemorySizeKey] unsignedLongLongValue] >> 30),
             (unsigned long long)(storage >> 30), VZNetworkModeDisplayName(options),
             [machine[@"legacy"] boolValue] ? VZL(@" · Legacy") : @""];
-        NSString *wallpaperName = [self wallpaperNameForMachineName:machine[@"name"]];
+        NSString *wallpaperName = [VZRestoreCatalog
+            artworkNameForMachineName:machine[@"name"]];
         NSString *art = [[NSBundle mainBundle] pathForResource:wallpaperName
             ofType:@"jpg" inDirectory:@"Wallpapers"];
         image.image = [UIImage imageWithContentsOfFile:art];
@@ -2370,19 +2460,6 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
     }
     cell.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", title.text, detail.text];
     return cell;
-}
-
-- (NSString *)wallpaperNameForMachineName:(NSString *)name
-{
-    NSString *lower = name.lowercaseString;
-    for (NSString *candidate in @[@"monterey", @"ventura", @"sonoma", @"sequoia", @"tahoe", @"golden-gate"])
-        if ([lower containsString:[candidate stringByReplacingOccurrencesOfString:@"-" withString:@" "]] ||
-            [lower containsString:[candidate stringByReplacingOccurrencesOfString:@"-" withString:@""]]) return candidate;
-    NSDictionary *versions = @{@"macos 12":@"monterey", @"macos 13":@"ventura",
-        @"macos 14":@"sonoma", @"macos 15":@"sequoia", @"macos 26":@"tahoe",
-        @"macos 27":@"golden-gate"};
-    for (NSString *token in versions) if ([lower containsString:token]) return versions[token];
-    return @"tiger";
 }
 
 - (CGSize)collectionView:(UICollectionView *)collectionView layout:(UICollectionViewLayout *)layout
@@ -2521,9 +2598,11 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
 {
     self.pendingIPSWURL = url;
     NSString *suggested = VZUniqueVMName(
-        VZMarketingNameForRestoreImage(url));
+        [VZRestoreCatalog defaultVirtualMachineNameForRestoreImagePath:url.path]);
     NSMutableDictionary *defaults = [NSMutableDictionary
         dictionaryWithDictionary:VZVMDefaultOptions()];
+    defaults[VZOpenGLAccelerationEnabledKey] =
+        @(VZDefaultOpenGLAccelerationForRestoreImage(url.path));
     defaults[VZPointingDeviceKey] = VZDefaultPointingDeviceForPath(url.path);
     defaults[VZKeyboardDeviceKey] = VZDefaultKeyboardDeviceForPath(url.path);
     VZVMConfigurationViewController *configuration =
@@ -2682,6 +2761,8 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
         VZDefaultPointingDeviceForPath(remoteURL.path);
     defaults[VZKeyboardDeviceKey] =
         VZDefaultKeyboardDeviceForPath(remoteURL.path);
+    defaults[VZOpenGLAccelerationEnabledKey] =
+        @([VZRestoreCatalog enablesOpenGLByDefaultForImage:image]);
     VZVMConfigurationViewController *configuration =
         [[[VZVMConfigurationViewController alloc]
           initWithBundlePath:nil options:defaults
@@ -2699,7 +2780,8 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
     // Show both the marketing name and any uniqueness suffix while the user
     // configures the Virtual Mac, before its bundle is created.
     configuration.vmName = VZUniqueVMName(
-        VZMarketingNameForRestoreImage(remoteURL) ?: image[@"name"]);
+        [VZRestoreCatalog defaultVirtualMachineNameForRestoreImagePath:
+            remoteURL.path] ?: image[@"name"]);
     configuration.showsExperimentalInstallWarning =
         [VZRestoreCatalog isExperimentalImage:image];
     configuration.showsUnsupportedInstallWarning =
@@ -2751,8 +2833,7 @@ static const CGFloat VZLibraryHorizontalInset = 24.0;
         [[[VZProgressViewController alloc] initWithTitle:VZL(@"Downloading macOS")] autorelease];
     self.downloadController.heroImage = VZInstallerArtworkForImage(image);
     NSString *macOSName = [VZRestoreCatalog macOSNameForImage:image];
-    NSString *version = [image[@"version"] isKindOfClass:NSString.class]
-        ? image[@"version"] : @"";
+    NSString *version = [VZRestoreCatalog versionForImage:image];
     if ([version hasSuffix:@".0"])
         version = [version substringToIndex:version.length - 2];
     BOOL hasKnownArtwork = ![[VZRestoreCatalog artworkNameForImage:image]

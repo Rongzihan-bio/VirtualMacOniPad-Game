@@ -33,7 +33,10 @@ for root in "${roots[@]}"; do
         build_version="$(otool -l "$candidate" | awk '
             /cmd LC_BUILD_VERSION/ { in_build=1; next }
             in_build && /platform/ { platform=$2 }
-            in_build && /minos/ { minos=$2; print platform " " minos; exit }
+            in_build && /minos/ && !printed {
+                print platform " " $2
+                printed=1
+            }
         ')"
         [[ "$build_version" == "2 $VZ_IPADOS_MIN_VERSION" ]] ||
             die "unsupported platform/minimum OS ($build_version): $candidate"

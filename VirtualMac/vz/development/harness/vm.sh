@@ -2,7 +2,7 @@
 # Helper for the matching macOS guest VM.
 # Keeps the whole ssh/scp command in one script (zsh won't word-split a $VAR of -o flags).
 #   vz/development/harness/vm.sh ssh '<remote command>'
-#   vz/development/harness/vm.sh scp <src> mac@<guest-address>:<dst>
+#   vz/development/harness/vm.sh scp <src> <guest-user>@<guest-address>:<dst>
 : "${VZ_GUEST_HOST:?set VZ_GUEST_HOST}"
 : "${VZ_GUEST_USER:?set VZ_GUEST_USER}"
 HOST="$VZ_GUEST_HOST"

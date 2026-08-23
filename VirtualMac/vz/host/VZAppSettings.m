@@ -23,6 +23,9 @@ NSString * const VZExternalDisplayScrollFixKey = @"ExternalDisplayScrollFix";
 NSString * const VZScrollingSpeedKey = @"ScrollingSpeed";
 NSString * const VZHUDOpacityKey = @"HUDOpacity";
 NSString * const VZDebugLoggingKey = @"DebugLogging";
+NSString * const VZDebugLoggingModeOff = @"off";
+NSString * const VZDebugLoggingModeNextBoot = @"next";
+NSString * const VZDebugLoggingModeAlways = @"always";
 
 static NSString * const VZSettingsPath = @"/var/mobile/Media/VirtualMac/Settings.plist";
 static CFStringRef const VZSettingsDarwinNotification =
@@ -69,6 +72,12 @@ BOOL VZIsRootHideEnvironment(void)
         NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:VZSettingsPath];
         _values = [[NSMutableDictionary alloc] initWithDictionary:
             [saved isKindOfClass:NSDictionary.class] ? saved : @{}];
+        // Migrate the former switch without changing what an existing user
+        // selected. New writes use an explicit three-state value.
+        id debug = _values[VZDebugLoggingKey];
+        if ([debug isKindOfClass:NSNumber.class])
+            _values[VZDebugLoggingKey] = [debug boolValue]
+                ? VZDebugLoggingModeAlways : VZDebugLoggingModeOff;
     }
     return self;
 }
@@ -95,7 +104,7 @@ BOOL VZIsRootHideEnvironment(void)
         VZExternalDisplayScrollFixKey: @YES,
         VZScrollingSpeedKey: @"0.25",
         VZHUDOpacityKey: @"0.55",
-        VZDebugLoggingKey: @NO,
+        VZDebugLoggingKey: VZDebugLoggingModeOff,
     };
 }
 
@@ -171,3 +180,23 @@ BOOL VZIsRootHideEnvironment(void)
 }
 
 @end
+
+BOOL VZConsumeDebugLoggingForBoot(void)
+{
+    VZAppSettings *settings = VZAppSettings.sharedSettings;
+    NSString *mode = [settings stringForKey:VZDebugLoggingKey];
+    BOOL enabled = [mode isEqualToString:VZDebugLoggingModeAlways] ||
+        [mode isEqualToString:VZDebugLoggingModeNextBoot];
+    if ([mode isEqualToString:VZDebugLoggingModeNextBoot])
+        [settings setString:VZDebugLoggingModeOff forKey:VZDebugLoggingKey];
+    return enabled;
+}
+
+void VZEnableDebugLoggingForNextBoot(void)
+{
+    VZAppSettings *settings = VZAppSettings.sharedSettings;
+    if (![[settings stringForKey:VZDebugLoggingKey]
+          isEqualToString:VZDebugLoggingModeAlways])
+        [settings setString:VZDebugLoggingModeNextBoot
+                     forKey:VZDebugLoggingKey];
+}

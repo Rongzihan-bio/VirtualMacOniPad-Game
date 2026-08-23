@@ -8,21 +8,105 @@ static NSString *VZRestoreString(id value)
     return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
-static NSString *VZRestoreVersionFromName(NSString *name)
+// Keep every release identity in one table. Catalog grouping, user-facing
+// names, restore-image inference, installer artwork, and library wallpaper
+// selection must all resolve through these records so a newly supported
+// macOS release cannot acquire conflicting names in different screens.
+static NSArray<NSDictionary *> *VZMacOSReleaseIdentities(void)
+{
+    static NSArray *identities;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        identities = [@[
+            @{ @"major": @12, @"group": @"monterey",
+               @"marketing": @"Monterey", @"artwork": @"monterey",
+               @"aliases": @[@"monterey"] },
+            @{ @"major": @13, @"group": @"ventura",
+               @"marketing": @"Ventura", @"artwork": @"ventura",
+               @"aliases": @[@"ventura"] },
+            @{ @"major": @14, @"group": @"sonoma",
+               @"marketing": @"Sonoma", @"artwork": @"sonoma",
+               @"aliases": @[@"sonoma"] },
+            @{ @"major": @15, @"group": @"sequoia",
+               @"marketing": @"Sequoia", @"artwork": @"sequoia",
+               @"aliases": @[@"sequoia"] },
+            @{ @"major": @26, @"group": @"tahoe",
+               @"marketing": @"Tahoe", @"artwork": @"tahoe",
+               @"aliases": @[@"tahoe"] },
+            @{ @"major": @27, @"group": @"goldengate",
+               @"marketing": @"Golden Gate", @"artwork": @"golden-gate",
+               @"aliases": @[@"golden gate", @"golden-gate",
+                                @"goldengate"] },
+        ] retain];
+    });
+    return identities;
+}
+
+static NSDictionary *VZMacOSIdentityForMajor(NSInteger major)
+{
+    for (NSDictionary *identity in VZMacOSReleaseIdentities())
+        if ([identity[@"major"] integerValue] == major)
+            return identity;
+    return nil;
+}
+
+static NSDictionary *VZMacOSIdentityForGroup(NSString *group)
+{
+    NSString *lower = group.lowercaseString;
+    for (NSDictionary *identity in VZMacOSReleaseIdentities()) {
+        if ([identity[@"group"] isEqualToString:lower])
+            return identity;
+        for (NSString *alias in identity[@"aliases"])
+            if ([alias isEqualToString:lower])
+                return identity;
+    }
+    return nil;
+}
+
+static NSDictionary *VZMacOSIdentityInText(NSString *text)
+{
+    NSString *lower = text.lowercaseString;
+    for (NSDictionary *identity in VZMacOSReleaseIdentities())
+        for (NSString *alias in identity[@"aliases"])
+            if ([lower containsString:alias])
+                return identity;
+    return nil;
+}
+
+static NSString *VZRestoreVersionFromText(NSString *text)
 {
     NSRegularExpression *expression = [NSRegularExpression
         regularExpressionWithPattern:@"[0-9]+(?:\\.[0-9]+){0,2}"
         options:0 error:nil];
-    NSTextCheckingResult *match = [expression firstMatchInString:name
-        options:0 range:NSMakeRange(0, name.length)];
-    return match ? [name substringWithRange:match.range] : @"";
+    NSTextCheckingResult *match = [expression firstMatchInString:text
+        options:0 range:NSMakeRange(0, text.length)];
+    return match ? [text substringWithRange:match.range] : @"";
 }
 
-static NSInteger VZRestoreMajorVersion(NSString *version)
+static NSInteger VZRestoreMajorVersionFromText(NSString *text)
 {
+    NSDictionary *identity = VZMacOSIdentityInText(text);
+    if (identity)
+        return [identity[@"major"] integerValue];
+    NSString *version = VZRestoreVersionFromText(text);
     NSScanner *scanner = [NSScanner scannerWithString:version];
     NSInteger major = 0;
-    return [scanner scanInteger:&major] ? major : 0;
+    if (![scanner scanInteger:&major] || major < 10 || major > 99)
+        return 0;
+    return major;
+}
+
+static NSDictionary *VZMacOSIdentityForImage(NSDictionary *image)
+{
+    NSDictionary *identity = VZMacOSIdentityForGroup(
+        VZRestoreString(image[@"group"]));
+    if (identity)
+        return identity;
+    NSInteger major = VZRestoreMajorVersionFromText(
+        VZRestoreString(image[@"version"]));
+    if (major == 0)
+        major = VZRestoreMajorVersionFromText(VZRestoreString(image[@"name"]));
+    return VZMacOSIdentityForMajor(major);
 }
 
 @implementation VZRestoreCatalog
@@ -50,13 +134,17 @@ static NSInteger VZRestoreMajorVersion(NSString *version)
         NSString *name = VZRestoreString(image[@"name"]);
         NSString *version = VZRestoreString(image[@"version"]);
         if (!version.length)
-            version = VZRestoreVersionFromName(name);
+            version = VZRestoreVersionFromText(name);
         NSString *group = VZRestoreString(image[@"group"]).lowercaseString;
-        if (!group.length) {
-            NSInteger major = VZRestoreMajorVersion(version);
-            group = major > 0
+        NSDictionary *groupIdentity = VZMacOSIdentityForGroup(group);
+        if (groupIdentity) {
+            group = groupIdentity[@"group"];
+        } else if (!group.length) {
+            NSInteger major = VZRestoreMajorVersionFromText(version);
+            NSDictionary *identity = VZMacOSIdentityForMajor(major);
+            group = identity[@"group"] ?: (major > 0
                 ? [NSString stringWithFormat:@"macos-%ld", (long)major]
-                : @"unknown";
+                : @"unknown");
         }
         NSString *channel = VZRestoreString(image[@"channel"]).lowercaseString;
         if (![channel isEqualToString:@"regular"] &&
@@ -120,8 +208,10 @@ static NSInteger VZRestoreMajorVersion(NSString *version)
 
 + (NSArray<NSString *> *)orderedGroupsForImages:(NSArray<NSDictionary *> *)images
 {
-    NSArray *preferred = @[@"goldengate", @"tahoe", @"sequoia",
-                           @"sonoma", @"ventura", @"monterey"];
+    NSMutableArray *preferred = [NSMutableArray array];
+    for (NSDictionary *identity in
+            [VZMacOSReleaseIdentities() reverseObjectEnumerator])
+        [preferred addObject:identity[@"group"]];
     NSMutableArray *result = [NSMutableArray array];
     NSMutableSet *present = [NSMutableSet set];
     for (NSDictionary *image in images) {
@@ -139,64 +229,108 @@ static NSInteger VZRestoreMajorVersion(NSString *version)
 
 + (BOOL)isExperimentalImage:(NSDictionary *)image
 {
-    NSString *group = VZRestoreString(image[@"group"]).lowercaseString;
-    NSString *version = VZRestoreString(image[@"version"]);
-    if (!version.length)
-        version = VZRestoreVersionFromName(VZRestoreString(image[@"name"]));
-    return [group isEqualToString:@"goldengate"] ||
-        [group isEqualToString:@"golden-gate"] ||
-        VZRestoreMajorVersion(version) >= 27;
+    return [self majorVersionForImage:image] >= 27;
 }
 
 + (BOOL)isUnsupportedImage:(NSDictionary *)image
 {
+    return [self majorVersionForImage:image] >= 28;
+}
+
++ (BOOL)enablesOpenGLByDefaultForImage:(NSDictionary *)image
+{
+    NSInteger major = [self majorVersionForImage:image];
+    return major == 0 || (major >= 14 && major < 28);
+}
+
++ (NSInteger)majorVersionForImage:(NSDictionary *)image
+{
+    NSDictionary *identity = VZMacOSIdentityForImage(image);
+    if (identity)
+        return [identity[@"major"] integerValue];
     NSString *version = VZRestoreString(image[@"version"]);
     if (!version.length)
-        version = VZRestoreVersionFromName(VZRestoreString(image[@"name"]));
-    return VZRestoreMajorVersion(version) >= 28;
+        version = VZRestoreString(image[@"name"]);
+    return VZRestoreMajorVersionFromText(version);
+}
+
++ (NSString *)versionForImage:(NSDictionary *)image
+{
+    NSString *version = VZRestoreString(image[@"version"]);
+    return version.length ? version
+        : VZRestoreVersionFromText(VZRestoreString(image[@"name"]));
+}
+
++ (NSString *)marketingNameForImage:(NSDictionary *)image
+{
+    return VZMacOSIdentityForImage(image)[@"marketing"];
+}
+
++ (NSString *)displayNameForImage:(NSDictionary *)image compact:(BOOL)compact
+{
+    NSString *marketing = [self marketingNameForImage:image];
+    NSInteger major = [self majorVersionForImage:image];
+    if (compact) {
+        if (marketing.length && major >= 27)
+            return [NSString stringWithFormat:@"macOS %ld %@",
+                (long)major, marketing];
+        if (marketing.length && major > 0)
+            return [NSString stringWithFormat:@"macOS %@ %ld",
+                marketing, (long)major];
+        if (major > 0)
+            return [NSString stringWithFormat:@"macOS %ld", (long)major];
+    }
+    NSString *version = [self versionForImage:image];
+    if ([version hasSuffix:@".0"])
+        version = [version substringToIndex:version.length - 2];
+    if (marketing.length)
+        return version.length
+            ? [NSString stringWithFormat:@"macOS %@ %@", marketing, version]
+            : [NSString stringWithFormat:@"macOS %@", marketing];
+    NSString *name = VZRestoreString(image[@"name"]);
+    if (name.length)
+        return name;
+    return version.length ? [NSString stringWithFormat:@"macOS %@", version]
+                          : @"macOS";
 }
 
 + (NSString *)macOSNameForImage:(NSDictionary *)image
 {
-    NSString *group = VZRestoreString(image[@"group"]).lowercaseString;
-    NSString *version = VZRestoreString(image[@"version"]);
-    if (!version.length)
-        version = VZRestoreVersionFromName(VZRestoreString(image[@"name"]));
-    NSInteger major = VZRestoreMajorVersion(version);
-    NSDictionary *known = @{ @"monterey": @"Monterey",
-        @"ventura": @"Ventura", @"sonoma": @"Sonoma",
-        @"sequoia": @"Sequoia", @"tahoe": @"Tahoe",
-        @"goldengate": @"Golden Gate", @"golden-gate": @"Golden Gate" };
-    NSString *marketingName = known[group];
-    if (!marketingName.length) {
-        NSDictionary *byMajor = @{ @12: @"Monterey", @13: @"Ventura",
-            @14: @"Sonoma", @15: @"Sequoia", @26: @"Tahoe",
-            @27: @"Golden Gate" };
-        marketingName = byMajor[@(major)];
-    }
-    if (marketingName.length)
-        return [@"macOS " stringByAppendingString:marketingName];
+    NSString *marketing = [self marketingNameForImage:image];
+    NSInteger major = [self majorVersionForImage:image];
+    if (marketing.length)
+        return [@"macOS " stringByAppendingString:marketing];
     return major > 0 ? [NSString stringWithFormat:@"macOS %ld", (long)major]
                      : @"macOS";
 }
 
 + (NSString *)artworkNameForImage:(NSDictionary *)image
 {
-    NSString *group = VZRestoreString(image[@"group"]).lowercaseString;
-    NSDictionary *known = @{ @"monterey": @"monterey",
-        @"ventura": @"ventura", @"sonoma": @"sonoma",
-        @"sequoia": @"sequoia", @"tahoe": @"tahoe",
-        @"goldengate": @"golden-gate", @"golden-gate": @"golden-gate" };
-    NSString *artwork = known[group];
-    if (artwork.length)
-        return artwork;
-    NSString *version = VZRestoreString(image[@"version"]);
-    if (!version.length)
-        version = VZRestoreVersionFromName(VZRestoreString(image[@"name"]));
-    NSDictionary *byMajor = @{ @12: @"monterey", @13: @"ventura",
-        @14: @"sonoma", @15: @"sequoia", @26: @"tahoe",
-        @27: @"golden-gate" };
-    return byMajor[@(VZRestoreMajorVersion(version))] ?: @"ipsw";
+    return VZMacOSIdentityForImage(image)[@"artwork"] ?: @"ipsw";
+}
+
++ (NSString *)artworkNameForMachineName:(NSString *)name
+{
+    NSDictionary *identity = VZMacOSIdentityInText(name);
+    if (!identity)
+        identity = VZMacOSIdentityForMajor(
+            VZRestoreMajorVersionFromText(name));
+    return identity[@"artwork"] ?: @"tiger";
+}
+
++ (NSString *)defaultVirtualMachineNameForRestoreImagePath:(NSString *)path
+{
+    NSString *base = path.lastPathComponent.stringByDeletingPathExtension;
+    NSDictionary *identity = VZMacOSIdentityInText(base);
+    if (identity)
+        return identity[@"marketing"];
+    NSInteger major = VZRestoreMajorVersionFromText(base);
+    identity = VZMacOSIdentityForMajor(major);
+    if (identity)
+        return identity[@"marketing"];
+    if (major > 0)
+        return [NSString stringWithFormat:@"macOS %ld", (long)major];
+    return base.length ? base : @"macOS";
 }
 
 @end

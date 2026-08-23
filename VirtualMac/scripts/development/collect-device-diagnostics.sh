@@ -108,7 +108,10 @@ for index in "${!udids[@]}"; do
         for remote in /tmp/VirtualMac.log /tmp/vmmhook.log \
             /tmp/vmm.stderr.log /tmp/vzxpchook.log /tmp/pvg-trace.log \
             /tmp/InternetSharing.stdout.log /tmp/InternetSharing.stderr.log \
-            /tmp/bootpd.stdout.log /tmp/bootpd.stderr.log; do
+            /tmp/bootpd.stdout.log /tmp/bootpd.stderr.log \
+            /tmp/InternetSharing.out /tmp/InternetSharing.err \
+            /tmp/bootpd.out /tmp/bootpd.err \
+            /tmp/bootpd-controller.out /tmp/bootpd-controller.err; do
             "${scp_command[@]}" "$target:$remote" \
                 "$destination/runtime-logs/" >/dev/null 2>&1 || true
         done

@@ -12,7 +12,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 RESOURCE_ROOT = ROOT / "resources" / "Localizations"
-SOURCE_PATTERN = re.compile(r'VZL\(@"((?:[^"\\]|\\.)*)"\)')
+SOURCE_PATTERN = re.compile(r'(?:VZL|VML)\(@"((?:[^"\\]|\\.)*)"\)')
 STRINGS_PATTERN = re.compile(
     r'^"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)";', re.M
 )
@@ -20,8 +20,9 @@ STRINGS_PATTERN = re.compile(
 
 def source_keys() -> list[str]:
     keys: set[str] = set()
-    for source in (ROOT / "vz" / "host").glob("*.m"):
-        keys.update(SOURCE_PATTERN.findall(source.read_text()))
+    for directory in (ROOT / "vz" / "host", ROOT / "vz" / "guest"):
+        for source in directory.glob("*.m"):
+            keys.update(SOURCE_PATTERN.findall(source.read_text()))
     return sorted(keys, key=str.casefold)
 
 

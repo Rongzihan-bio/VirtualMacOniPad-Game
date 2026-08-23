@@ -176,7 +176,8 @@
         NSArray *people = @[
             @{@"name": @"nfzerox", @"url": @"https://github.com/nfzerox", @"image": @"nfzerox.png"},
             @{@"name": @"qwqVictor", @"url": @"https://github.com/qwqVictor", @"image": @"qwqVictor.jpg"},
-            @{@"name": @"jamesy0ung", @"url": @"https://github.com/jamesy0ung", @"image": @"jamesy0ung.jpg"}
+            @{@"name": @"jamesy0ung", @"url": @"https://github.com/jamesy0ung", @"image": @"jamesy0ung.jpg"},
+            @{@"name": @"ma-syu", @"url": @"https://github.com/ma-syu", @"image": @"ma-syu.jpg"}
         ];
         cell = [self baseCellForTableView:tableView identifier:@"contributors"];
         for (UIView *view in cell.contentView.subviews)
@@ -295,10 +296,19 @@
         NSArray *titles = @[VZL(@"Fix Keyboard Crash"),
                             VZL(@"Fix External Display Scroll Direction"),
                             VZL(@"Debug Logging")];
-        NSArray *keys = @[VZKeyboardCrashWorkaroundKey,
-                          VZExternalDisplayScrollFixKey,
-                          VZDebugLoggingKey];
         cell.textLabel.text = titles[indexPath.row];
+        if (indexPath.row == 2) {
+            NSString *mode = [settings stringForKey:VZDebugLoggingKey];
+            cell.detailTextLabel.text =
+                [mode isEqualToString:VZDebugLoggingModeAlways]
+                    ? VZL(@"Always On")
+                : [mode isEqualToString:VZDebugLoggingModeNextBoot]
+                    ? VZL(@"On for Next Boot") : VZL(@"Off");
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return cell;
+        }
+        NSArray *keys = @[VZKeyboardCrashWorkaroundKey,
+                          VZExternalDisplayScrollFixKey];
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
         toggle.tag = 100 + indexPath.row;
         toggle.on = [settings boolForKey:keys[indexPath.row]];
@@ -357,13 +367,37 @@
                             VZMultitaskingGestureSuppressionKey,
                             VZHomeIndicatorSuppressionKey];
     NSArray *compatibilityKeys = @[VZKeyboardCrashWorkaroundKey,
-                                   VZExternalDisplayScrollFixKey,
-                                   VZDebugLoggingKey];
+                                   VZExternalDisplayScrollFixKey];
     NSString *key = sender.tag >= 100 ? compatibilityKeys[sender.tag - 100]
         : sender.tag >= 30 ? iPadOSKeys[sender.tag - 30]
         : sender.tag == 20 ? VZKeyboardShortcutCaptureKey
                            : touchKeys[sender.tag];
     [VZAppSettings.sharedSettings setBool:sender.on forKey:key];
+}
+
+- (void)chooseDebugLoggingFrom:(UITableViewCell *)cell
+{
+    UIAlertController *picker = [UIAlertController
+        alertControllerWithTitle:VZL(@"Debug Logging") message:nil
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray *titles = @[VZL(@"Off"), VZL(@"On for Next Boot"),
+                        VZL(@"Always On")];
+    NSArray *values = @[VZDebugLoggingModeOff, VZDebugLoggingModeNextBoot,
+                        VZDebugLoggingModeAlways];
+    for (NSUInteger index = 0; index < values.count; ++index) {
+        [picker addAction:[UIAlertAction actionWithTitle:titles[index]
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                (void)action;
+                [VZAppSettings.sharedSettings setString:values[index]
+                    forKey:VZDebugLoggingKey];
+                [self.tableView reloadData];
+            }]];
+    }
+    [picker addAction:[UIAlertAction actionWithTitle:VZL(@"Cancel")
+        style:UIAlertActionStyleCancel handler:nil]];
+    picker.popoverPresentationController.sourceView = cell;
+    picker.popoverPresentationController.sourceRect = cell.bounds;
+    [self presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)chooseDisplayScalingFrom:(UITableViewCell *)cell
@@ -546,6 +580,8 @@
         [self chooseDisplayScalingFrom:cell];
     else if (indexPath.section == 0 && indexPath.row == 2)
         [self chooseHUDVisibilityFrom:cell];
+    else if (indexPath.section == 3 && indexPath.row == 2)
+        [self chooseDebugLoggingFrom:cell];
     else if (indexPath.section == 7 && indexPath.row == 0) {
         UIPasteboard.generalPasteboard.string = VZVMLibraryPath();
         UINotificationFeedbackGenerator *feedback = [[[UINotificationFeedbackGenerator alloc] init] autorelease];

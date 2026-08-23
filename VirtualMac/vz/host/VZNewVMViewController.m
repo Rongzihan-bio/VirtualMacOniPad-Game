@@ -7,66 +7,6 @@ static NSString *VZCatalogString(id value)
     return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
-static NSInteger VZCatalogMajorVersion(NSDictionary *image)
-{
-    NSString *candidate = VZCatalogString(image[@"version"]);
-    if (!candidate.length)
-        candidate = VZCatalogString(image[@"name"]);
-    NSScanner *scanner = [NSScanner scannerWithString:candidate];
-    [scanner scanUpToCharactersFromSet:NSCharacterSet.decimalDigitCharacterSet
-                            intoString:nil];
-    NSInteger major = 0;
-    return [scanner scanInteger:&major] ? major : 0;
-}
-
-static NSString *VZCatalogMarketingName(NSDictionary *image)
-{
-    NSString *group = VZCatalogString(image[@"group"]).lowercaseString;
-    NSDictionary *known = @{ @"monterey": @"Monterey", @"ventura": @"Ventura",
-        @"sonoma": @"Sonoma", @"sequoia": @"Sequoia", @"tahoe": @"Tahoe",
-        @"goldengate": @"Golden Gate", @"golden-gate": @"Golden Gate" };
-    NSString *name = known[group];
-    if (name.length)
-        return name;
-    switch (VZCatalogMajorVersion(image)) {
-        case 12: return @"Monterey";
-        case 13: return @"Ventura";
-        case 14: return @"Sonoma";
-        case 15: return @"Sequoia";
-        case 26: return @"Tahoe";
-        case 27: return @"Golden Gate";
-        default: return nil;
-    }
-}
-
-static NSString *VZCatalogDisplayName(NSDictionary *image, BOOL compact)
-{
-    NSString *marketing = VZCatalogMarketingName(image);
-    NSInteger major = VZCatalogMajorVersion(image);
-    if (compact) {
-        if (marketing.length && major >= 27)
-            return [NSString stringWithFormat:@"macOS %ld %@",
-                (long)major, marketing];
-        if (marketing.length && major > 0)
-            return [NSString stringWithFormat:@"macOS %@ %ld",
-                marketing, (long)major];
-        if (major > 0)
-            return [NSString stringWithFormat:@"macOS %ld", (long)major];
-    }
-    NSString *version = VZCatalogString(image[@"version"]);
-    if ([version hasSuffix:@".0"])
-        version = [version substringToIndex:version.length - 2];
-    if (marketing.length)
-        return version.length
-            ? [NSString stringWithFormat:@"macOS %@ %@", marketing, version]
-            : [NSString stringWithFormat:@"macOS %@", marketing];
-    NSString *name = VZCatalogString(image[@"name"]);
-    if (name.length)
-        return name;
-    return version.length ? [NSString stringWithFormat:@"macOS %@", version]
-                          : @"macOS";
-}
-
 static UIImage *VZCatalogIcon(NSDictionary *image)
 {
     NSString *name = [VZRestoreCatalog artworkNameForImage:image];
@@ -341,7 +281,8 @@ static UIImage *VZCatalogIcon(NSDictionary *image)
         : self.versionImages[indexPath.row];
     BOOL compactName = !self.showMinorReleases &&
         !self.showDeveloperBetas && !self.showVersionDetails;
-    NSString *displayName = VZCatalogDisplayName(image, compactName);
+    NSString *displayName = [VZRestoreCatalog displayNameForImage:image
+                                                           compact:compactName];
     cell.textLabel.text = compactName
         ? [NSString stringWithFormat:VZL(@"Install %@"), displayName]
         : displayName;

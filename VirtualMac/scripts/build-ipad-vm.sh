@@ -266,9 +266,10 @@ xcrun --sdk iphoneos clang \
 xcrun --sdk iphoneos clang \
     -arch arm64e -miphoneos-version-min="$VZ_IPADOS_MIN_VERSION" -isysroot "$SDK" \
     -dynamiclib \
-    -framework Foundation -framework Metal \
+    -framework Foundation \
     -Wl,-reexport_framework,Metal \
     -install_name "@rpath/MetalCompat.dylib" \
+    "$VZ_REPO_ROOT/vz/host/native_bc_texture_support.m" \
     "$VZ_REPO_ROOT/vz/host/metalshim.m" \
     -o "$VMM_FRAMEWORKS/MetalCompat.dylib"
 xcrun --sdk iphoneos clang \

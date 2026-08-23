@@ -98,8 +98,7 @@ static NSAttributedString *VZTitleWithBadge(NSString *title,
             VZFailureSupportOptionSuggestScreenRecording;
         self.screenRecordingCompleted = UIScreen.mainScreen.isCaptured;
         if (options & VZFailureSupportOptionSuggestDebugLogging)
-            [VZAppSettings.sharedSettings setBool:YES
-                forKey:VZDebugLoggingKey];
+            VZEnableDebugLoggingForNextBoot();
         [NSNotificationCenter.defaultCenter addObserver:self
             selector:@selector(screenCaptureChanged:)
             name:UIScreenCapturedDidChangeNotification object:nil];
@@ -192,7 +191,7 @@ static NSAttributedString *VZTitleWithBadge(NSString *title,
     (void)tableView;
     if (section == 0 &&
         (self.options & VZFailureSupportOptionSuggestDebugLogging))
-        return VZL(@"Debug Logging has been enabled. You can turn it off later in Settings.");
+        return VZL(@"Debug logging has been enabled for the next boot.");
     return nil;
 }
 

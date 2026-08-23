@@ -458,6 +458,14 @@ static NSData *VZRuntimePathData(void)
         @"/var/root/VirtualMac",
         @"/var/root/VirtualMac/install",
         @"/var/root/VirtualMac/payload",
+        @"/usr/libexec/VirtualMac/InternetSharing",
+        @"/usr/libexec/VirtualMac/InternetSharing.ipados14",
+        @"/usr/libexec/VirtualMac/bootpd",
+        @"/var/root/VirtualMac/rootful/Library/LaunchDaemons/com.apple.NetworkSharing.plist",
+        @"/var/root/VirtualMac/rootful/Library/LaunchDaemons/com.apple.bootpd.plist",
+        @"/var/root/VirtualMac/rootful/Library/LaunchDaemons/vzi.apple.bootpd-controller.plist",
+        @"/tmp/bootpd.plist",
+        @"/var/db/dhcpd_leases",
         @"/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib",
         @"/usr/lib/TweakInject/VZKeyboardPassthrough.dylib",
         @"/var/jb/Library/MobileSubstrate/DynamicLibraries/VZKeyboardPassthrough.dylib",
@@ -537,6 +545,10 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
         VZBoundedFileData(@"/etc/resolv.conf"));
     VZAddEntry(handler, @"device/dns/var-run-resolv.conf",
         VZBoundedFileData(@"/var/run/resolv.conf"));
+    VZAddEntry(handler, @"network/bootpd.plist",
+        VZBoundedFileData(@"/tmp/bootpd.plist"));
+    VZAddEntry(handler, @"network/dhcpd-leases.txt",
+        VZBoundedFileData(@"/var/db/dhcpd_leases"));
     VZAddEntry(handler, @"jailbreak/environment.txt", VZBootstrapData());
     VZAddEntry(handler, @"jailbreak/tweak-injection-files.txt",
         VZTweakInventoryData());
@@ -565,6 +577,27 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
             VZCommandOutput(dpkg, @[@"--verify", @"com.mac.virtual"]));
     VZAddEntry(handler, @"package/runtime-paths.txt", VZRuntimePathData());
 
+    NSString *launchctl = VZFirstExecutablePath(
+        @[@"/var/jb/usr/bin/launchctl", @"/usr/bin/launchctl"]);
+    if (launchctl) {
+        for (NSString *domain in @[@"system", @"user/501"]) {
+            for (NSString *label in @[@"com.apple.NetworkSharing",
+                                      @"vzi.apple.bootpd",
+                                      @"vzi.apple.bootpd-controller"]) {
+                NSString *safeDomain = [domain stringByReplacingOccurrencesOfString:@"/"
+                    withString:@"-"];
+                VZAddEntry(handler, [NSString stringWithFormat:
+                    @"network/launchctl-%@-%@.txt", safeDomain, label],
+                    VZCommandOutput(launchctl, @[@"print",
+                        [NSString stringWithFormat:@"%@/%@", domain, label]]));
+            }
+        }
+    }
+    NSString *ps = VZFirstExecutablePath(@[@"/var/jb/bin/ps", @"/bin/ps"]);
+    if (ps)
+        VZAddEntry(handler, @"device/processes.txt",
+            VZCommandOutput(ps, @[@"-axo", @"pid,ppid,user,state,command"]));
+
     NSData *settings = [NSPropertyListSerialization dataWithPropertyList:
         VZAppSettings.sharedSettings.dictionaryRepresentation
         format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
@@ -573,7 +606,10 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
     NSArray *logNames = @[@"VirtualMac.log", @"vmmhook.log",
         @"vmm.stderr.log", @"vzxpchook.log", @"pvg-trace.log",
         @"InternetSharing.stdout.log", @"InternetSharing.stderr.log",
-        @"bootpd.stdout.log", @"bootpd.stderr.log"];
+        @"bootpd.stdout.log", @"bootpd.stderr.log",
+        @"InternetSharing.out", @"InternetSharing.err",
+        @"bootpd.out", @"bootpd.err",
+        @"bootpd-controller.out", @"bootpd-controller.err"];
     for (NSString *name in logNames)
         VZAddEntry(handler, [@"logs" stringByAppendingPathComponent:name],
             VZBoundedFileData([@"/tmp" stringByAppendingPathComponent:name]));

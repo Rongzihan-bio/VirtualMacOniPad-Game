@@ -13,11 +13,14 @@
 #import "VZSettingsViewController.h"
 #import "VZLocalization.h"
 #import "VZSupport.h"
+#import "VZGuestTools.h"
+#import "VZGuestRuntimePolicy.h"
 #include <dlfcn.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <mach-o/loader.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -28,6 +31,52 @@
 #include <unistd.h>
 
 extern char **environ;
+extern int memorystatus_control(uint32_t command, int32_t pid,
+                                uint32_t flags, void *buffer,
+                                size_t buffer_size);
+
+typedef struct {
+    int32_t priority;
+    uint64_t user_data;
+} VZMemorystatusPriorityProperties;
+
+static BOOL gVMJetsamProtectionActive;
+
+static void setVMJetsamProtection(BOOL active)
+{
+    if (gVMJetsamProtectionActive == active)
+        return;
+
+    // The extracted VMM runs as a priority-180 system service on iPadOS 16,
+    // while RunningBoard normally places the UIKit host in foreground band
+    // 100. Under a real VM-page shortage that ordering kills the lightweight
+    // app first and only then tears down its multi-gigabyte VMM. Keep the UI
+    // one band above the VMM while a guest is running, so jetsam reclaims the
+    // process that owns the memory and the surviving app can report the stop.
+    // XNU 20/21 use the same bands before their iPadOS 16 tenfold renumbering.
+    // https://github.com/apple-oss-distributions/xnu/blob/xnu-7195.141.2/bsd/sys/kern_memorystatus.h
+    // https://github.com/apple-oss-distributions/xnu/blob/xnu-8019.41.5/bsd/sys/kern_memorystatus.h
+    // https://github.com/apple-oss-distributions/xnu/blob/xnu-8792.81.2/bsd/sys/kern_memorystatus.h
+    NSInteger hostMajor = NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
+    VZMemorystatusPriorityProperties properties = {
+        .priority = active ? (hostMajor >= 16 ? 190 : 19)
+                           : 0,
+        .user_data = 0,
+    };
+    const uint32_t setPriorityProperties = 2;
+    const uint32_t priorityIsAssertion = 1;
+    errno = 0;
+    // Clear only our assertion band when the VM stops. RunningBoard retains
+    // ownership of the app's ordinary requested foreground/background band.
+    int result = memorystatus_control(setPriorityProperties, getpid(),
+        priorityIsAssertion, &properties, sizeof(properties));
+    int error = errno;
+    printf("[VirtualMac] VM jetsam protection active=%d priority=%d "
+           "result=%d errno=%d\n", active, properties.priority,
+           result, error);
+    if (result == 0)
+        gVMJetsamProtectionActive = active;
+}
 
 static id gVirtualMachine;
 static id gVirtualMachineDelegate;
@@ -61,6 +110,7 @@ static BOOL gFixExternalDisplayScrollDirection;
 static CGFloat gScrollingSpeed = 0.25;
 static BOOL gRootHideInformationVisible;
 static BOOL gRootHidePivotalActionApproved;
+static BOOL gVideoMemoryAlertPresented;
 static NSMutableArray *gRootHideInformationCompletions;
 // Globe-held state, tracked from the Darwin relay (the tweak reports the
 // globe's raw HID press, which is reliable and prompt). The tweak translates
@@ -996,6 +1046,49 @@ static void installShellShortcutRelay(void) {
     }
 }
 
+static void videoMemoryExhaustedNotification(CFNotificationCenterRef center,
+                                             void *observer,
+                                             CFStringRef name,
+                                             const void *object,
+                                             CFDictionaryRef userInfo) {
+    (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gVirtualMachine || gVideoMemoryAlertPresented)
+            return;
+        gVideoMemoryAlertPresented = YES;
+        UIWindow *window = nil;
+        for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
+            if (candidate.isKeyWindow) { window = candidate; break; }
+        }
+        window = window ?: UIApplication.sharedApplication.windows.firstObject;
+        UIViewController *controller = window.rootViewController;
+        NSString *path = nil;
+        @try { path = [controller valueForKey:@"activeVMBundlePath"]; }
+        @catch (__unused NSException *exception) {}
+        NSString *virtualMacName = path.lastPathComponent.stringByDeletingPathExtension;
+        if (!virtualMacName.length)
+            virtualMacName = VZL(@"Virtual Mac");
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:VZL(@"Out of Video Memory")
+            message:[NSString stringWithFormat:
+                VZL(@"%@ is out of video memory. macOS may appear frozen."),
+                virtualMacName]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+            style:UIAlertActionStyleDefault handler:nil]];
+        [VZTopPresentedController(controller)
+            presentViewController:alert animated:YES completion:nil];
+    });
+}
+
+static void installVideoMemoryWarningRelay(void) {
+    CFNotificationCenterAddObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(), NULL,
+        videoMemoryExhaustedNotification,
+        CFSTR("com.mac.virtual.video-memory-exhausted"), NULL,
+        CFNotificationSuspensionBehaviorDeliverImmediately);
+}
+
 @interface NSObject (VZScrollEventSPI)
 - (CGVector)nonAcceleratedDelta;
 - (CGVector)acceleratedDelta;
@@ -1052,6 +1145,8 @@ static void sendSoftwareKey(UIKeyboardHIDUsage usage, BOOL shifted);
     BOOL _vzTwoFingerCandidate;
     BOOL _vzLongPressConsumed;
     BOOL _vzDirectPrimaryPressed;
+    BOOL _vzPencilRelayStrokeClaimed;
+    BOOL _vzPencilRelayStrokeConnected;
 }
 @end
 
@@ -1710,7 +1805,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 // address or network configuration is needed — vsock is VM-internal.
 
 static const uint32_t kPencilVsockPort = 9949;
-static const int kPencilPacketSize = 21;
+enum { kPencilPacketSize = 21 };
 
 // Wire protocol event types. Must match PencilEventType in pencil-probe.
 static const uint8_t kPencilEventPoint = 0;
@@ -1718,11 +1813,13 @@ static const uint8_t kPencilEventProximityEnter = 1;
 static const uint8_t kPencilEventProximityLeave = 2;
 
 // Wire protocol byte offsets. Must match PencilPacket offsets in pencil-probe.
-static const int kPencilOffsetPressure = 1;
-static const int kPencilOffsetX = 5;
-static const int kPencilOffsetY = 9;
-static const int kPencilOffsetAltitude = 13;
-static const int kPencilOffsetAzimuth = 17;
+enum {
+    kPencilOffsetPressure = 1,
+    kPencilOffsetX = 5,
+    kPencilOffsetY = 9,
+    kPencilOffsetAltitude = 13,
+    kPencilOffsetAzimuth = 17,
+};
 
 // VZVirtioSocketDevice from the running VM.
 // Set after VM start via pencilVsockSetup().
@@ -1731,37 +1828,6 @@ static id gPencilVsockDevice = nil;
 // Retained VZVirtioSocketConnection. Must stay alive while we use
 // its file descriptor; releasing it invalidates the fd.
 static id gPencilVsockConnection = nil;
-
-// --- Pencil vsock relay logging ---
-//
-// Write timestamped log entries to a fixed path so behavior can be
-// reviewed after testing. GUI apps on iOS don't reliably send printf
-// output anywhere accessible, so we append to a file instead.
-
-#include <sys/time.h>
-#include <stdarg.h>
-
-static void pencilLog(const char *fmt, ...) {
-    static FILE *logFile = NULL;
-    if (!logFile) {
-        logFile = fopen("/var/mobile/Documents/pencil-vsock.log", "a");
-        if (!logFile) return;
-        setlinebuf(logFile);
-    }
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    struct tm *tm = localtime(&tv.tv_sec);
-    fprintf(logFile, "%02d:%02d:%02d.%03d ",
-            tm->tm_hour, tm->tm_min, tm->tm_sec,
-            (int)(tv.tv_usec / 1000));
-    va_list ap;
-    va_start(ap, fmt);
-    vfprintf(logFile, fmt, ap);
-    va_end(ap);
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
-}
 
 // --- Pencil vsock relay ---
 //
@@ -1786,6 +1852,8 @@ static void pencilLog(const char *fmt, ...) {
 // them to CGEvent tiltX/tiltY.
 
 static int gPencilVsockFd = -1;
+static BOOL gPencilRelayEnabled;
+static uint64_t gPencilConnectionGeneration;
 
 // After a failed connect, suppress retries for this many seconds.
 // Without this, every Pencil touch would trigger an async connect
@@ -1797,16 +1865,37 @@ static const CFTimeInterval kPencilRetryInterval = 5.0;
 // (VZVirtioSocketDevice.connectToPort:completionHandler:), so
 // multiple touch events could trigger concurrent calls.
 static volatile int gPencilVsockConnecting = 0;
+static void pencilVsockConnect(void);
+
+static BOOL pencilRelayEnabled(void) {
+    return __atomic_load_n(&gPencilRelayEnabled, __ATOMIC_ACQUIRE);
+}
+
+static void pencilVsockReset(void) {
+    __atomic_store_n(&gPencilRelayEnabled, NO, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&gPencilConnectionGeneration, 1, __ATOMIC_ACQ_REL);
+    gPencilVsockFd = -1;
+    gPencilVsockConnecting = 0;
+    gPencilRetryAfter = 0;
+    [gPencilVsockConnection release];
+    gPencilVsockConnection = nil;
+    [gPencilVsockDevice release];
+    gPencilVsockDevice = nil;
+}
 
 /// Grab the VZVirtioSocketDevice from the running VM.
 /// Call once after the VM starts successfully.
 static void pencilVsockSetup(void) {
+    if (!pencilRelayEnabled())
+        return;
     NSArray *devices = m0(gVirtualMachine, "socketDevices");
     if (devices.count > 0) {
+        [gPencilVsockDevice release];
         gPencilVsockDevice = [devices[0] retain];
-        pencilLog("[Pencil] vsock device found, relay enabled\n");
+        printf("[VirtualMac] Pencil vsock device ready\n");
+        pencilVsockConnect();
     } else {
-        pencilLog("[Pencil] no vsock device, relay disabled\n");
+        printf("[VirtualMac] Pencil relay enabled but no vsock device found\n");
     }
 }
 
@@ -1819,33 +1908,42 @@ static void pencilVsockConnect(void) {
     if (now < gPencilRetryAfter) return;
 
     gPencilVsockConnecting = 1;
+    uint64_t generation = __atomic_load_n(
+        &gPencilConnectionGeneration, __ATOMIC_ACQUIRE);
 
     void (^handler)(id, NSError *) = ^(id connection, NSError *error) {
-        if (error || !connection) {
-            pencilLog("[Pencil] vsock connect port %u failed: %s\n",
-                     kPencilVsockPort,
-                     error ? error.localizedDescription.UTF8String
-                           : "nil connection");
-            gPencilRetryAfter = CFAbsoluteTimeGetCurrent()
-                              + kPencilRetryInterval;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!pencilRelayEnabled() || generation != __atomic_load_n(
+                    &gPencilConnectionGeneration, __ATOMIC_ACQUIRE))
+                return;
+            if (error || !connection) {
+                printf("[VirtualMac] Pencil vsock connect port %u failed: %s\n",
+                       kPencilVsockPort,
+                       error ? error.localizedDescription.UTF8String
+                             : "nil connection");
+                gPencilRetryAfter = CFAbsoluteTimeGetCurrent()
+                                  + kPencilRetryInterval;
+                gPencilVsockConnecting = 0;
+                return;
+            }
+            int fd = (int)((NSInteger(*)(id, SEL))objc_msgSend)(
+                connection, S("fileDescriptor"));
+
+            // Never let a stalled guest receiver block UIKit's Pencil event
+            // path. The relay traffic is only 21 bytes per sample.
+            int flags = fcntl(fd, F_GETFL, 0);
+            if (flags >= 0)
+                fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            int nsp = 1;
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nsp, sizeof(nsp));
+
+            [gPencilVsockConnection release];
+            gPencilVsockConnection = [connection retain];
+            gPencilVsockFd = fd;
             gPencilVsockConnecting = 0;
-            return;
-        }
-        int fd = (int)((NSInteger(*)(id, SEL))objc_msgSend)(
-            connection, S("fileDescriptor"));
-
-        // SO_NOSIGPIPE: prevent SIGPIPE when the relay disconnects.
-        int nsp = 1;
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nsp, sizeof(nsp));
-
-        // Retain the connection object — releasing it invalidates
-        // the file descriptor.
-        if (gPencilVsockConnection) [gPencilVsockConnection release];
-        gPencilVsockConnection = [connection retain];
-        gPencilVsockFd = fd;
-        gPencilVsockConnecting = 0;
-        pencilLog("[Pencil] vsock connected port %u fd=%d\n",
-                 kPencilVsockPort, fd);
+            printf("[VirtualMac] Pencil vsock connected port %u fd=%d\n",
+                   kPencilVsockPort, fd);
+        });
     };
 
     ((void(*)(id, SEL, uint32_t, id))objc_msgSend)(
@@ -1871,6 +1969,7 @@ static void pencilWriteLE32(uint8_t *buf, float value) {
 static bool pencilVsockSend(uint8_t type, float pressure,
                              float nx, float ny,
                              float altitude, float azimuth) {
+    if (!pencilRelayEnabled()) return false;
     if (gPencilVsockFd < 0) pencilVsockConnect();
     // Connect is async, so the fd may not be ready yet on the first
     // touch. Fall through to mouse mode until the connection completes.
@@ -1884,15 +1983,13 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     pencilWriteLE32(buf + kPencilOffsetAltitude, altitude);
     pencilWriteLE32(buf + kPencilOffsetAzimuth, azimuth);
 
-    ssize_t n = write(gPencilVsockFd, buf, kPencilPacketSize);
-    if (n <= 0) {
-        pencilLog("[Pencil] vsock write failed, disconnecting\n");
-        close(gPencilVsockFd);
+    ssize_t n = send(gPencilVsockFd, buf, kPencilPacketSize, MSG_DONTWAIT);
+    if (n != kPencilPacketSize) {
+        printf("[VirtualMac] Pencil vsock short write=%ld error=%d; reconnecting\n",
+               (long)n, n < 0 ? errno : 0);
         gPencilVsockFd = -1;
-        if (gPencilVsockConnection) {
-            [gPencilVsockConnection release];
-            gPencilVsockConnection = nil;
-        }
+        [gPencilVsockConnection release];
+        gPencilVsockConnection = nil;
         return false;
     }
     return true;
@@ -1916,7 +2013,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     // (without), causing duplicate strokes or overriding the pressure.
     // When the relay is not running, fall through so the Pencil still
     // works as a regular pointing device (no pressure, but usable).
-    for (UITouch *t in touches) {
+    if (pencilRelayEnabled()) for (UITouch *t in touches) {
         if (t.type == UITouchTypeStylus) {
             CGPoint p = [t locationInView:self];
             CGRect b = self.bounds;
@@ -1926,7 +2023,13 @@ static bool pencilVsockSend(uint8_t type, float pressure,
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
             float altitude = (float)t.altitudeAngle;
             float azimuth = (float)[t azimuthAngleInView:self];
-            if (pencilVsockSend(kPencilEventProximityEnter, pressure, nx, ny, altitude, azimuth)) return;
+            _vzPencilRelayStrokeConnected = pencilVsockSend(
+                kPencilEventProximityEnter, pressure, nx, ny,
+                altitude, azimuth);
+            _vzPencilRelayStrokeClaimed =
+                _vzPencilRelayStrokeConnected;
+            if (_vzPencilRelayStrokeClaimed)
+                return;
             break;
         }
     }
@@ -1981,7 +2084,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     }
     // Same Pencil handling as touchesBegan — see comments there.
     // type=0 (point) for continuous drag events.
-    for (UITouch *t in touches) {
+    if (_vzPencilRelayStrokeClaimed) for (UITouch *t in touches) {
         if (t.type == UITouchTypeStylus) {
             CGPoint p = [t locationInView:self];
             CGRect b = self.bounds;
@@ -1991,8 +2094,11 @@ static bool pencilVsockSend(uint8_t type, float pressure,
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
             float altitude = (float)t.altitudeAngle;
             float azimuth = (float)[t azimuthAngleInView:self];
-            if (pencilVsockSend(kPencilEventPoint, pressure, nx, ny, altitude, azimuth)) return;
-            break;
+            if (_vzPencilRelayStrokeConnected)
+                _vzPencilRelayStrokeConnected = pencilVsockSend(
+                    kPencilEventPoint, pressure, nx, ny,
+                    altitude, azimuth);
+            return;
         }
     }
     if (touch) {
@@ -2023,7 +2129,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     // Pressure is 0 because the pen is no longer touching.
     // altitude=π/2 (perpendicular): the pen has no meaningful tilt
     // at lift-off, and this gives tilt=(0,0) after conversion.
-    for (UITouch *t in touches) {
+    if (_vzPencilRelayStrokeClaimed) for (UITouch *t in touches) {
         if (t.type == UITouchTypeStylus) {
             CGPoint p = [t locationInView:self];
             CGRect b = self.bounds;
@@ -2031,8 +2137,12 @@ static bool pencilVsockSend(uint8_t type, float pressure,
             float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
             float altitude = (float)t.altitudeAngle;
             float azimuth = (float)[t azimuthAngleInView:self];
-            if (pencilVsockSend(kPencilEventProximityLeave, 0, nx, ny, altitude, azimuth)) return;
-            break;
+            if (_vzPencilRelayStrokeConnected)
+                pencilVsockSend(kPencilEventProximityLeave, 0, nx, ny,
+                                altitude, azimuth);
+            _vzPencilRelayStrokeClaimed = NO;
+            _vzPencilRelayStrokeConnected = NO;
+            return;
         }
     }
     UITouch *touch = [touches anyObject];
@@ -2752,6 +2862,7 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     }
     printf("[VirtualMac] selected VM path=%s options=%s\n", path.UTF8String,
            options.description.UTF8String);
+    gVideoMemoryAlertPresented = NO;
     self.activeVMBundlePath = path;
     if (self.libraryNavigationController.view.window &&
         !self.libraryNavigationController.view.hidden) {
@@ -3001,7 +3112,6 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
             if ([VZAppSettings.sharedSettings boolForKey:VZAutoDeleteRestoreImageKey])
                 VZRemovePaths(@[self.installationRestoreImagePath]);
             NSString *installedPath = [[self.installationBundlePath copy] autorelease];
-            NSDictionary *installedOptions = [[self.installationOptions copy] autorelease];
             self.installationController.cancellationHandler = nil;
             [self.installationController.navigationController dismissViewControllerAnimated:YES completion:^{
                 self.installationController = nil;
@@ -3025,14 +3135,29 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
                               preferredStyle:UIAlertControllerStyleAlert];
                 [success addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
                     style:UIAlertActionStyleCancel handler:nil]];
-                [success addAction:[UIAlertAction actionWithTitle:VZL(@"Start")
-                    style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    (void)action;
-                    VZVMLibraryViewController *library = (id)
-                        self.libraryNavigationController.viewControllers.firstObject;
-                    [self vmLibrary:library bootBundleAtPath:installedPath
-                            options:installedOptions];
-                }]];
+                // Starting a second VZVirtualMachine in this process can
+                // replace the active display plumbing and freeze the running
+                // guest's framebuffer. Leave the completed VM in the library
+                // and offer Start only when there is no active VM.
+                if (!gVirtualMachine) {
+                    [success addAction:[UIAlertAction
+                        actionWithTitle:VZL(@"Start")
+                        style:UIAlertActionStyleDefault
+                        handler:^(UIAlertAction *action) {
+                        (void)action;
+                        // The installation sheet owns a mutable working copy of
+                        // the configuration. Reload the durable manifest after
+                        // installation so a same-session first boot receives the
+                        // exact options that later library boots use, including
+                        // newly introduced guest-tool feature keys.
+                        NSDictionary *installedOptions =
+                            VZVMOptionsForBundle(installedPath);
+                        VZVMLibraryViewController *library = (id)
+                            self.libraryNavigationController.viewControllers.firstObject;
+                        [self vmLibrary:library bootBundleAtPath:installedPath
+                                options:installedOptions];
+                    }]];
+                }
                 [self presentViewController:success animated:YES completion:nil];
             }];
             return;
@@ -3167,7 +3292,9 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
 
 - (void)finishVMAndShowLibraryWithError:(NSError *)error
 {
+    setVMJetsamProtection(NO);
     gSoftwareKeyboardRequested = NO;
+    pencilVsockReset();
     disconnectExternalDisplay();
     [gDisplayLayer removeFromSuperlayer];
     gDisplayLayer = nil;
@@ -3177,6 +3304,7 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     gFramebufferView = nil;
     [gVirtualMachine release];
     gVirtualMachine = nil;
+    gVideoMemoryAlertPresented = NO;
     gVirtualMachineDelegate = nil;
     gKeyboard = nil;
     gGlobeDown = NO;
@@ -3834,11 +3962,28 @@ static void configureDirectorySharing(id configuration,
 
 static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
                             NSError **error) {
+    BOOL guestToolsEnabled =
+        [options[VZVirtualMacGuestToolsEnabledKey] boolValue];
+    BOOL runtimePolicyEnabled = guestToolsEnabled &&
+        [options[VZOpenGLAccelerationEnabledKey] boolValue];
+    BOOL guestToolsRemovalPending =
+        [options[VZGuestToolsRemovalPendingKey] boolValue];
+#if EXPERIMENT_GDB_DEBUG
+    BOOL externalKernelDebug = [[NSFileManager defaultManager]
+        fileExistsAtPath:@"/tmp/vz-external-kernel-debug"];
+#endif
     id platform = NEW("VZMacPlatformConfiguration");
     id auxiliaryStorage = ((id(*)(id, SEL, id))objc_msgSend)(
         m0(CLS("VZMacAuxiliaryStorage"), "alloc"),
         S("initWithContentsOfURL:"),
         fileURL([bundlePath stringByAppendingPathComponent:@"AuxiliaryStorage"]));
+    NSError *bootArgumentError = nil;
+    if (!VZGuestToolsConfigureBootArguments(auxiliaryStorage,
+        guestToolsEnabled || guestToolsRemovalPending,
+        runtimePolicyEnabled,
+        &bootArgumentError))
+        fprintf(stderr, "[GuestTools] NVRAM update failed: %s\n",
+                bootArgumentError.localizedDescription.UTF8String);
     setObj(platform, "setAuxiliaryStorage:", auxiliaryStorage);
 
     NSData *hardwareModelData = [NSData dataWithContentsOfFile:
@@ -3979,13 +4124,31 @@ static id makeConfiguration(NSString *bundlePath, NSDictionary *options,
     configureNetwork(configuration, options);
     configureDirectorySharing(configuration, options);
 
-    // Vsock: expose a VirtioSocket device so the guest can communicate
-    // with the host over AF_VSOCK without network configuration.
-    // Used by pencil-probe to relay Apple Pencil pressure data.
-    id socketDevice = NEW("VZVirtioSocketDeviceConfiguration");
-    if (socketDevice) {
-        setObj(configuration, "setSocketDevices:", @[socketDevice]);
-        printf("[VirtualMac] configured vsock device\n");
+#if EXPERIMENT_GDB_DEBUG
+    if (!VZGuestRuntimePolicyConfigureDebugStub(configuration,
+            externalKernelDebug)) {
+        if (error) *error = [NSError errorWithDomain:@"VirtualMac" code:7
+            userInfo:@{NSLocalizedDescriptionKey:
+                VZL(@"The Virtual Mac configuration could not be created.")}];
+        return nil;
+    }
+#endif
+
+    // Keep the stock VM device set when tools are disabled. Add the console
+    // only while tools are active or for the single cleanup boot requested by
+    // an explicit transition from on to off.
+    if (guestToolsEnabled || guestToolsRemovalPending)
+        VZGuestToolsConfigureDevice(configuration);
+
+    if ([options[VZApplePencilPressureTiltEnabledKey] boolValue]) {
+        // Do not add a socket device for the default configuration. The
+        // Pencil relay and its host/guest input path are entirely opt-in.
+        id socketDevice = (guestToolsEnabled || guestToolsRemovalPending)
+            ? nil : NEW("VZVirtioSocketDeviceConfiguration");
+        if (socketDevice) {
+            setObj(configuration, "setSocketDevices:", @[socketDevice]);
+            printf("[VirtualMac] configured Pencil vsock device\n");
+        }
     }
 
     return configuration;
@@ -4136,6 +4299,12 @@ static void invokeVirtualMachineStartOnMain(void *opaque) {
 static void startVirtualMachineWorker(UIView *container, id delegate,
                                       NSString *bundlePath,
                                       NSDictionary *options) {
+    setVMJetsamProtection(YES);
+    pencilVsockReset();
+    VZGuestToolsReset();
+    __atomic_store_n(&gPencilRelayEnabled,
+        [options[VZApplePencilPressureTiltEnabledKey] boolValue],
+        __ATOMIC_RELEASE);
     unlink("/tmp/vzxpchook.log");
     unlink("/tmp/vmmhook.log");
     unlink("/tmp/vmm.stderr.log");
@@ -4145,7 +4314,9 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
     setenv("VZ_AVP_BOOTER",
            "/var/root/VirtualMac/payload/Frameworks/Virtualization.framework/Resources/AVPBooter.vmapple2.bin",
            1);
-    gDebugLogging = [VZAppSettings.sharedSettings boolForKey:VZDebugLoggingKey];
+    // Consume the one-shot mode at the actual boot boundary. The current boot
+    // keeps the captured value while Settings immediately returns to Off.
+    gDebugLogging = VZConsumeDebugLoggingForBoot();
     setenv("VZ_DEBUG_LOGGING", gDebugLogging ? "1" : "0", 1);
     setenv("VMMHOOK_TRACE_VCPU_LIMIT", gDebugLogging ? "256" : "8", 1);
     setenv("VMMHOOK_TRACE_XPC_LIMIT", gDebugLogging ? "200" : "8", 1);
@@ -4162,16 +4333,37 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
         setenv("PVG_TRACE_METHODS", "1", 1);
     else
         unsetenv("PVG_TRACE_METHODS");
-    // WindowServer's long-lived PVG task reached 1.07 GiB while Launchpad was
-    // populating its icon textures. Keep ordinary app clients at 1 GiB so 20+
-    // simultaneous clients fit in the iPad VA, but give the first three
-    // long-lived system clients 2 GiB. Their slots are recycled on deletion.
-    setenv("PVG_TASK_RESERVATION_GB", "1", 1);
-    setenv("PVG_LARGE_TASK_RESERVATION_GB", "2", 1);
+    // Ordinary clients start with a compact reservation and grow lazily below.
+    // Keep the first three long-lived system clients contiguous, however.
+    // WindowServer's Launchpad task crosses 256 MiB in one burst and older
+    // guests can stop submitting frames after that task is split across host
+    // reservations even though every individual map succeeds. Two GiB matches
+    // the proven 1.1.2 policy and still uses only a small fraction of iPadOS's
+    // roughly 63 GiB extended address space.
+    setenv("PVG_TASK_RESERVATION_MB", "256", 1);
+    // Once an ordinary client crosses its primary reservation, the PVG host
+    // adds a separate 2 GiB sparse reservation and translates PGTask's address
+    // helpers. Final Cut exceeded the old fixed 512 MiB reservation, while a
+    // launch-all stress test showed that only two of 74 ordinary clients did.
+    setenv("PVG_TASK_OVERFLOW_MB", "2048", 1);
+    setenv("PVG_LARGE_TASK_RESERVATION_MB", "2048", 1);
     setenv("PVG_LARGE_TASK_COUNT", "3", 1);
+    setenv("PVG_MIN_TASK_RESERVATION_MB", "64", 1);
     setenv("PVG_METALLIB_FALLBACK", "1", 1);
+    BOOL metalBCSupport =
+        [options[VZMetalBCSupportEnabledKey] boolValue];
+    setenv("VZ_METAL_BC_SUPPORT", metalBCSupport ? "1" : "0", 1);
 
     setStatus(VZL(@"Loading extracted Apple virtualization frameworks…"));
+    BOOL guestToolsEnabled =
+        [options[VZVirtualMacGuestToolsEnabledKey] boolValue];
+    BOOL openGLAcceleration = guestToolsEnabled &&
+        [options[VZOpenGLAccelerationEnabledKey] boolValue];
+    setenv("VZ_GUEST_RUNTIME_POLICY", openGLAcceleration ? "1" : "0", 1);
+    fprintf(stderr, "[GuestTools] VM option enabled=%d OpenGL=%d BC=%d pencil=%d\n",
+            guestToolsEnabled,
+            openGLAcceleration, metalBCSupport,
+            [options[VZApplePencilPressureTiltEnabledKey] boolValue]);
     if (!loadExtractedFrameworks()) {
         setStatus(VZL(@"Failed to load extracted frameworks"));
         NSError *loadError = [NSError errorWithDomain:@"VirtualMac" code:1
@@ -4194,8 +4386,11 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
         finishVMThreadSafe(delegate, error);
         return;
     }
+    printf("[VirtualMac] validating VM configuration\n");
     BOOL valid = ((BOOL(*)(id, SEL, NSError **))objc_msgSend)(
         configuration, S("validateWithError:"), &error);
+    printf("[VirtualMac] VM configuration validation result=%d error=%s\n",
+           valid, error ? error.description.UTF8String : "(none)");
     if (!valid) {
         setStatus([NSString stringWithFormat:VZL(@"Validation failed: %@"),
                                             error.localizedDescription]);
@@ -4203,9 +4398,14 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
         return;
     }
 
+    printf("[VirtualMac] constructing VM runtime\n");
     gVirtualMachine = ((id(*)(id, SEL, id))objc_msgSend)(
         m0(CLS("VZVirtualMachine"), "alloc"),
         S("initWithConfiguration:"), configuration);
+    printf("[VirtualMac] VM runtime constructed=%p\n", gVirtualMachine);
+    if (guestToolsEnabled ||
+        [options[VZGuestToolsRemovalPendingKey] boolValue])
+        VZGuestToolsAttachToVirtualMachine(gVirtualMachine);
     gVirtualMachineDelegate = delegate;
     if ([gVirtualMachine respondsToSelector:S("setDelegate:")])
         setObj(gVirtualMachine, "setDelegate:", delegate);
@@ -4230,6 +4430,21 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
         return;
     }
     setStatus(VZL(@"Starting Virtual Mac…"));
+    BOOL runtimePolicyEnabled = openGLAcceleration;
+#if EXPERIMENT_GDB_DEBUG
+    BOOL externalKernelDebug = [[NSFileManager defaultManager]
+        fileExistsAtPath:@"/tmp/vz-external-kernel-debug"];
+#endif
+    void (^finishStartedVM)(void) = ^{
+        dumpRPCHandlers(gVirtualMachine, "after-start");
+        setStatus(VZL(@"Virtual Mac running — preparing native PVG display"));
+        pencilVsockSetup();
+        VZGuestToolsStartProvisioning(bundlePath, guestToolsEnabled,
+                                      openGLAcceleration,
+            [options[VZApplePencilPressureTiltEnabledKey] boolValue],
+            [options[VZGuestToolsRemovalPendingKey] boolValue]);
+        gHostVMStarted();
+    };
     void (^completion)(NSError *) = ^(NSError *startError) {
         if (startError) {
             setStatus([NSString stringWithFormat:VZL(@"Virtual Mac start failed: %@"),
@@ -4240,16 +4455,15 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
         printf("[VirtualMac] VM STARTED state=%ld\n",
                (long)((NSInteger(*)(id, SEL))objc_msgSend)(
                    gVirtualMachine, S("state")));
-        dumpRPCHandlers(gVirtualMachine, "after-start");
-        setStatus(VZL(@"Virtual Mac running — preparing native PVG display"));
-        pencilVsockSetup();
-        gHostVMStarted();
-        // Let the start reply return before exposing the registered display.
-        dispatch_after(
-            dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
-            dispatch_get_main_queue(), ^{
-            activateFramebuffer();
-        });
+        // Publish the display as soon as VZ accepts the start, rather than
+        // hiding iBoot and the Apple progress UI behind the policy scan.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+            250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                activateFramebuffer();
+            });
+        fprintf(stderr, "[GuestPolicy] start completion enabled=%d\n",
+                runtimePolicyEnabled);
+        finishStartedVM();
     };
     id startOptions = nil;
     if ([options[@"BootRecovery"] boolValue] &&
@@ -4260,6 +4474,16 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
             startOptions, S("setStartUpFromMacOSRecovery:"), YES);
         printf("[VirtualMac] configured recovery start\n");
     }
+#if EXPERIMENT_GDB_DEBUG
+    if (externalKernelDebug &&
+        [gVirtualMachine respondsToSelector:
+            S("startWithOptions:completionHandler:")]) {
+        if (!startOptions)
+            startOptions = NEW("VZMacOSVirtualMachineStartOptions");
+        VZGuestRuntimePolicyConfigureStartOptions(startOptions);
+        printf("[GuestPolicy] configured development debug stop\n");
+    }
+#endif
     if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14 &&
         !pthread_main_np()) {
         VZInvokeStartContext *context = calloc(1, sizeof(*context));
@@ -4548,6 +4772,7 @@ static void disconnectExternalDisplay(void) {
 #endif
     installKeyboardRenderingFix();
     installShellShortcutRelay();
+    installVideoMemoryWarningRelay();
     gFixExternalDisplayScrollDirection = [VZAppSettings.sharedSettings
         boolForKey:VZExternalDisplayScrollFixKey];
     gScrollingSpeed = MAX(0.1, MIN(1.0,

@@ -27,6 +27,7 @@
 #include <limits.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <mach/mach_time.h>
 #include <ptrauth.h>
 #include <pthread.h>
@@ -61,8 +62,67 @@ extern char  _xpc_type_connection[]; // XPC_TYPE_CONNECTION
 extern char  _xpc_type_dictionary[]; // XPC_TYPE_DICTIONARY
 extern char  _xpc_type_error[];      // XPC_TYPE_ERROR
 extern int   sandbox_init(const char *profile, uint64_t flags, char **errorbuf);
-
+extern int   memorystatus_control(uint32_t command, int32_t pid,
+                                  uint32_t flags, void *buffer,
+                                  size_t buffer_size);
 static void logf_(const char *fmt, ...);
+
+// Stable userspace memorystatus_control ABI across the supported kernels:
+// https://github.com/apple-oss-distributions/xnu/blob/xnu-7195.141.2/bsd/sys/kern_memorystatus.h
+// https://github.com/apple-oss-distributions/xnu/blob/xnu-8019.41.5/bsd/sys/kern_memorystatus.h
+// https://github.com/apple-oss-distributions/xnu/blob/xnu-8792.81.2/bsd/sys/kern_memorystatus.h
+typedef struct {
+    int32_t memlimit_active;
+    uint32_t memlimit_active_attr;
+    int32_t memlimit_inactive;
+    uint32_t memlimit_inactive_attr;
+} vmm_memlimit_properties_t;
+
+static void configure_vmm_memory_policy(void) {
+    // The increased-memory-limit entitlement leaves this process with a
+    // 5 GiB high-water mark on supported iPads. PVG maps guest-backed pages a
+    // second time into each graphics task, so the VMM ledger can exceed
+    // physical RAM without consuming that much unique memory. In particular,
+    // an 8 GiB guest plus an 8 GiB Metal workload reaches a one-times-physical
+    // limit on a 16 GiB iPad and kills the complete app coalition. Allow two
+    // times physical RAM for that alias accounting. This changes only the
+    // non-fatal high-water mark; the existing jetsam priority and global
+    // pressure policy continue to protect the system under real pressure.
+    uint64_t physicalBytes = 0;
+    size_t physicalSize = sizeof(physicalBytes);
+    if (sysctlbyname("hw.memsize", &physicalBytes, &physicalSize,
+                     NULL, 0) != 0 || physicalBytes < (1ULL << 30)) {
+        logf_("[vmmhook] memory policy skipped: hw.memsize errno=%d", errno);
+        return;
+    }
+    uint64_t limitMiB = physicalBytes >> 19;
+    if (limitMiB > INT32_MAX)
+        limitMiB = INT32_MAX;
+
+    const uint32_t setProperties = 7;
+    const uint32_t getProperties = 8;
+    vmm_memlimit_properties_t requested = {
+        .memlimit_active = (int32_t)limitMiB,
+        .memlimit_active_attr = 0,   // non-fatal high-water mark
+        .memlimit_inactive = (int32_t)limitMiB,
+        .memlimit_inactive_attr = 0,
+    };
+    errno = 0;
+    int setResult = memorystatus_control(setProperties, getpid(), 0,
+                                         &requested, sizeof(requested));
+    int setError = errno;
+    vmm_memlimit_properties_t actual = {0};
+    errno = 0;
+    int getResult = memorystatus_control(getProperties, getpid(), 0,
+                                         &actual, sizeof(actual));
+    int getError = errno;
+    logf_("[vmmhook] memory policy requested=%llu MiB set=%d/%d "
+          "get=%d/%d active=%d/0x%x inactive=%d/0x%x",
+          limitMiB, setResult, setError, getResult, getError,
+          actual.memlimit_active, actual.memlimit_active_attr,
+          actual.memlimit_inactive, actual.memlimit_inactive_attr);
+}
+
 static NSInteger host_ipados_major_version(void);
 static BOOL host_is_ipados14(void);
 
@@ -349,6 +409,568 @@ static bool runtime_debug_logging;
 static bool runtime_trace_all_vcpu;
 static uint64_t runtime_xpc_trace_limit = 8;
 static uint64_t runtime_vcpu_trace_limit = 8;
+
+#ifndef EXPERIMENT_VENTURA_OPENGL
+#define EXPERIMENT_VENTURA_OPENGL 0
+#endif
+
+// OpenGL acceleration needs SIP disabled before the guest launches system
+// applications. The private VZ GDB device is not ABI-compatible with older
+// guests when used with the extracted Ventura framework, but the VMM already
+// owns writable host mappings of guest physical memory. Keep an inventory of
+// those mappings and apply the policy directly there. This is enabled only for
+// a VM whose OpenGL option is on and adds no debug device to its configuration.
+typedef struct {
+    uint8_t *address;
+    uint64_t ipa;
+    size_t size;
+    uint64_t flags;
+} vmm_guest_mapping_t;
+
+static pthread_mutex_t guest_policy_mapping_lock = PTHREAD_MUTEX_INITIALIZER;
+static vmm_guest_mapping_t guest_policy_mappings[64];
+static size_t guest_policy_mapping_count;
+static bool guest_runtime_policy_enabled;
+static uint32_t guest_runtime_policy_worker_started;
+static uint32_t guest_runtime_policy_generation;
+static uint64_t guest_policy_kernel_pc;
+static uint64_t guest_policy_ttbr1;
+static uint64_t guest_policy_tcr;
+
+static int64_t guest_policy_sign_extend(uint64_t value, unsigned bits) {
+    uint64_t sign = UINT64_C(1) << (bits - 1);
+    return (int64_t)((value ^ sign) - sign);
+}
+
+static uint64_t guest_policy_decode_adrp(uint64_t pc,
+                                         uint32_t instruction) {
+    uint64_t immediate = (((instruction >> 5) & 0x7ffff) << 2) |
+                         ((instruction >> 29) & 3);
+    return (uint64_t)((int64_t)(pc & ~UINT64_C(0xfff)) +
+        (guest_policy_sign_extend(immediate, 21) << 12));
+}
+
+static uint8_t *guest_policy_host_for_ipa(
+    const vmm_guest_mapping_t *mappings, size_t count, uint64_t ipa,
+    size_t size) {
+    for (size_t index = 0; index < count; ++index) {
+        if (ipa >= mappings[index].ipa && size <= mappings[index].size &&
+            ipa - mappings[index].ipa <= mappings[index].size - size)
+            return mappings[index].address + (ipa - mappings[index].ipa);
+    }
+    return NULL;
+}
+
+typedef struct {
+    unsigned pageBits;
+    unsigned indexBits;
+    unsigned startLevel;
+    uint64_t pageMask;
+} guest_policy_translation_t;
+
+static bool guest_policy_translation_parameters(
+    uint64_t tcr, guest_policy_translation_t *translation) {
+    unsigned tg1 = (unsigned)((tcr >> 30) & 3);
+    if (tg1 == 2) {
+        translation->pageBits = 12;
+        translation->indexBits = 9;
+    } else if (tg1 == 1) {
+        translation->pageBits = 14;
+        translation->indexBits = 11;
+    } else if (tg1 == 3) {
+        translation->pageBits = 16;
+        translation->indexBits = 13;
+    } else {
+        return false;
+    }
+    unsigned t1sz = (unsigned)((tcr >> 16) & 0x3f);
+    unsigned virtualBits = 64 - t1sz;
+    if (virtualBits <= translation->pageBits || virtualBits > 52)
+        return false;
+    unsigned indexLevels = (virtualBits - translation->pageBits +
+        translation->indexBits - 1) / translation->indexBits;
+    if (!indexLevels || indexLevels > 4) return false;
+    translation->startLevel = 4 - indexLevels;
+    translation->pageMask = (UINT64_C(1) << translation->pageBits) - 1;
+    return true;
+}
+
+static uint8_t *guest_policy_translate_virtual(
+    const vmm_guest_mapping_t *mappings, size_t count,
+    const guest_policy_translation_t *translation, uint64_t ttbr1,
+    uint64_t virtualAddress) {
+    const uint64_t physicalMask = UINT64_C(0x0000ffffffffffff);
+    uint64_t tableIPA = ttbr1 & physicalMask & ~translation->pageMask;
+    for (unsigned level = translation->startLevel; level <= 3; ++level) {
+        unsigned shift = translation->pageBits +
+            translation->indexBits * (3 - level);
+        uint64_t indexMask = (UINT64_C(1) << translation->indexBits) - 1;
+        uint64_t index = (virtualAddress >> shift) & indexMask;
+        uint8_t *descriptorAddress = guest_policy_host_for_ipa(
+            mappings, count, tableIPA + index * sizeof(uint64_t),
+            sizeof(uint64_t));
+        if (!descriptorAddress) return NULL;
+        uint64_t descriptor = 0;
+        memcpy(&descriptor, descriptorAddress, sizeof(descriptor));
+        if (!(descriptor & 1)) return NULL;
+        bool table = level < 3 && (descriptor & 2);
+        if (table) {
+            tableIPA = descriptor & physicalMask & ~translation->pageMask;
+            continue;
+        }
+        uint64_t outputMask = (UINT64_C(1) << shift) - 1;
+        uint64_t outputIPA = (descriptor & physicalMask & ~outputMask) |
+                             (virtualAddress & outputMask);
+        return guest_policy_host_for_ipa(mappings, count, outputIPA, 1);
+    }
+    return NULL;
+}
+
+static bool guest_policy_read_virtual(
+    const vmm_guest_mapping_t *mappings, size_t count,
+    const guest_policy_translation_t *translation, uint64_t ttbr1,
+    uint64_t virtualAddress, void *output, size_t size) {
+    uint8_t *destination = output;
+    size_t pageSize = (size_t)UINT64_C(1) << translation->pageBits;
+    while (size) {
+        size_t pageRemaining = pageSize -
+            ((size_t)virtualAddress & (pageSize - 1));
+        size_t chunk = MIN(size, pageRemaining);
+        uint8_t *source = guest_policy_translate_virtual(
+            mappings, count, translation, ttbr1, virtualAddress);
+        if (!source) return false;
+        memcpy(destination, source, chunk);
+        destination += chunk;
+        virtualAddress += chunk;
+        size -= chunk;
+    }
+    return true;
+}
+
+// TUNABLE(bool, bootarg_arm64e_preview_abi, "-arm64e_preview_abi", false)
+// emits a startup_tunable_spec containing the exact string pointer, variable
+// pointer, byte size, and Boolean marker. Locate that data description rather
+// than matching compiler instructions or a build-specific address. This is
+// needed when Apple Silicon LocalPolicy leaves the NVRAM value visible in the
+// Device Tree but excludes it from XNU's allowed boot arguments.
+// https://github.com/apple-oss-distributions/xnu/blob/xnu-8792.81.2/osfmk/kern/startup.h#L761-L771
+// https://github.com/apple-oss-distributions/xnu/blob/xnu-8792.81.2/bsd/kern/kern_exec.c#L201
+#if EXPERIMENT_VENTURA_OPENGL
+// Ventura's preview-ABI tunable can be found and changed reliably, but its
+// AppleMetalOpenGLRenderer output has blank regions through the iPad PVG
+// stack. Keep the build-independent locator for future investigation without
+// activating that incomplete renderer path in production.
+static volatile uint8_t *guest_policy_find_arm64e_preview_virtual(void) {
+    vmm_guest_mapping_t mappings[64];
+    pthread_mutex_lock(&guest_policy_mapping_lock);
+    size_t count = MIN(guest_policy_mapping_count,
+                       sizeof(mappings) / sizeof(mappings[0]));
+    memcpy(mappings, guest_policy_mappings, count * sizeof(mappings[0]));
+    pthread_mutex_unlock(&guest_policy_mapping_lock);
+    guest_policy_translation_t translation = {0};
+    if (!guest_policy_translation_parameters(guest_policy_tcr,
+                                             &translation))
+        return NULL;
+
+    typedef struct {
+        uint64_t address;
+        uint64_t size;
+    } candidate_section_t;
+    candidate_section_t keySections[8] = {0};
+    candidate_section_t specSections[8] = {0};
+    size_t keySectionCount = 0, specSectionCount = 0;
+    uint64_t pageSize = UINT64_C(1) << translation.pageBits;
+    uint64_t kernelHeader = guest_policy_kernel_pc & ~(pageSize - 1);
+    uint64_t textVMAddress = 0;
+    struct mach_header_64 header = {0};
+    for (unsigned attempt = 0;
+         attempt < 128 * 1024 * 1024 / pageSize; ++attempt,
+         kernelHeader -= pageSize) {
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, kernelHeader, &header, sizeof(header)) ||
+            header.magic != MH_MAGIC_64 || header.cputype != CPU_TYPE_ARM64 ||
+            (header.filetype != MH_EXECUTE && header.filetype != MH_FILESET) ||
+            !header.ncmds || header.ncmds >= 1000 ||
+            header.sizeofcmds > 1024 * 1024)
+            continue;
+        uint8_t *commands = malloc(header.sizeofcmds);
+        if (!commands) return NULL;
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, kernelHeader + sizeof(header), commands,
+                header.sizeofcmds)) {
+            free(commands);
+            continue;
+        }
+        const uint8_t *cursor = commands;
+        size_t remaining = header.sizeofcmds;
+        bool valid = true;
+        keySectionCount = specSectionCount = 0;
+        textVMAddress = 0;
+        for (uint32_t index = 0; index < header.ncmds; ++index) {
+            if (remaining < sizeof(struct load_command)) {
+                valid = false;
+                break;
+            }
+            const struct load_command *command = (const void *)cursor;
+            if (command->cmdsize < sizeof(*command) ||
+                command->cmdsize > remaining) {
+                valid = false;
+                break;
+            }
+            if (command->cmd == LC_SEGMENT_64 &&
+                command->cmdsize >= sizeof(struct segment_command_64)) {
+                const struct segment_command_64 *segment =
+                    (const void *)cursor;
+                if (!strncmp(segment->segname, "__TEXT", 16))
+                    textVMAddress = segment->vmaddr;
+                size_t sectionsSize = (size_t)segment->nsects *
+                    sizeof(struct section_64);
+                if (sectionsSize <= command->cmdsize - sizeof(*segment)) {
+                    const struct section_64 *sections =
+                        (const void *)(segment + 1);
+                    for (uint32_t sectionIndex = 0;
+                         sectionIndex < segment->nsects; ++sectionIndex) {
+                        const struct section_64 *section =
+                            &sections[sectionIndex];
+                        bool keySection =
+                            ((!strncmp(section->segname, "__TEXT", 16) ||
+                              !strncmp(section->segname, "__KLDDATA", 16)) &&
+                             !strncmp(section->sectname, "__cstring", 16)) ||
+                            (!strncmp(section->segname, "__BOOTDATA", 16) &&
+                             !strncmp(section->sectname, "__init", 16));
+                        bool specSection =
+                            (!strncmp(section->segname, "__KLDDATA", 16) &&
+                             !strncmp(section->sectname, "__const", 16)) ||
+                            (!strncmp(section->segname, "__BOOTDATA", 16) &&
+                             !strncmp(section->sectname, "__init", 16)) ||
+                            (!strncmp(section->segname, "__DATA_CONST", 16) &&
+                             !strncmp(section->sectname, "__init", 16));
+                        if (keySection && keySectionCount <
+                                sizeof(keySections) / sizeof(keySections[0]))
+                            keySections[keySectionCount++] =
+                                (candidate_section_t){section->addr,
+                                                      section->size};
+                        if (specSection && specSectionCount <
+                                sizeof(specSections) / sizeof(specSections[0]))
+                            specSections[specSectionCount++] =
+                                (candidate_section_t){section->addr,
+                                                      section->size};
+                    }
+                }
+            }
+            cursor += command->cmdsize;
+            remaining -= command->cmdsize;
+        }
+        free(commands);
+        if (valid && textVMAddress && keySectionCount && specSectionCount)
+            break;
+        textVMAddress = 0;
+        keySectionCount = specSectionCount = 0;
+    }
+    if (!textVMAddress || !keySectionCount || !specSectionCount) return NULL;
+    uint64_t slide = kernelHeader - textVMAddress;
+    static const char key[] = "-arm64e_preview_abi";
+    uint64_t keyAddresses[8] = {0};
+    size_t keyAddressCount = 0;
+    for (size_t candidateIndex = 0; candidateIndex < keySectionCount;
+         ++candidateIndex) {
+        uint64_t size64 = keySections[candidateIndex].size;
+        if (!size64 || size64 > 64 * 1024 * 1024) continue;
+        size_t size = (size_t)size64;
+        uint64_t liveAddress = keySections[candidateIndex].address + slide;
+        uint8_t *bytes = malloc(size);
+        if (!bytes) return NULL;
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, liveAddress, bytes, size)) {
+            free(bytes);
+            continue;
+        }
+        for (size_t keyOffset = 0;
+             keyOffset + sizeof(key) <= size; ++keyOffset) {
+            if (memcmp(bytes + keyOffset, key, sizeof(key))) continue;
+            if (keyAddressCount < sizeof(keyAddresses) /
+                    sizeof(keyAddresses[0]))
+                keyAddresses[keyAddressCount++] = liveAddress + keyOffset;
+        }
+        free(bytes);
+    }
+    if (!keyAddressCount) return NULL;
+    for (size_t candidateIndex = 0; candidateIndex < specSectionCount;
+         ++candidateIndex) {
+        uint64_t size64 = specSections[candidateIndex].size;
+        if (!size64 || size64 > 64 * 1024 * 1024) continue;
+        size_t size = (size_t)size64;
+        uint64_t liveAddress = specSections[candidateIndex].address + slide;
+        uint8_t *bytes = malloc(size);
+        if (!bytes) return NULL;
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, liveAddress, bytes, size)) {
+            free(bytes);
+            continue;
+        }
+        for (size_t keyIndex = 0; keyIndex < keyAddressCount; ++keyIndex) {
+            uint64_t keyAddress = keyAddresses[keyIndex];
+            // struct startup_tunable_spec is two pointers, int, bool, bool,
+            // then tail padding (24 bytes on arm64).
+            for (size_t specOffset = 0; specOffset + 24 <= size;
+                 specOffset += sizeof(uint64_t)) {
+                uint64_t nameAddress = 0, variableAddress = 0;
+                int32_t variableLength = 0;
+                memcpy(&nameAddress, bytes + specOffset, 8);
+                if (nameAddress != keyAddress) continue;
+                memcpy(&variableAddress, bytes + specOffset + 8, 8);
+                memcpy(&variableLength, bytes + specOffset + 16, 4);
+                bool variableIsBool = bytes[specOffset + 20] != 0;
+                bool variableIsString = bytes[specOffset + 21] != 0;
+                if (variableLength != 1 || !variableIsBool ||
+                    variableIsString)
+                    continue;
+                volatile uint8_t *variable =
+                    (volatile uint8_t *)guest_policy_translate_virtual(
+                        mappings, count, &translation, guest_policy_ttbr1,
+                        variableAddress);
+                if (!variable || *variable > 1) continue;
+                logf_("[GuestPolicy] arm64e preview tunable va=%p host=%p "
+                      "current=%u", (void *)variableAddress,
+                      (void *)variable, *variable);
+                free(bytes);
+                return variable;
+            }
+        }
+        free(bytes);
+    }
+    return NULL;
+}
+#endif
+
+static volatile uint32_t *guest_policy_find_csr_virtual(void) {
+    vmm_guest_mapping_t mappings[64];
+    pthread_mutex_lock(&guest_policy_mapping_lock);
+    size_t count = MIN(guest_policy_mapping_count,
+                       sizeof(mappings) / sizeof(mappings[0]));
+    memcpy(mappings, guest_policy_mappings, count * sizeof(mappings[0]));
+    pthread_mutex_unlock(&guest_policy_mapping_lock);
+    guest_policy_translation_t translation = {0};
+    if (!guest_policy_translation_parameters(guest_policy_tcr,
+                                             &translation)) {
+        logf_("[GuestPolicy] unsupported guest translation tcr=0x%llx",
+              (unsigned long long)guest_policy_tcr);
+        return NULL;
+    }
+
+    uint64_t pageSize = UINT64_C(1) << translation.pageBits;
+    uint64_t kernelHeader = guest_policy_kernel_pc & ~(pageSize - 1);
+    struct mach_header_64 header = {0};
+    uint8_t *commands = NULL;
+    uint64_t textVMAddress = 0, executeVMAddress = 0, executeSize = 0;
+    for (unsigned attempt = 0;
+         attempt < 128 * 1024 * 1024 / pageSize; ++attempt,
+         kernelHeader -= pageSize) {
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, kernelHeader, &header, sizeof(header)) ||
+            header.magic != MH_MAGIC_64 || header.cputype != CPU_TYPE_ARM64 ||
+            (header.filetype != MH_EXECUTE && header.filetype != MH_FILESET) ||
+            !header.ncmds || header.ncmds >= 1000 ||
+            header.sizeofcmds > 1024 * 1024)
+            continue;
+        commands = malloc(header.sizeofcmds);
+        if (!commands) return NULL;
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, kernelHeader + sizeof(header), commands,
+                header.sizeofcmds)) {
+            free(commands);
+            commands = NULL;
+            continue;
+        }
+        const uint8_t *cursor = commands;
+        size_t remaining = header.sizeofcmds;
+        bool valid = true;
+        for (uint32_t index = 0; index < header.ncmds; ++index) {
+            if (remaining < sizeof(struct load_command)) {
+                valid = false;
+                break;
+            }
+            const struct load_command *command = (const void *)cursor;
+            if (command->cmdsize < sizeof(*command) ||
+                command->cmdsize > remaining) {
+                valid = false;
+                break;
+            }
+            if (command->cmd == LC_SEGMENT_64 &&
+                command->cmdsize >= sizeof(struct segment_command_64)) {
+                const struct segment_command_64 *segment =
+                    (const void *)cursor;
+                if (!strncmp(segment->segname, "__TEXT", 16))
+                    textVMAddress = segment->vmaddr;
+                else if (!strncmp(segment->segname, "__TEXT_EXEC", 16)) {
+                    executeVMAddress = segment->vmaddr;
+                    executeSize = segment->vmsize;
+                }
+            }
+            cursor += command->cmdsize;
+            remaining -= command->cmdsize;
+        }
+        free(commands);
+        commands = NULL;
+        if (valid && textVMAddress && executeVMAddress) break;
+        textVMAddress = executeVMAddress = executeSize = 0;
+    }
+    if (!textVMAddress || !executeVMAddress) return NULL;
+    uint64_t slide = kernelHeader - textVMAddress;
+    uint64_t executeLive = executeVMAddress + slide;
+    executeSize = MIN(executeSize, UINT64_C(32) * 1024 * 1024);
+    static const uint32_t csrCheckTail[] = {
+        0x321d012a, 0x5280022b, 0x6a0b011f,
+        0x1a8a0128, 0x6a28001f, 0x1a9f07e0, 0xd65f03c0,
+    };
+    const size_t chunkSize = 256 * 1024;
+    const size_t overlap = 64;
+    uint8_t *chunk = malloc(chunkSize);
+    if (!chunk) return NULL;
+    for (uint64_t offset = 0; offset < executeSize;) {
+        size_t length = (size_t)MIN((uint64_t)chunkSize,
+                                    executeSize - offset);
+        if (!guest_policy_read_virtual(mappings, count, &translation,
+                guest_policy_ttbr1, executeLive + offset, chunk, length))
+            break;
+        for (size_t position = 0; position + 40 <= length; position += 4) {
+            const uint32_t *instruction = (const void *)(chunk + position);
+            if ((instruction[2] & 0xff8003ff) != 0x12000109 ||
+                memcmp(instruction + 3, csrCheckTail,
+                       sizeof(csrCheckTail)))
+                continue;
+            uint32_t adrp = instruction[0], load = instruction[1];
+            if ((adrp & 0x9f00001f) != 0x90000008 ||
+                (load & 0xffc003ff) != 0xb9400108)
+                continue;
+            uint64_t pc = executeLive + offset + position;
+            uint64_t csrVA = guest_policy_decode_adrp(pc, adrp) +
+                (((load >> 10) & 0xfff) * 4);
+            volatile uint32_t *csr = (volatile uint32_t *)
+                guest_policy_translate_virtual(mappings, count, &translation,
+                                               guest_policy_ttbr1, csrVA);
+            free(chunk);
+            logf_("[GuestPolicy] guest kernel=%p csr-va=%p tcr=0x%llx",
+                  (void *)kernelHeader, (void *)csrVA,
+                  (unsigned long long)guest_policy_tcr);
+            return csr;
+        }
+        if (length <= overlap) break;
+        offset += length - overlap;
+    }
+    free(chunk);
+    return NULL;
+}
+
+static void guest_policy_worker(uint32_t generation) {
+    volatile uint32_t *csr = NULL;
+#if EXPERIMENT_VENTURA_OPENGL
+    volatile uint8_t *arm64ePreview = NULL;
+#endif
+    // Kernel collection placement varies by guest release. Wait for resident
+    // kernel pages rather than delaying the vCPU or guessing a macOS version.
+    for (unsigned attempt = 0; attempt < 400 && !csr; ++attempt) {
+        if (generation != __atomic_load_n(
+                &guest_runtime_policy_generation, __ATOMIC_ACQUIRE))
+            return;
+#if EXPERIMENT_VENTURA_OPENGL
+        if (!arm64ePreview && attempt < 40)
+            arm64ePreview = guest_policy_find_arm64e_preview_virtual();
+        if (arm64ePreview)
+            __atomic_store_n(arm64ePreview, 1, __ATOMIC_RELEASE);
+#endif
+        csr = guest_policy_find_csr_virtual();
+        if (!csr) usleep(50 * 1000);
+    }
+    if (!csr) {
+        logf_("[GuestPolicy] guest kernel CSR policy was not found");
+        return;
+    }
+    logf_("[GuestPolicy] guest CSR policy found at host=%p", csr);
+#if EXPERIMENT_VENTURA_OPENGL
+    if (!arm64ePreview)
+        logf_("[GuestPolicy] arm64e preview tunable was not found");
+#endif
+    const uint32_t disabled = 0x6f;
+    uint32_t previous = UINT32_MAX;
+    unsigned changes = 0;
+    // csr_bootstrap imports signed LocalPolicy after the kernel first starts.
+    // Reassert across that bounded initialization window, then leave the vCPU
+    // hot path and guest memory untouched for the rest of the boot.
+    for (unsigned attempt = 0; attempt < 1500; ++attempt) {
+        if (generation != __atomic_load_n(
+                &guest_runtime_policy_generation, __ATOMIC_ACQUIRE))
+            return;
+#if EXPERIMENT_VENTURA_OPENGL
+        if (arm64ePreview &&
+            __atomic_load_n(arm64ePreview, __ATOMIC_ACQUIRE) != 1)
+            __atomic_store_n(arm64ePreview, 1, __ATOMIC_RELEASE);
+#endif
+        uint32_t current = __atomic_load_n(csr, __ATOMIC_ACQUIRE);
+        if (current != disabled) {
+            __atomic_store_n(csr, disabled, __ATOMIC_RELEASE);
+            if (changes++ < 8)
+                logf_("[GuestPolicy] guest CSR 0x%x -> 0x%x",
+                      current, disabled);
+        }
+        previous = current;
+        usleep(20 * 1000);
+    }
+    logf_("[GuestPolicy] guest CSR policy complete changes=%u last=0x%x",
+          changes, previous);
+}
+
+static void guest_policy_start_worker_if_needed(uint64_t kernelPC,
+                                                 uint64_t ttbr1,
+                                                 uint64_t tcr) {
+    if (!guest_runtime_policy_enabled)
+        return;
+    uint32_t expected = 0;
+    if (!__atomic_compare_exchange_n(&guest_runtime_policy_worker_started,
+            &expected, 2, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return;
+    guest_policy_kernel_pc = kernelPC;
+    guest_policy_ttbr1 = ttbr1;
+    guest_policy_tcr = tcr;
+    uint32_t generation = __atomic_load_n(
+        &guest_runtime_policy_generation, __ATOMIC_ACQUIRE);
+
+    // This call runs after the first early-kernel VM exit but before the VMM
+    // can enter the guest again. Apply the policy synchronously so AMFI and
+    // dyld cannot latch the signed LocalPolicy first. The asynchronous worker
+    // below remains responsible for the later csr_bootstrap import.
+    volatile uint32_t *csr = guest_policy_find_csr_virtual();
+    if (csr) {
+        uint32_t current = __atomic_load_n(csr, __ATOMIC_ACQUIRE);
+        if (current != 0x6f) {
+            __atomic_store_n(csr, 0x6f, __ATOMIC_RELEASE);
+            logf_("[GuestPolicy] early guest CSR 0x%x -> 0x6f", current);
+        }
+    } else {
+        logf_("[GuestPolicy] early guest CSR policy was not found");
+    }
+
+    expected = 2;
+    if (!__atomic_compare_exchange_n(&guest_runtime_policy_worker_started,
+            &expected, 1, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+        return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        guest_policy_worker(generation);
+    });
+}
+
+static void guest_policy_rearm_after_reboot(void) {
+    if (!guest_runtime_policy_enabled)
+        return;
+    __atomic_add_fetch(&guest_runtime_policy_generation, 1,
+                       __ATOMIC_ACQ_REL);
+    guest_policy_kernel_pc = 0;
+    guest_policy_ttbr1 = 0;
+    guest_policy_tcr = 0;
+    __atomic_store_n(&guest_runtime_policy_worker_started, 0,
+                     __ATOMIC_RELEASE);
+    logf_("[GuestPolicy] primary vCPU reset rearmed runtime policy");
+}
 
 static bool environment_flag_enabled(const char *name) {
     const char *value = getenv(name);
@@ -2234,6 +2856,8 @@ static void start_health_timer(void) {
 
 __attribute__((constructor)) static void hook_init(void) {
     runtime_debug_logging = environment_flag_enabled("VZ_DEBUG_LOGGING");
+    guest_runtime_policy_enabled =
+        environment_flag_enabled("VZ_GUEST_RUNTIME_POLICY");
     runtime_trace_all_vcpu = runtime_debug_logging &&
         environment_flag_enabled("VMMHOOK_TRACE_VCPU");
     const char *xpcLimit = getenv("VMMHOOK_TRACE_XPC_LIMIT");
@@ -2243,6 +2867,7 @@ __attribute__((constructor)) static void hook_init(void) {
     if (vcpuLimit && vcpuLimit[0])
         runtime_vcpu_trace_limit = strtoull(vcpuLimit, NULL, 0);
     logf_("[vmmhook] loaded pid %d", getpid());
+    configure_vmm_memory_policy();
     // macOS configures its host audio endpoint through CoreAudio HAL. On iOS,
     // the same endpoint needs an explicit per-process AVAudioSession before
     // input buffers contain microphone samples. The VMM owns the actual host
@@ -2512,6 +3137,17 @@ _ip_hv_vm_create __attribute__((section("__DATA,__interpose"))) =
 extern int hv_vm_map(void *addr, uint64_t ipa, size_t size, uint64_t flags);
 static int vmm_hv_vm_map(void *addr, uint64_t ipa, size_t size, uint64_t flags) {
     int rc = hv_vm_map(addr, ipa, size, flags);
+    if (rc == 0 && guest_runtime_policy_enabled) {
+        pthread_mutex_lock(&guest_policy_mapping_lock);
+        if (guest_policy_mapping_count <
+            sizeof(guest_policy_mappings) / sizeof(guest_policy_mappings[0])) {
+            guest_policy_mappings[guest_policy_mapping_count++] =
+                (vmm_guest_mapping_t){
+                    .address = addr, .ipa = ipa, .size = size, .flags = flags,
+                };
+        }
+        pthread_mutex_unlock(&guest_policy_mapping_lock);
+    }
     uint64_t count = diagnostic_sequence(&vmm_vm_map_calls, 8);
     if (count || rc != 0) {
         logf_("[vmmhook] hv_vm_map #%llu addr=%p ipa=0x%llx size=0x%zx flags=0x%llx -> rc=%d",
@@ -2567,6 +3203,25 @@ _ip_hv_vcpu_create __attribute__((section("__DATA,__interpose"))) =
 extern int hv_vcpu_run(uint64_t vcpu);
 extern int hv_vcpu_get_reg(uint64_t vcpu, uint32_t reg, uint64_t *value);
 extern int hv_vcpu_get_sys_reg(uint64_t vcpu, uint32_t reg, uint64_t *value);
+extern int hv_vcpu_set_reg(uint64_t vcpu, uint32_t reg, uint64_t value);
+
+static int vmm_hv_vcpu_set_reg(uint64_t vcpu, uint32_t reg, uint64_t value) {
+    int rc = hv_vcpu_set_reg(vcpu, reg, value);
+    // Virtualization.framework resets the primary vCPU PC to the low iBoot
+    // address when a guest reboots while the VMM process remains alive. This
+    // is the earliest reliable lifecycle event: guest-agent reconnect is too
+    // late because AMFI has already initialized by then.
+    if (rc == 0 && guest_runtime_policy_enabled && vcpu == 0 &&
+        reg == 31 /* HV_REG_PC */ && value < UINT64_C(0x100000000) &&
+        __atomic_load_n(&guest_runtime_policy_worker_started,
+                        __ATOMIC_ACQUIRE) != 0)
+        guest_policy_rearm_after_reboot();
+    return rc;
+}
+__attribute__((used)) static struct { const void *replacement; const void *replacee; }
+_ip_hv_vcpu_set_reg __attribute__((section("__DATA,__interpose"))) =
+    { (const void *)&vmm_hv_vcpu_set_reg, (const void *)&hv_vcpu_set_reg };
+
 static int vmm_hv_vcpu_run(uint64_t vcpu) {
     static uint64_t seen_vcpus;
     uint64_t bit = vcpu < 64 ? (1ULL << vcpu) : 0;
@@ -2578,6 +3233,20 @@ static int vmm_hv_vcpu_run(uint64_t vcpu) {
         logf_("[vmmhook] hv_vcpu_run CALLED vcpu=0x%llx%s",
               (unsigned long long)vcpu, first_run ? " (first)" : "");
     int rc = hv_vcpu_run(vcpu);
+    if (guest_runtime_policy_enabled &&
+        !__atomic_load_n(&guest_runtime_policy_worker_started,
+                         __ATOMIC_ACQUIRE)) {
+        uint64_t pc = 0, ttbr1 = 0, tcr = 0;
+        if (hv_vcpu_get_reg(vcpu, 31 /* HV_REG_PC */, &pc) == 0 &&
+            pc >= UINT64_C(0xffff000000000000) &&
+            hv_vcpu_get_sys_reg(vcpu,
+                0xc101 /* HV_SYS_REG_TTBR1_EL1 */, &ttbr1) == 0 &&
+            hv_vcpu_get_sys_reg(vcpu,
+                0xc102 /* HV_SYS_REG_TCR_EL1 */, &tcr) == 0 &&
+            ttbr1 && tcr) {
+            guest_policy_start_worker_if_needed(pc, ttbr1, tcr);
+        }
+    }
     uint64_t exit_count = vcpu < 64
         ? diagnostic_sequence(
               &vmm_vcpu_exit_counts[vcpu], runtime_vcpu_trace_limit)

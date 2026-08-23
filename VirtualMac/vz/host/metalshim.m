@@ -6,10 +6,13 @@
 // Wire-up: change the VMM binary's Metal LC_LOAD_DYLIB to /var/root/metalshim.ios.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <dlfcn.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <stdlib.h>
 #include <string.h>
+
+#import "native_bc_texture_support.h"
 
 static id (*gNewBufferWithLength)(id, SEL, NSUInteger, MTLResourceOptions);
 static id (*gNewBufferWithBytes)(
@@ -24,8 +27,57 @@ static id (*gNewTextureWithDescriptorIOSurface)(
 static void (*gSetTextureStorageMode)(id, SEL, MTLStorageMode);
 static void (*gSetTexturePixelFormat)(id, SEL, MTLPixelFormat);
 static void (*gSetHeapStorageMode)(id, SEL, MTLStorageMode);
+static BOOL (*gValidateTextureDescriptor)(id, SEL, id);
+static void (*gTextureReplaceRegionSlice)(
+    id, SEL, MTLRegion, NSUInteger, NSUInteger, const void *, NSUInteger,
+    NSUInteger);
+static void (*gTextureReplaceRegion)(
+    id, SEL, MTLRegion, NSUInteger, const void *, NSUInteger);
+static id (*gHeapNewTextureWithDescriptor)(
+    id, SEL, MTLTextureDescriptor *);
+static id (*gNewTextureView)(id, SEL, MTLPixelFormat);
+static id (*gNewTextureViewWithRanges)(
+    id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange);
+static id (*gNewTextureViewWithRangesAndSwizzle)(
+    id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange,
+    MTLTextureSwizzleChannels);
+typedef void (*ValidateTextureViewFn)(
+    id, id<MTLTexture>, MTLPixelFormat, MTLTextureType,
+    NSUInteger, NSUInteger, NSUInteger, NSUInteger, BOOL);
+static ValidateTextureViewFn gValidateTextureView;
+
+// Metal returns this private, 56-byte value indirectly on arm64.  Keeping the
+// exact aggregate shape is important: declaring the hook as a pointer-return
+// function would put the hidden result pointer in the wrong register.
+typedef struct {
+    uint64_t words[7];
+} VZPixelFormatInfo;
+typedef VZPixelFormatInfo (*PixelFormatGetInfoForDeviceFn)(
+    id<MTLDevice>, MTLPixelFormat);
+static PixelFormatGetInfoForDeviceFn gPixelFormatGetInfoForDevice;
+
+typedef void (*MSHookFunctionFn)(void *, void *, void **);
+static MSHookFunctionFn LoadMetalHookFunction(void) {
+    MSHookFunctionFn hook =
+        (MSHookFunctionFn)dlsym(RTLD_DEFAULT, "MSHookFunction");
+    if (hook) return hook;
+    static const char *paths[] = {
+        "/var/jb/usr/lib/libellekit.dylib",
+        "/var/jb/usr/lib/libhooker.dylib",
+        "/usr/lib/libhooker.dylib",
+    };
+    for (NSUInteger index = 0;
+         index < sizeof(paths) / sizeof(paths[0]); ++index) {
+        void *image = dlopen(paths[index], RTLD_NOW | RTLD_LOCAL);
+        hook = image ? (MSHookFunctionFn)dlsym(image, "MSHookFunction") : NULL;
+        if (hook) return hook;
+    }
+    return NULL;
+}
 static BOOL gInstalledSharedBufferCompatibility;
 static unsigned long gMacCompressedTextureCount;
+static id<MTLDevice> gMetalDevice;
+static id<MTLCommandQueue> gBCUploadQueue;
 
 static BOOL DebugLoggingEnabled(void) {
     static BOOL enabled;
@@ -156,40 +208,26 @@ static void iPadSetTextureStorageMode(id self, SEL selector,
         self, selector, iPadMetalStorageMode(storageMode));
 }
 
-static BOOL IsMacBCPixelFormat(MTLPixelFormat pixelFormat) {
-    // BC1 through BC7 occupy the Mac-only Metal values 130...153.
-    // iPadOS's descriptor validator rejects the enum.
-    return (NSUInteger)pixelFormat >= 130 && (NSUInteger)pixelFormat <= 153;
-}
-
-static MTLPixelFormat iPadCompressedFallback(MTLPixelFormat pixelFormat) {
-    // Keep each format's 4x4 block dimensions and byte count so guest upload
-    // pitches, mip offsets, and buffer sizes remain valid. iPadOS 16.3 rejects
-    // BC formats before the GPU driver; its native ETC/EAC/ASTC formats are a
-    // safe crash-prevention fallback for effects and transient image textures.
-    switch ((NSUInteger)pixelFormat) {
-        case 130: return (MTLPixelFormat)180; // BC1 -> ETC2 RGB8
-        case 131: return (MTLPixelFormat)181; // BC1 sRGB -> ETC2 RGB8 sRGB
-        case 140: return (MTLPixelFormat)170; // BC4 unorm -> EAC R11 unorm
-        case 141: return (MTLPixelFormat)172; // BC4 snorm -> EAC R11 snorm
-        case 142: return (MTLPixelFormat)174; // BC5 unorm -> EAC RG11 unorm
-        case 143: return (MTLPixelFormat)176; // BC5 snorm -> EAC RG11 snorm
-        case 133: case 135: case 153:
-            return (MTLPixelFormat)186;       // 16-byte sRGB -> ASTC 4x4 sRGB
-        case 150: case 151:
-            return (MTLPixelFormat)222;       // BC6H -> ASTC 4x4 HDR
-        default:
-            return (MTLPixelFormat)204;       // 16-byte linear -> ASTC 4x4 LDR
-    }
-}
-
 static void iPadSetTexturePixelFormat(id self, SEL selector,
                                      MTLPixelFormat pixelFormat) {
-    if (!IsMacBCPixelFormat(pixelFormat)) {
+    if (!VZIsBCPixelFormat(pixelFormat)) {
         gSetTexturePixelFormat(self, selector, pixelFormat);
         return;
     }
-    MTLPixelFormat fallback = iPadCompressedFallback(pixelFormat);
+    if (VZNativeBCTextureSupportInstalled()) {
+        void *descriptorPrivate = ((void *(*)(id, SEL))objc_msgSend)(
+            self, sel_registerName("descriptorPrivate"));
+        if (descriptorPrivate == NULL) return;
+        ((NSUInteger *)descriptorPrivate)[1] = (NSUInteger)pixelFormat;
+        if (DebugLoggingEnabled())
+            fprintf(stderr,
+                    "[metalshim] passing native Mac BC format=%lu to AGX\n",
+                    (unsigned long)pixelFormat);
+        return;
+    }
+    // Hosts without the exact, validated native AGX table retain the shipped
+    // crash-prevention mapping. No conversion code runs in either path.
+    MTLPixelFormat fallback = VZBCValidationSurrogate(pixelFormat);
     if (DebugLoggingEnabled()) {
         unsigned long count = __sync_add_and_fetch(
             &gMacCompressedTextureCount, 1);
@@ -206,18 +244,98 @@ static void iPadSetHeapStorageMode(id self, SEL selector,
         self, selector, iPadMetalStorageMode(storageMode));
 }
 
+static BOOL iPadValidateTextureDescriptor(id self, SEL selector, id device) {
+    if (!VZNativeBCTextureSupportInstalled())
+        return gValidateTextureDescriptor(self, selector, device);
+    NSUInteger *descriptorPrivate = ((NSUInteger *(*)(id, SEL))objc_msgSend)(
+        self, sel_registerName("descriptorPrivate"));
+    MTLPixelFormat format = descriptorPrivate
+        ? (MTLPixelFormat)descriptorPrivate[1] : MTLPixelFormatInvalid;
+    if (!VZIsBCPixelFormat(format))
+        return gValidateTextureDescriptor(self, selector, device);
+    descriptorPrivate[1] = (NSUInteger)VZBCValidationSurrogate(format);
+    BOOL valid = gValidateTextureDescriptor(self, selector, device);
+    descriptorPrivate[1] = (NSUInteger)format;
+    return valid;
+}
+
 static void NormalizeTextureDescriptor(MTLTextureDescriptor *descriptor) {
     if ((NSUInteger)descriptor.storageMode == 1) {
         descriptor.storageMode = MTLStorageModeShared;
     }
 }
 
+// iPadOS 16.3.1's Metal framework predates the public BC pixel-format enum
+// entries. AGX accepts the 16.4 format records installed above, but the common
+// IOGPU texture object otherwise records the format as Invalid. That metadata
+// is consulted when an engine creates a texture view, causing Metal's view
+// compatibility validation to abort even though the underlying AGX resource
+// is valid. Restore the metadata that iPadOS 16.4 records natively.
+static void SetNativeBCTextureMetadata(id texture, MTLPixelFormat format) {
+    if (!texture || !VZNativeBCTextureSupportInstalled() ||
+        !VZIsBCPixelFormat(format)) return;
+    Ivar pixelFormat = class_getInstanceVariable([texture class], "_pixelFormat");
+    Ivar compressed = class_getInstanceVariable([texture class], "_isCompressed");
+    if (pixelFormat)
+        *(MTLPixelFormat *)((uint8_t *)(void *)texture +
+                           ivar_getOffset(pixelFormat)) = format;
+    if (compressed)
+        *(BOOL *)((uint8_t *)(void *)texture + ivar_getOffset(compressed)) = YES;
+}
+
+static void ValidateNativeBCTextureView(
+    id device, id<MTLTexture> texture, MTLPixelFormat format,
+    MTLTextureType type, NSUInteger levelStart, NSUInteger levelCount,
+    NSUInteger sliceStart, NSUInteger sliceCount, BOOL compressedView) {
+    MTLPixelFormat sourceFormat = texture.pixelFormat;
+    if (!VZIsBCPixelFormat(sourceFormat) || !VZIsBCPixelFormat(format)) {
+        gValidateTextureView(device, texture, format, type,
+                             levelStart, levelCount, sliceStart, sliceCount,
+                             compressedView);
+        return;
+    }
+    Ivar pixelFormat = class_getInstanceVariable([texture class], "_pixelFormat");
+    if (!pixelFormat) {
+        gValidateTextureView(device, texture, format, type,
+                             levelStart, levelCount, sliceStart, sliceCount,
+                             compressedView);
+        return;
+    }
+    MTLPixelFormat *stored = (MTLPixelFormat *)((uint8_t *)(void *)texture +
+                                                ivar_getOffset(pixelFormat));
+    @try {
+        *stored = VZBCValidationSurrogate(sourceFormat);
+        gValidateTextureView(device, texture,
+                             VZBCValidationSurrogate(format), type,
+                             levelStart, levelCount, sliceStart, sliceCount,
+                             compressedView);
+    } @finally {
+        *stored = sourceFormat;
+    }
+}
+
+// Ventura's MetalSerializer asks the host Metal framework for block geometry
+// when it replays guest uploads.  iPadOS 16.3.1's generic Metal table, unlike
+// its AGX command path, has no BC records, so the replay can allocate a valid
+// native texture and then copy zero or incorrectly-strided data into it.  The
+// selected iPad formats have identical 4x4 block geometry, byte size, signed
+// or sRGB character to their BC counterpart.  Use their generic metadata only
+// for frontend sizing/validation; the descriptor and AGX resource retain the
+// original BC pixel-format number.
+static VZPixelFormatInfo NativeBCPixelFormatInfoForDevice(
+    id<MTLDevice> device, MTLPixelFormat format) {
+    if (VZNativeBCTextureSupportInstalled() && VZIsBCPixelFormat(format))
+        format = VZBCValidationSurrogate(format);
+    return gPixelFormatGetInfoForDevice(device, format);
+}
+
 static id iPadNewTextureWithDescriptor(
     id self, SEL selector, MTLTextureDescriptor *descriptor) {
     NormalizeTextureDescriptor(descriptor);
     id texture = gNewTextureWithDescriptor(self, selector, descriptor);
-    if (DebugLoggingEnabled() && IsMacBCPixelFormat(descriptor.pixelFormat))
-        fprintf(stderr, "[metalshim] BC texture format=%lu %lux%lu -> %p\n",
+    SetNativeBCTextureMetadata(texture, descriptor.pixelFormat);
+    if (DebugLoggingEnabled() && VZIsBCPixelFormat(descriptor.pixelFormat))
+        fprintf(stderr, "[metalshim] native BC texture format=%lu %lux%lu -> %p\n",
                 (unsigned long)descriptor.pixelFormat,
                 (unsigned long)descriptor.width,
                 (unsigned long)descriptor.height, texture);
@@ -228,8 +346,90 @@ static id iPadNewTextureWithDescriptorIOSurface(
     id self, SEL selector, MTLTextureDescriptor *descriptor,
     void *surface, NSUInteger plane) {
     NormalizeTextureDescriptor(descriptor);
-    return gNewTextureWithDescriptorIOSurface(
+    id texture = gNewTextureWithDescriptorIOSurface(
         self, selector, descriptor, surface, plane);
+    SetNativeBCTextureMetadata(texture, descriptor.pixelFormat);
+    return texture;
+}
+
+static id iPadHeapNewTextureWithDescriptor(
+    id self, SEL selector, MTLTextureDescriptor *descriptor) {
+    NormalizeTextureDescriptor(descriptor);
+    id texture = gHeapNewTextureWithDescriptor(self, selector, descriptor);
+    SetNativeBCTextureMetadata(texture, descriptor.pixelFormat);
+    return texture;
+}
+
+static id iPadNewTextureView(id self, SEL selector,
+                             MTLPixelFormat format) {
+    id texture = gNewTextureView(self, selector, format);
+    SetNativeBCTextureMetadata(texture, format);
+    return texture;
+}
+
+static id iPadNewTextureViewWithRanges(
+    id self, SEL selector, MTLPixelFormat format, MTLTextureType type,
+    NSRange levels, NSRange slices) {
+    id texture = gNewTextureViewWithRanges(
+        self, selector, format, type, levels, slices);
+    SetNativeBCTextureMetadata(texture, format);
+    return texture;
+}
+
+static id iPadNewTextureViewWithRangesAndSwizzle(
+    id self, SEL selector, MTLPixelFormat format, MTLTextureType type,
+    NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
+    id texture = gNewTextureViewWithRangesAndSwizzle(
+        self, selector, format, type, levels, slices, swizzle);
+    SetNativeBCTextureMetadata(texture, format);
+    return texture;
+}
+
+static BOOL UploadNativeBCTexture(id<MTLTexture> texture, MTLRegion region,
+                                  NSUInteger level, NSUInteger slice,
+                                  const void *bytes, NSUInteger bytesPerRow,
+                                  NSUInteger bytesPerImage) {
+    if (!VZNativeBCTextureSupportInstalled() ||
+        !VZIsBCPixelFormat(texture.pixelFormat) || !gBCUploadQueue) return NO;
+    NSUInteger blockRows = MAX((region.size.height + 3) / 4, (NSUInteger)1);
+    NSUInteger imageBytes = bytesPerImage ?: bytesPerRow * blockRows;
+    NSUInteger totalBytes = imageBytes * MAX(region.size.depth, (NSUInteger)1);
+    id<MTLBuffer> upload = [gMetalDevice newBufferWithBytes:bytes
+                                                     length:totalBytes options:0];
+    id<MTLCommandBuffer> command = [gBCUploadQueue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromBuffer:upload sourceOffset:0 sourceBytesPerRow:bytesPerRow
+     sourceBytesPerImage:imageBytes sourceSize:region.size toTexture:texture
+        destinationSlice:slice destinationLevel:level
+       destinationOrigin:region.origin];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        fprintf(stderr, "[metalshim] native BC upload failed: %s\n",
+                command.error.description.UTF8String ?: "unknown error");
+    }
+    [upload release];
+    return YES;
+}
+
+static void iPadTextureReplaceRegionSlice(
+    id self, SEL selector, MTLRegion region, NSUInteger level,
+    NSUInteger slice, const void *bytes, NSUInteger bytesPerRow,
+    NSUInteger bytesPerImage) {
+    if (!UploadNativeBCTexture(self, region, level, slice, bytes, bytesPerRow,
+                               bytesPerImage)) {
+        gTextureReplaceRegionSlice(self, selector, region, level, slice, bytes,
+                                   bytesPerRow, bytesPerImage);
+    }
+}
+
+static void iPadTextureReplaceRegion(
+    id self, SEL selector, MTLRegion region, NSUInteger level,
+    const void *bytes, NSUInteger bytesPerRow) {
+    if (!UploadNativeBCTexture(self, region, level, 0, bytes, bytesPerRow, 0)) {
+        gTextureReplaceRegion(self, selector, region, level, bytes, bytesPerRow);
+    }
 }
 
 static void iPadSharedBufferDidModifyRange(id self, SEL selector,
@@ -291,6 +491,38 @@ static void InstallMacMetalDeviceCompatibility(void) {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (device == nil) {
             return;
+        }
+        const char *bcSupport = getenv("VZ_METAL_BC_SUPPORT");
+        BOOL nativeBC = (!bcSupport || strcmp(bcSupport, "0")) &&
+            VZInstallNativeBCTextureSupport();
+        if (nativeBC) {
+            gMetalDevice = [device retain];
+            gBCUploadQueue = [device newCommandQueue];
+            MSHookFunctionFn hook = LoadMetalHookFunction();
+            void *validator = dlsym(
+                RTLD_DEFAULT,
+                "_mtlValidateArgumentsForTextureViewOnDevice");
+            if (hook && validator) {
+                hook(validator, (void *)ValidateNativeBCTextureView,
+                     (void **)&gValidateTextureView);
+            }
+            void *pixelFormatInfo = dlsym(
+                RTLD_DEFAULT, "MTLPixelFormatGetInfoForDevice");
+            if (hook && pixelFormatInfo) {
+                hook(pixelFormatInfo,
+                     (void *)NativeBCPixelFormatInfoForDevice,
+                     (void **)&gPixelFormatGetInfoForDevice);
+            }
+            Class descriptorClass =
+                NSClassFromString(@"MTLTextureDescriptorInternal");
+            Method validationMethod = class_getInstanceMethod(
+                descriptorClass, sel_registerName("validateWithDevice:"));
+            if (validationMethod != NULL) {
+                gValidateTextureDescriptor =
+                    (BOOL (*)(id, SEL, id))method_setImplementation(
+                        validationMethod,
+                        (IMP)iPadValidateTextureDescriptor);
+            }
         }
         class_addMethod([device class],
                         NSSelectorFromString(@"isLowPower"),
@@ -380,12 +612,62 @@ static void InstallMacMetalDeviceCompatibility(void) {
                 [textureDescriptor class], @"setPixelFormat:",
                 (IMP)iPadSetTexturePixelFormat);
 
+        if (nativeBC) {
+            id<MTLTexture> sampleTexture =
+                [device newTextureWithDescriptor:textureDescriptor];
+            if (sampleTexture != nil) {
+                gTextureReplaceRegionSlice =
+                    (void (*)(id, SEL, MTLRegion, NSUInteger, NSUInteger,
+                              const void *, NSUInteger, NSUInteger))
+                        ReplaceMetalMethod(
+                            [sampleTexture class],
+                            @"replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:",
+                            (IMP)iPadTextureReplaceRegionSlice);
+                gTextureReplaceRegion =
+                    (void (*)(id, SEL, MTLRegion, NSUInteger, const void *,
+                              NSUInteger))ReplaceMetalMethod(
+                            [sampleTexture class],
+                            @"replaceRegion:mipmapLevel:withBytes:bytesPerRow:",
+                            (IMP)iPadTextureReplaceRegion);
+                gNewTextureView =
+                    (id (*)(id, SEL, MTLPixelFormat))ReplaceMetalMethod(
+                        [sampleTexture class],
+                        @"newTextureViewWithPixelFormat:",
+                        (IMP)iPadNewTextureView);
+                gNewTextureViewWithRanges =
+                    (id (*)(id, SEL, MTLPixelFormat, MTLTextureType,
+                            NSRange, NSRange))ReplaceMetalMethod(
+                        [sampleTexture class],
+                        @"newTextureViewWithPixelFormat:textureType:levels:slices:",
+                        (IMP)iPadNewTextureViewWithRanges);
+                gNewTextureViewWithRangesAndSwizzle =
+                    (id (*)(id, SEL, MTLPixelFormat, MTLTextureType,
+                            NSRange, NSRange, MTLTextureSwizzleChannels))
+                        ReplaceMetalMethod(
+                            [sampleTexture class],
+                            @"newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
+                            (IMP)iPadNewTextureViewWithRangesAndSwizzle);
+            }
+        }
+
         MTLHeapDescriptor *heapDescriptor = [[MTLHeapDescriptor alloc] init];
         gSetHeapStorageMode =
             (void (*)(id, SEL, MTLStorageMode))ReplaceMetalMethod(
                 [heapDescriptor class],
                 @"setStorageMode:",
                 (IMP)iPadSetHeapStorageMode);
+        if (nativeBC) {
+            heapDescriptor.storageMode = MTLStorageModePrivate;
+            heapDescriptor.size = 64 * 1024;
+            id<MTLHeap> sampleHeap = [device newHeapWithDescriptor:heapDescriptor];
+            if (sampleHeap) {
+                gHeapNewTextureWithDescriptor =
+                    (id (*)(id, SEL, MTLTextureDescriptor *))ReplaceMetalMethod(
+                        [sampleHeap class], @"newTextureWithDescriptor:",
+                        (IMP)iPadHeapNewTextureWithDescriptor);
+            }
+            [sampleHeap release];
+        }
 
         MTLSamplerDescriptor *samplerDescriptor =
             [[MTLSamplerDescriptor alloc] init];

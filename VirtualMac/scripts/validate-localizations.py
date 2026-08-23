@@ -13,7 +13,7 @@ EXPECTED = {
     "nl", "no", "pl", "pt", "pt_PT", "ro", "ru", "sk", "sl", "sv",
     "th", "tr", "uk", "vi", "zh_CN", "zh_HK", "zh_TW",
 }
-SOURCE_PATTERN = re.compile(r'VZL\(@"((?:[^"\\]|\\.)*)"\)')
+SOURCE_PATTERN = re.compile(r'(?:VZL|VML)\(@"((?:[^"\\]|\\.)*)"\)')
 STRINGS_PATTERN = re.compile(r'^"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)";', re.M)
 FORMAT_PATTERN = re.compile(
     r'%(?:%|(?:\d+\$)?[-+ #0\']*(?:\d+|\*)?(?:\.(?:\d+|\*))?'
@@ -52,7 +52,9 @@ def fail(message: str) -> None:
 
 
 source_keys = set()
-for source in (ROOT / "vz" / "host").glob("*.m"):
+sources = list((ROOT / "vz" / "host").glob("*.m"))
+sources += list((ROOT / "vz" / "guest").glob("*.m"))
+for source in sources:
     contents = source.read_text()
     source_keys.update(SOURCE_PATTERN.findall(contents))
     for pattern in RAW_UI_PATTERNS:

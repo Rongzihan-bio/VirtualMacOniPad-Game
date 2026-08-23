@@ -25,6 +25,12 @@ FOUNDATION_EXPORT NSString * const VZExternalDisplayScrollFixKey;
 FOUNDATION_EXPORT NSString * const VZScrollingSpeedKey;
 FOUNDATION_EXPORT NSString * const VZHUDOpacityKey;
 FOUNDATION_EXPORT NSString * const VZDebugLoggingKey;
+FOUNDATION_EXPORT NSString * const VZDebugLoggingModeOff;
+FOUNDATION_EXPORT NSString * const VZDebugLoggingModeNextBoot;
+FOUNDATION_EXPORT NSString * const VZDebugLoggingModeAlways;
+
+BOOL VZConsumeDebugLoggingForBoot(void);
+void VZEnableDebugLoggingForNextBoot(void);
 
 // RootHide relocates jailbreak applications below a randomized .jbroot
 // directory. Keep this probe independent of its SDK so the same executable

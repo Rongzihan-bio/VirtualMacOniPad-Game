@@ -9,7 +9,7 @@ ATTEMPTS="${1:-5}"
 START_WAIT="${VZ_IPAD_START_WAIT:-12}"
 INPUT_SELF_TEST="${VZ_IPAD_INPUT_SELF_TEST:-0}"
 DISMISS_RESTART_ALERT="${VZ_IPAD_DISMISS_RESTART_ALERT:-0}"
-BUNDLE="${VZ_IPAD_VM_BUNDLE:-/var/mobile/Media/VirtualMac/VM_Sequoia.bundle}"
+BUNDLE="${VZ_IPAD_VM_BUNDLE:-/var/mobile/Media/VirtualMac/Sequoia.bundle}"
 
 [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]] ||
     die "attempt count must be a positive integer"

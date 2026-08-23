@@ -74,6 +74,14 @@ if test ! -x "$jbctl"; then
     for source_file in "$rootful_payload/usr/libexec/VirtualMac/"*; do
         replace_file "$source_file" "/usr/libexec/VirtualMac/${source_file##*/}"
     done
+    # The package retains an explicit iPadOS 14 source variant, while the
+    # launch daemon deliberately uses one stable runtime path. A clean
+    # Taurine installation has no pre-existing unsuffixed file, so select the
+    # variant here rather than relying on a leftover from development or an
+    # older package.
+    replace_file \
+        "$rootful_payload/usr/libexec/VirtualMac/InternetSharing.ipados14" \
+        /usr/libexec/VirtualMac/InternetSharing
     replace_file "$universal_payload/usr/sbin/rtadvd" \
         /usr/sbin/VirtualMac/rtadvd
 
