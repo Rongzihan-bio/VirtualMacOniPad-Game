@@ -817,10 +817,15 @@ static void flushPendingScroll(void) {
 
     if (sendBegan || deltaRaw.dx != 0 || deltaRaw.dy != 0 ||
         deltaAccel.dx != 0 || deltaAccel.dy != 0) {
+        // Wheel input is delivered phase-less (NSEventPhaseNone), matching
+        // how a real Mac delivers mouse wheel events; only the two-finger
+        // pan carries the began/changed gesture lifecycle.
+        NSUInteger eventPhase = gPendingScrollDeviceCategory == 1
+            ? (sendBegan ? 1 : 4) : 0;
         sendScrollWheelEvent(deltaRaw, deltaAccel,
                              gPendingScrollDirectionInverted,
                              gPendingScrollDeviceCategory,
-                             sendBegan ? 1 : 4, 0);
+                             eventPhase, 0);
         gScrollBeganDelivered = YES;
     }
     if (drained && gScrollEndPending && mergeElapsed) {
@@ -864,6 +869,26 @@ static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
     }
     BOOL eventHasDelta = rawDelta.dx != 0 || rawDelta.dy != 0 ||
         acceleratedDelta.dx != 0 || acceleratedDelta.dy != 0;
+    // Hardware wheel input (deviceCategory 0) is discrete wheel semantics:
+    // the guest receives phase-less scroll events, exactly like a real Mac
+    // mouse wheel, so AppKit scroll views apply each delta directly. The
+    // began/changed/ended gesture lifecycle and the merge window only apply
+    // to the two-finger touch pan (deviceCategory 1), which is a real
+    // gesture. WebKit applies deltas regardless of phase, which is why
+    // browsers felt smooth while AppKit scroll views stuttered.
+    if (deviceCategory == 0) {
+        gPendingScrollRaw = CGVectorMake(
+            gPendingScrollRaw.dx + rawDelta.dx,
+            gPendingScrollRaw.dy + rawDelta.dy);
+        gPendingScrollAccelerated = CGVectorMake(
+            gPendingScrollAccelerated.dx + acceleratedDelta.dx,
+            gPendingScrollAccelerated.dy + acceleratedDelta.dy);
+        gPendingScrollDirectionInverted = directionInvertedFromDevice;
+        gPendingScrollDeviceCategory = deviceCategory;
+        if (eventHasDelta)
+            resumeScrollFlush();
+        return;
+    }
     switch (phase) {
     case 1: // began
         gScrollGestureActive = YES;
