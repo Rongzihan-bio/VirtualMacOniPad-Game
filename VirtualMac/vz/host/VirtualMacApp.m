@@ -123,9 +123,13 @@ static uint64_t gLastHealthKeyCount;
 static double gLastHealthSampleTime;
 // Scroll coalescing state: gesture lifecycle + accumulated deltas flushed at
 // most once per display frame by queueScrollWheel/flushPendingScroll.
+// gScrollEndPending/gScrollEndDeadline delay the ended phase so consecutive
+// wheel notches merge into one continuous gesture.
 static uint64_t gScrollReceivedEventCount;
 static BOOL gScrollGestureActive;
 static BOOL gScrollBeganDelivered;
+static BOOL gScrollEndPending;
+static double gScrollEndDeadline;
 static NSUInteger gScrollEndPhase;
 static NSUInteger gPendingScrollMomentumPhase;
 static CGVector gPendingScrollRaw;
@@ -746,6 +750,18 @@ static void resumeScrollFlush(void) {
     gScrollDisplayLink.paused = NO;
 }
 
+// Physical wheel notches arrive as a single UIKit event whose accelerated
+// delta can reach hundreds of points on fast spins. Forwarding that whole
+// jump in one event makes the guest lurch once per notch at low event rates;
+// instead slice each burst into per-frame chunks of at most this many points
+// so the guest sees a continuous, smooth stream (like macOS wheel delivery).
+static const double kScrollMaxDeltaPerEvent = 40.0;
+// UIKit delivers one wheel notch as its own began...ended mini-gesture.
+// Delay the ended by this window: a notch arriving inside the window extends
+// the gesture, so a fast wheel merges into one continuous scroll and the
+// guest only sees an ended once the wheel has been quiet.
+static const double kScrollGestureMergeWindow = 0.08;
+
 static void flushPendingScroll(void) {
     gScrollDisplayLink.paused = YES;
     if (!gPointingDevice) {
@@ -767,26 +783,63 @@ static void flushPendingScroll(void) {
         return;
     }
     BOOL sendBegan = gScrollGestureActive && !gScrollBeganDelivered;
-    BOOL hasDelta = gPendingScrollRaw.dx != 0 ||
+    BOOL hasPendingDelta = gPendingScrollRaw.dx != 0 ||
         gPendingScrollRaw.dy != 0 ||
         gPendingScrollAccelerated.dx != 0 ||
         gPendingScrollAccelerated.dy != 0;
-    NSUInteger phase = gScrollEndPhase
-        ? gScrollEndPhase : (sendBegan ? 1 : 4);
-    if (sendBegan || hasDelta || gScrollEndPhase) {
-        sendScrollWheelEvent(gPendingScrollRaw, gPendingScrollAccelerated,
-                             gPendingScrollDirectionInverted,
-                             gPendingScrollDeviceCategory, phase, 0);
-        gScrollBeganDelivered = YES;
-        gPendingScrollRaw = CGVectorMake(0, 0);
-        gPendingScrollAccelerated = CGVectorMake(0, 0);
-        if (gScrollEndPhase) {
-            gScrollEndPhase = 0;
-            gScrollGestureActive = NO;
-            gScrollBeganDelivered = NO;
-            gPendingScrollMomentumPhase = 0;
-        }
+    if (!sendBegan && !hasPendingDelta && !gScrollEndPending)
+        return; // nothing to deliver this frame
+
+    // Slice this frame's delta: the whole pending delta when it fits under
+    // the per-event cap, otherwise a proportional slice so the raw and
+    // accelerated components keep the ratio the device reported.
+    double maxDelta = MAX(fabs(gPendingScrollAccelerated.dx),
+                          fabs(gPendingScrollAccelerated.dy));
+    CGVector deltaRaw = gPendingScrollRaw;
+    CGVector deltaAccel = gPendingScrollAccelerated;
+    if (maxDelta > kScrollMaxDeltaPerEvent) {
+        double ratio = kScrollMaxDeltaPerEvent / maxDelta;
+        deltaRaw = CGVectorMake(gPendingScrollRaw.dx * ratio,
+                                gPendingScrollRaw.dy * ratio);
+        deltaAccel = CGVectorMake(gPendingScrollAccelerated.dx * ratio,
+                                  gPendingScrollAccelerated.dy * ratio);
     }
+    gPendingScrollRaw = CGVectorMake(
+        gPendingScrollRaw.dx - deltaRaw.dx,
+        gPendingScrollRaw.dy - deltaRaw.dy);
+    gPendingScrollAccelerated = CGVectorMake(
+        gPendingScrollAccelerated.dx - deltaAccel.dx,
+        gPendingScrollAccelerated.dy - deltaAccel.dy);
+    BOOL drained = gPendingScrollRaw.dx == 0 && gPendingScrollRaw.dy == 0 &&
+        gPendingScrollAccelerated.dx == 0 &&
+        gPendingScrollAccelerated.dy == 0;
+    BOOL mergeElapsed = CACurrentMediaTime() >= gScrollEndDeadline;
+
+    if (sendBegan || deltaRaw.dx != 0 || deltaRaw.dy != 0 ||
+        deltaAccel.dx != 0 || deltaAccel.dy != 0) {
+        sendScrollWheelEvent(deltaRaw, deltaAccel,
+                             gPendingScrollDirectionInverted,
+                             gPendingScrollDeviceCategory,
+                             sendBegan ? 1 : 4, 0);
+        gScrollBeganDelivered = YES;
+    }
+    if (drained && gScrollEndPending && mergeElapsed) {
+        // The wheel went quiet: close the continuous gesture with the phase
+        // the recognizer reported so the guest finalizes scrolling.
+        sendScrollWheelEvent(CGVectorMake(0, 0), CGVectorMake(0, 0),
+                             gPendingScrollDirectionInverted,
+                             gPendingScrollDeviceCategory,
+                             gScrollEndPhase ? gScrollEndPhase : 8, 0);
+        gScrollEndPending = NO;
+        gScrollEndPhase = 0;
+        gScrollGestureActive = NO;
+        gScrollBeganDelivered = NO;
+    }
+
+    // Keep the link alive while delta remains to stream or the merge window
+    // is still open; otherwise go idle.
+    if (!drained || (gScrollEndPending && !mergeElapsed))
+        gScrollDisplayLink.paused = NO;
 }
 
 static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
@@ -809,16 +862,28 @@ static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
         resumeScrollFlush();
         return;
     }
+    BOOL eventHasDelta = rawDelta.dx != 0 || rawDelta.dy != 0 ||
+        acceleratedDelta.dx != 0 || acceleratedDelta.dy != 0;
     switch (phase) {
     case 1: // began
         gScrollGestureActive = YES;
         gScrollBeganDelivered = NO;
+        // A new notch continues the stream: cancel any pending end so the
+        // gesture stays continuous across notches.
+        gScrollEndPending = NO;
+        gScrollEndPhase = 0;
         break;
     case 8: // ended
         gScrollEndPhase = 8;
+        gScrollEndPending = YES;
+        gScrollEndDeadline =
+            CACurrentMediaTime() + kScrollGestureMergeWindow;
         break;
     case 16: // cancelled / failed
         gScrollEndPhase = 16;
+        gScrollEndPending = YES;
+        gScrollEndDeadline =
+            CACurrentMediaTime() + kScrollGestureMergeWindow;
         break;
     case 4: // changed
         if (!gScrollGestureActive) {
@@ -826,6 +891,11 @@ static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
             // the guest; deliver it as a standalone changed.
             gScrollGestureActive = YES;
             gScrollBeganDelivered = YES;
+        }
+        if (eventHasDelta) {
+            // A continuing stream cancels the pending end.
+            gScrollEndPending = NO;
+            gScrollEndPhase = 0;
         }
         break;
     default:
@@ -840,16 +910,15 @@ static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
     gPendingScrollDirectionInverted = directionInvertedFromDevice;
     gPendingScrollDeviceCategory = deviceCategory;
     // Resume the link only when there is something to deliver this frame.
-    if (phase == 1 || gScrollEndPhase ||
-        gPendingScrollRaw.dx != 0 || gPendingScrollRaw.dy != 0 ||
-        gPendingScrollAccelerated.dx != 0 ||
-        gPendingScrollAccelerated.dy != 0)
+    if (phase == 1 || gScrollEndPending || eventHasDelta)
         resumeScrollFlush();
 }
 
 static void resetScrollCoalescing(void) {
     gScrollGestureActive = NO;
     gScrollBeganDelivered = NO;
+    gScrollEndPending = NO;
+    gScrollEndDeadline = 0;
     gScrollEndPhase = 0;
     gPendingScrollMomentumPhase = 0;
     gPendingScrollRaw = CGVectorMake(0, 0);
