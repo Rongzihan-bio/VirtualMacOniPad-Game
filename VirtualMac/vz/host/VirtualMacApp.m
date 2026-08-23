@@ -4,6 +4,7 @@
 #import <AVFAudio/AVFAudio.h>
 #import <CoreImage/CoreImage.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CADisplayLink.h>
 #import "NSViewShim.h"
 #import "VZVMLibraryViewController.h"
 #import "VZAppSettings.h"
@@ -105,6 +106,38 @@ static uint64_t gPointerEventCount;
 static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
+// Scroll diagnostics: 1s-window event-rate tracking written in
+// sendScrollWheel and read by the health monitor, plus per-health-tick
+// phase counters and count deltas used to separate input flooding from
+// display stalls. All writers/readers run on the main thread.
+static uint64_t gScrollRateWindowEvents;
+static double gScrollRateWindowStart;
+static double gScrollRateLastWindow;
+static double gScrollRatePeak;
+static uint64_t gHealthScrollBeganEvents;
+static uint64_t gHealthScrollChangedEvents;
+static uint64_t gHealthScrollEndedEvents;
+static uint64_t gLastHealthScrollCount;
+static uint64_t gLastHealthPointerCount;
+static uint64_t gLastHealthKeyCount;
+static double gLastHealthSampleTime;
+// Scroll coalescing state: gesture lifecycle + accumulated deltas flushed at
+// most once per display frame by queueScrollWheel/flushPendingScroll.
+// gScrollEndPending/gScrollEndDeadline delay the ended phase so consecutive
+// wheel notches merge into one continuous gesture.
+static uint64_t gScrollReceivedEventCount;
+static BOOL gScrollGestureActive;
+static BOOL gScrollBeganDelivered;
+static BOOL gScrollEndPending;
+static double gScrollEndDeadline;
+static NSUInteger gScrollEndPhase;
+static NSUInteger gPendingScrollMomentumPhase;
+static CGVector gPendingScrollRaw;
+static CGVector gPendingScrollAccelerated;
+static BOOL gPendingScrollDirectionInverted;
+static NSUInteger gPendingScrollDeviceCategory;
+static CADisplayLink *gScrollDisplayLink;
+static uint64_t gLastHealthReceivedCount;
 static BOOL gDebugLogging;
 static BOOL gFixExternalDisplayScrollDirection;
 static CGFloat gScrollingSpeed = 0.25;
@@ -150,6 +183,8 @@ static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed);
 static void sendPointer(CGPoint point, CGRect bounds, NSUInteger pressedButtons);
 static void updateExternalCursorForNormalizedLocation(CGPoint location);
 static void setStatus(NSString *status);
+static void flushPendingScroll(void);
+static void resetScrollCoalescing(void);
 // External display (Keynote-style: UIWindow.screen = externalScreen)
 static UIWindow *gExternalWindow;
 static UIView *gExternalMirrorView;
@@ -334,6 +369,7 @@ static BOOL shouldShowStatusLabel(void) {
 static void resetPointerSession(BOOL releaseButtons) {
     gHostPointerLocationValid = NO;
     gUIKitHoverActive = NO;
+    resetScrollCoalescing();
     if (releaseButtons && (gTouchButtons || gHardwareMouseButtons)) {
         gTouchButtons = 0;
         gHardwareMouseButtons = 0;
@@ -349,6 +385,7 @@ static void startHealthMonitor(void) {
     dispatch_source_set_timer(
         timer, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
         10 * NSEC_PER_SEC, NSEC_PER_SEC / 2);
+    gLastHealthSampleTime = CACurrentMediaTime();
     dispatch_source_set_event_handler(timer, ^{
         NSInteger state = gVirtualMachine
             ? ((NSInteger(*)(id, SEL))objc_msgSend)(
@@ -360,6 +397,43 @@ static void startHealthMonitor(void) {
             &gPointerButtonEventCount, __ATOMIC_RELAXED) +
             __atomic_load_n(&gScrollEventCount, __ATOMIC_RELAXED) +
             __atomic_load_n(&gKeyEventCount, __ATOMIC_RELAXED);
+        double now = CACurrentMediaTime();
+        double elapsed = MAX(now - gLastHealthSampleTime, 1e-3);
+        uint64_t scroll = __atomic_load_n(
+            &gScrollEventCount, __ATOMIC_RELAXED);
+        uint64_t pointer = __atomic_load_n(
+            &gPointerEventCount, __ATOMIC_RELAXED);
+        uint64_t keys = __atomic_load_n(
+            &gKeyEventCount, __ATOMIC_RELAXED);
+        uint64_t received = gScrollReceivedEventCount;
+        uint64_t scrollInTick = scroll - gLastHealthScrollCount;
+        uint64_t receivedInTick = received - gLastHealthReceivedCount;
+        uint64_t pointerInTick = pointer - gLastHealthPointerCount;
+        uint64_t keysInTick = keys - gLastHealthKeyCount;
+        if (scrollInTick || pointerInTick || keysInTick) {
+            // Always printed while input flows, independent of Debug
+            // Logging: injected scroll events/sec (scroll=), raw UIKit
+            // deliveries/sec (received=, which the coalescer folds down to
+            // at most one injected event per frame), the last 1s window and
+            // its session peak, the phase mix, and the other input rates.
+            // High received= next to a display stall means event flooding;
+            // low scroll= with a stall means the guest or the renderer is
+            // the bottleneck.
+            printf("[VirtualMac] input-rate scroll=%.0f/s received=%.0f/s "
+                   "window=%.0f/s peak=%.0f/s began=%llu changed=%llu "
+                   "ended=%llu pointer=%.0f/s keys=%.0f/s\n",
+                   (double)scrollInTick / elapsed,
+                   (double)receivedInTick / elapsed,
+                   gScrollRateLastWindow, gScrollRatePeak,
+                   (unsigned long long)gHealthScrollBeganEvents,
+                   (unsigned long long)gHealthScrollChangedEvents,
+                   (unsigned long long)gHealthScrollEndedEvents,
+                   (double)pointerInTick / elapsed,
+                   (double)keysInTick / elapsed);
+            gHealthScrollBeganEvents = 0;
+            gHealthScrollChangedEvents = 0;
+            gHealthScrollEndedEvents = 0;
+        }
         if (gDebugLogging) {
             printf("[VirtualMac] health state=%ld frames=%llu cursors=%llu "
                    "pointer=%llu scroll=%llu keys=%llu\n",
@@ -379,9 +453,11 @@ static void startHealthMonitor(void) {
             gFrameStallIntervals++;
             if (gFrameStallIntervals == 3 ||
                 gFrameStallIntervals % 6 == 0) {
-                printf("[VirtualMac] display stall intervals=%lu frames=%llu\n",
+                printf("[VirtualMac] display stall intervals=%lu frames=%llu "
+                       "scroll-window=%.0f/s scroll-peak=%.0f/s\n",
                        (unsigned long)gFrameStallIntervals,
-                       (unsigned long long)frames);
+                       (unsigned long long)frames,
+                       gScrollRateLastWindow, gScrollRatePeak);
                 logFramebufferState(
                     gFramebufferView, gFramebuffer, "stalled");
             }
@@ -390,6 +466,11 @@ static void startHealthMonitor(void) {
         }
         gLastHealthFrameCount = frames;
         gLastHealthInteractionCount = interactions;
+        gLastHealthScrollCount = scroll;
+        gLastHealthReceivedCount = received;
+        gLastHealthPointerCount = pointer;
+        gLastHealthKeyCount = keys;
+        gLastHealthSampleTime = now;
     });
     dispatch_resume(timer);
 }
@@ -550,10 +631,13 @@ static void sendMouseButton(NSUInteger mask, BOOL pressed) {
     });
 }
 
-static void sendScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
-                            BOOL directionInvertedFromDevice,
-                            NSUInteger deviceCategory,
-                            NSUInteger phase) {
+// Immediate injection of one scroll event into the guest pointing device.
+// Applies the device transforms, builds _VZScrollWheelEvent, and maintains
+// the scroll diagnostics counters. Main thread only.
+static void sendScrollWheelEvent(CGVector rawDelta, CGVector acceleratedDelta,
+                                 BOOL directionInvertedFromDevice,
+                                 NSUInteger deviceCategory,
+                                 NSUInteger phase, NSUInteger momentumPhase) {
     if (!gPointingDevice)
         return;
     UIScreen *inputScreen = gInputView.window.screen;
@@ -582,21 +666,292 @@ static void sendScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
           "acceleratedScrollingDeltaX:acceleratedScrollingDeltaY:"
           "scrollPhase:momentumPhase:"),
         -rawDelta.dy, rawDelta.dx,
-        -rawDelta.dy, rawDelta.dx, phase, 0);
+        -acceleratedDelta.dy, acceleratedDelta.dx, phase, momentumPhase);
     if (!event)
         return;
     ((void(*)(id, SEL, id))objc_msgSend)(
         gPointingDevice, S("sendScrollWheelEvents:"), @[event]);
     [event release];
     uint64_t count = __sync_add_and_fetch(&gScrollEventCount, 1);
+    // Bucket scroll events into 1s windows so the health monitor can expose
+    // input flooding (high events/sec) separately from display stalls.
+    double now = CACurrentMediaTime();
+    if (now - gScrollRateWindowStart >= 1.0) {
+        double rate = gScrollRateWindowEvents /
+            MAX(now - gScrollRateWindowStart, 1e-3);
+        gScrollRateLastWindow = rate;
+        if (rate > gScrollRatePeak)
+            gScrollRatePeak = rate;
+        gScrollRateWindowEvents = 0;
+        gScrollRateWindowStart = now;
+    }
+    gScrollRateWindowEvents++;
+    // Per-health-tick phase histogram. A scroll stream that never emits
+    // ended(8) cannot drive guest momentum scrolling, which reads as stutter.
+    if (phase == 1)
+        gHealthScrollBeganEvents++;
+    else if (phase == 4)
+        gHealthScrollChangedEvents++;
+    else if (phase == 8)
+        gHealthScrollEndedEvents++;
     if (count <= 12 || (gDebugLogging && phase != 4))
         printf("[VirtualMac] input scroll=%llu raw=%.3f,%.3f "
                "accelerated=%.3f,%.3f inverted=%d device=%lu "
-               "phase=0x%lx external-axis-fix=%d\n",
+               "phase=0x%lx momentum=0x%lx external-axis-fix=%d\n",
                (unsigned long long)count, rawDelta.dx, rawDelta.dy,
                acceleratedDelta.dx, acceleratedDelta.dy,
                directionInvertedFromDevice, (unsigned long)deviceCategory,
-               (unsigned long)phase, correctedExternalAxes);
+               (unsigned long)phase, (unsigned long)momentumPhase,
+               correctedExternalAxes);
+}
+
+// Immediate single-event path kept for the scripted input command; the
+// gesture recognizers go through queueScrollWheel for per-frame coalescing.
+static void sendScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
+                            BOOL directionInvertedFromDevice,
+                            NSUInteger deviceCategory,
+                            NSUInteger phase) {
+    sendScrollWheelEvent(rawDelta, acceleratedDelta,
+                         directionInvertedFromDevice, deviceCategory,
+                         phase, 0);
+}
+
+// ---- Scroll coalescing ----
+// Physical wheels can deliver several UIKit scroll events per display frame
+// (HID mice report up to 1000 Hz). Injecting every one synchronously floods
+// the guest event queue and reads as stutter. Instead, accumulate the raw
+// deltas and inject at most one event per frame on a CADisplayLink, the same
+// strategy macOS uses for wheel input. All state here is main-thread only.
+
+@interface VZScrollFlusher : NSObject
+@end
+
+@implementation VZScrollFlusher
+- (void)flushTick
+{
+    flushPendingScroll();
+}
+@end
+
+static VZScrollFlusher *gScrollFlusher;
+
+static void resumeScrollFlush(void) {
+    if (!gScrollDisplayLink) {
+        if (!gScrollFlusher)
+            gScrollFlusher = [[VZScrollFlusher alloc] init];
+        gScrollDisplayLink = [CADisplayLink
+            displayLinkWithTarget:gScrollFlusher
+                         selector:@selector(flushTick)];
+        [gScrollDisplayLink retain];
+        [gScrollDisplayLink addToRunLoop:NSRunLoop.mainRunLoop
+                                 forMode:NSRunLoopCommonModes];
+        gScrollDisplayLink.paused = YES;
+    }
+    gScrollDisplayLink.paused = NO;
+}
+
+// Physical wheel notches arrive as a single UIKit event whose accelerated
+// delta can reach hundreds of points on fast spins. Forwarding that whole
+// jump in one event makes the guest lurch once per notch at low event rates;
+// instead slice each burst into per-frame chunks of at most this many points
+// so the guest sees a continuous, smooth stream (like macOS wheel delivery).
+static const double kScrollMaxDeltaPerEvent = 40.0;
+// UIKit delivers one wheel notch as its own began...ended mini-gesture.
+// Delay the ended by this window: a notch arriving inside the window extends
+// the gesture, so a fast wheel merges into one continuous scroll and the
+// guest only sees an ended once the wheel has been quiet.
+static const double kScrollGestureMergeWindow = 0.08;
+
+static void flushPendingScroll(void) {
+    gScrollDisplayLink.paused = YES;
+    if (!gPointingDevice) {
+        resetScrollCoalescing();
+        return;
+    }
+    if (gPendingScrollMomentumPhase) {
+        // Device-supplied momentum (e.g. a Magic Mouse): carry the phase in
+        // the momentumPhase field with no gesture scrollPhase, matching how
+        // the guest expects momentum events.
+        NSUInteger momentum = gPendingScrollMomentumPhase;
+        sendScrollWheelEvent(gPendingScrollRaw, gPendingScrollAccelerated,
+                             gPendingScrollDirectionInverted,
+                             gPendingScrollDeviceCategory, 0, momentum);
+        gPendingScrollRaw = CGVectorMake(0, 0);
+        gPendingScrollAccelerated = CGVectorMake(0, 0);
+        if (momentum == 8 || momentum == 16)
+            gPendingScrollMomentumPhase = 0;
+        return;
+    }
+    BOOL sendBegan = gScrollGestureActive && !gScrollBeganDelivered;
+    BOOL hasPendingDelta = gPendingScrollRaw.dx != 0 ||
+        gPendingScrollRaw.dy != 0 ||
+        gPendingScrollAccelerated.dx != 0 ||
+        gPendingScrollAccelerated.dy != 0;
+    if (!sendBegan && !hasPendingDelta && !gScrollEndPending)
+        return; // nothing to deliver this frame
+
+    // Slice this frame's delta: the whole pending delta when it fits under
+    // the per-event cap, otherwise a proportional slice so the raw and
+    // accelerated components keep the ratio the device reported.
+    double maxDelta = MAX(fabs(gPendingScrollAccelerated.dx),
+                          fabs(gPendingScrollAccelerated.dy));
+    CGVector deltaRaw = gPendingScrollRaw;
+    CGVector deltaAccel = gPendingScrollAccelerated;
+    if (maxDelta > kScrollMaxDeltaPerEvent) {
+        double ratio = kScrollMaxDeltaPerEvent / maxDelta;
+        deltaRaw = CGVectorMake(gPendingScrollRaw.dx * ratio,
+                                gPendingScrollRaw.dy * ratio);
+        deltaAccel = CGVectorMake(gPendingScrollAccelerated.dx * ratio,
+                                  gPendingScrollAccelerated.dy * ratio);
+    }
+    gPendingScrollRaw = CGVectorMake(
+        gPendingScrollRaw.dx - deltaRaw.dx,
+        gPendingScrollRaw.dy - deltaRaw.dy);
+    gPendingScrollAccelerated = CGVectorMake(
+        gPendingScrollAccelerated.dx - deltaAccel.dx,
+        gPendingScrollAccelerated.dy - deltaAccel.dy);
+    BOOL drained = gPendingScrollRaw.dx == 0 && gPendingScrollRaw.dy == 0 &&
+        gPendingScrollAccelerated.dx == 0 &&
+        gPendingScrollAccelerated.dy == 0;
+    BOOL mergeElapsed = CACurrentMediaTime() >= gScrollEndDeadline;
+
+    if (sendBegan || deltaRaw.dx != 0 || deltaRaw.dy != 0 ||
+        deltaAccel.dx != 0 || deltaAccel.dy != 0) {
+        // Wheel input is delivered phase-less (NSEventPhaseNone), matching
+        // how a real Mac delivers mouse wheel events; only the two-finger
+        // pan carries the began/changed gesture lifecycle.
+        NSUInteger eventPhase = gPendingScrollDeviceCategory == 1
+            ? (sendBegan ? 1 : 4) : 0;
+        sendScrollWheelEvent(deltaRaw, deltaAccel,
+                             gPendingScrollDirectionInverted,
+                             gPendingScrollDeviceCategory,
+                             eventPhase, 0);
+        gScrollBeganDelivered = YES;
+    }
+    if (drained && gScrollEndPending && mergeElapsed) {
+        // The wheel went quiet: close the continuous gesture with the phase
+        // the recognizer reported so the guest finalizes scrolling.
+        sendScrollWheelEvent(CGVectorMake(0, 0), CGVectorMake(0, 0),
+                             gPendingScrollDirectionInverted,
+                             gPendingScrollDeviceCategory,
+                             gScrollEndPhase ? gScrollEndPhase : 8, 0);
+        gScrollEndPending = NO;
+        gScrollEndPhase = 0;
+        gScrollGestureActive = NO;
+        gScrollBeganDelivered = NO;
+    }
+
+    // Keep the link alive while delta remains to stream or the merge window
+    // is still open; otherwise go idle.
+    if (!drained || (gScrollEndPending && !mergeElapsed))
+        gScrollDisplayLink.paused = NO;
+}
+
+static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
+                             BOOL directionInvertedFromDevice,
+                             NSUInteger deviceCategory,
+                             NSUInteger phase, NSUInteger momentumPhase) {
+    gScrollReceivedEventCount++;
+    if (momentumPhase) {
+        // Momentum events bypass the gesture state machine; the phase lives
+        // in the momentumPhase field and the deltas still get coalesced.
+        gPendingScrollMomentumPhase = momentumPhase;
+        gPendingScrollRaw = CGVectorMake(
+            gPendingScrollRaw.dx + rawDelta.dx,
+            gPendingScrollRaw.dy + rawDelta.dy);
+        gPendingScrollAccelerated = CGVectorMake(
+            gPendingScrollAccelerated.dx + acceleratedDelta.dx,
+            gPendingScrollAccelerated.dy + acceleratedDelta.dy);
+        gPendingScrollDirectionInverted = directionInvertedFromDevice;
+        gPendingScrollDeviceCategory = deviceCategory;
+        resumeScrollFlush();
+        return;
+    }
+    BOOL eventHasDelta = rawDelta.dx != 0 || rawDelta.dy != 0 ||
+        acceleratedDelta.dx != 0 || acceleratedDelta.dy != 0;
+    // Hardware wheel input (deviceCategory 0) is discrete wheel semantics:
+    // the guest receives phase-less scroll events, exactly like a real Mac
+    // mouse wheel, so AppKit scroll views apply each delta directly. The
+    // began/changed/ended gesture lifecycle and the merge window only apply
+    // to the two-finger touch pan (deviceCategory 1), which is a real
+    // gesture. WebKit applies deltas regardless of phase, which is why
+    // browsers felt smooth while AppKit scroll views stuttered.
+    if (deviceCategory == 0) {
+        gPendingScrollRaw = CGVectorMake(
+            gPendingScrollRaw.dx + rawDelta.dx,
+            gPendingScrollRaw.dy + rawDelta.dy);
+        gPendingScrollAccelerated = CGVectorMake(
+            gPendingScrollAccelerated.dx + acceleratedDelta.dx,
+            gPendingScrollAccelerated.dy + acceleratedDelta.dy);
+        gPendingScrollDirectionInverted = directionInvertedFromDevice;
+        gPendingScrollDeviceCategory = deviceCategory;
+        if (eventHasDelta)
+            resumeScrollFlush();
+        return;
+    }
+    switch (phase) {
+    case 1: // began
+        gScrollGestureActive = YES;
+        gScrollBeganDelivered = NO;
+        // A new notch continues the stream: cancel any pending end so the
+        // gesture stays continuous across notches.
+        gScrollEndPending = NO;
+        gScrollEndPhase = 0;
+        break;
+    case 8: // ended
+        gScrollEndPhase = 8;
+        gScrollEndPending = YES;
+        gScrollEndDeadline =
+            CACurrentMediaTime() + kScrollGestureMergeWindow;
+        break;
+    case 16: // cancelled / failed
+        gScrollEndPhase = 16;
+        gScrollEndPending = YES;
+        gScrollEndDeadline =
+            CACurrentMediaTime() + kScrollGestureMergeWindow;
+        break;
+    case 4: // changed
+        if (!gScrollGestureActive) {
+            // Robustness: a changed event without a began must still reach
+            // the guest; deliver it as a standalone changed.
+            gScrollGestureActive = YES;
+            gScrollBeganDelivered = YES;
+        }
+        if (eventHasDelta) {
+            // A continuing stream cancels the pending end.
+            gScrollEndPending = NO;
+            gScrollEndPhase = 0;
+        }
+        break;
+    default:
+        break;
+    }
+    gPendingScrollRaw = CGVectorMake(
+        gPendingScrollRaw.dx + rawDelta.dx,
+        gPendingScrollRaw.dy + rawDelta.dy);
+    gPendingScrollAccelerated = CGVectorMake(
+        gPendingScrollAccelerated.dx + acceleratedDelta.dx,
+        gPendingScrollAccelerated.dy + acceleratedDelta.dy);
+    gPendingScrollDirectionInverted = directionInvertedFromDevice;
+    gPendingScrollDeviceCategory = deviceCategory;
+    // Resume the link only when there is something to deliver this frame.
+    if (phase == 1 || gScrollEndPending || eventHasDelta)
+        resumeScrollFlush();
+}
+
+static void resetScrollCoalescing(void) {
+    gScrollGestureActive = NO;
+    gScrollBeganDelivered = NO;
+    gScrollEndPending = NO;
+    gScrollEndDeadline = 0;
+    gScrollEndPhase = 0;
+    gPendingScrollMomentumPhase = 0;
+    gPendingScrollRaw = CGVectorMake(0, 0);
+    gPendingScrollAccelerated = CGVectorMake(0, 0);
+    gPendingScrollDirectionInverted = NO;
+    gPendingScrollDeviceCategory = 0;
+    if (gScrollDisplayLink)
+        gScrollDisplayLink.paused = YES;
 }
 
 static void installGCMouse(void) {
@@ -1093,6 +1448,7 @@ static void installVideoMemoryWarningRelay(void) {
 - (CGVector)nonAcceleratedDelta;
 - (CGVector)acceleratedDelta;
 - (BOOL)directionInvertedFromDevice;
+- (NSUInteger)momentumPhase;
 @end
 
 @interface UIPanGestureRecognizer (VZScrollEventSPI)
@@ -1103,10 +1459,12 @@ static void installVideoMemoryWarningRelay(void) {
     CGVector _vzRawDelta;
     CGVector _vzAcceleratedDelta;
     BOOL _vzDirectionInverted;
+    NSUInteger _vzMomentumPhase;
 }
 - (CGVector)vzRawDelta;
 - (CGVector)vzAcceleratedDelta;
 - (BOOL)vzDirectionInverted;
+- (NSUInteger)vzMomentumPhase;
 @end
 
 @implementation VZRawScrollRecognizer
@@ -1116,12 +1474,17 @@ static void installVideoMemoryWarningRelay(void) {
     _vzRawDelta = [event nonAcceleratedDelta];
     _vzAcceleratedDelta = [event acceleratedDelta];
     _vzDirectionInverted = [event directionInvertedFromDevice];
+    // momentumPhase is delivered for momentum scrolling (e.g. a Magic
+    // Mouse); guard the SPI in case a given iPadOS version lacks it.
+    _vzMomentumPhase = [event respondsToSelector:@selector(momentumPhase)]
+        ? [event momentumPhase] : 0;
     [super _scrollingChangedWithEvent:event];
 }
 
 - (CGVector)vzRawDelta { return _vzRawDelta; }
 - (CGVector)vzAcceleratedDelta { return _vzAcceleratedDelta; }
 - (BOOL)vzDirectionInverted { return _vzDirectionInverted; }
+- (NSUInteger)vzMomentumPhase { return _vzMomentumPhase; }
 
 @end
 
@@ -1469,11 +1832,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     default:
         return;
     }
-    sendScrollWheel(recognizer.vzRawDelta,
-                    recognizer.vzAcceleratedDelta,
-                    recognizer.vzDirectionInverted,
-                    0,
-                    phase);
+    queueScrollWheel(recognizer.vzRawDelta,
+                     recognizer.vzAcceleratedDelta,
+                     recognizer.vzDirectionInverted,
+                     0,
+                     phase,
+                     recognizer.vzMomentumPhase);
 }
 
 - (void)handleTouchScroll:(UIPanGestureRecognizer *)recognizer
@@ -1504,7 +1868,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     // rotation. Rotate and invert the UIKit translation before entering the
     // shared VZ event mapping. This intentionally affects direct touch only.
     CGVector raw = CGVectorMake(-delta.y, delta.x);
-    sendScrollWheel(raw, raw, YES, 1, phase);
+    queueScrollWheel(raw, raw, YES, 1, phase, 0);
 }
 
 - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
@@ -3309,6 +3673,7 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     gKeyboard = nil;
     gGlobeDown = NO;
     gPointingDevice = nil;
+    resetScrollCoalescing();
     gTouchButtons = 0;
     gHardwareMouseButtons = 0;
     gLastPointerButtons = NSUIntegerMax;
@@ -3803,6 +4168,16 @@ static void configureVideoToolbox(id configuration, NSDictionary *options) {
     [device release];
 }
 
+// The iOS 18 SDK removed AVAudioSessionCategoryOptionAllowBluetoothHFP from
+// the public headers, but the option bit (0x80) remains valid on the iPadOS
+// 14-16 targets this app runs on, where the audio session still accepts it.
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000
+#define VZAVSessionOptionAllowBluetoothHFP 0x80
+#else
+#define VZAVSessionOptionAllowBluetoothHFP \
+    AVAudioSessionCategoryOptionAllowBluetoothHFP
+#endif
+
 static void requestMicrophoneAccess(dispatch_block_t continuation) {
     AVAudioSession *session = AVAudioSession.sharedInstance;
     AVAudioSessionRecordPermission permission = session.recordPermission;
@@ -3812,7 +4187,7 @@ static void requestMicrophoneAccess(dispatch_block_t continuation) {
     AVAudioSessionCategoryOptions sessionOptions =
         AVAudioSessionCategoryOptionMixWithOthers |
         AVAudioSessionCategoryOptionDefaultToSpeaker |
-        AVAudioSessionCategoryOptionAllowBluetoothHFP;
+        VZAVSessionOptionAllowBluetoothHFP;
     BOOL categoryOK = [session
         setCategory:AVAudioSessionCategoryPlayAndRecord
                mode:AVAudioSessionModeDefault
