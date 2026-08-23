@@ -1510,6 +1510,7 @@ static void sendSoftwareKey(UIKeyboardHIDUsage usage, BOOL shifted);
     BOOL _vzDirectPrimaryPressed;
     BOOL _vzPencilRelayStrokeClaimed;
     BOOL _vzPencilRelayStrokeConnected;
+    BOOL _vzPencilHoverActive;
 }
 @end
 
@@ -1734,12 +1735,26 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     CGPoint location = [recognizer locationInView:self];
     switch (recognizer.state) {
     case UIGestureRecognizerStateBegan:
-        gUIKitHoverActive = YES;
-        sendIndirectPointerLocation(location, self.bounds);
-        break;
     case UIGestureRecognizerStateChanged:
         gUIKitHoverActive = YES;
         sendIndirectPointerLocation(location, self.bounds);
+        // Apple Pencil hover: zOffset > 0 distinguishes Pencil from
+        // trackpad. Send hover position + tilt to the guest VM so
+        // drawing apps can show brush previews before the pen touches.
+        if (@available(iOS 16.4, *)) {
+            if (pencilRelayEnabled() && recognizer.zOffset > 0) {
+                _vzPencilHoverActive = YES;
+                CGRect b = self.bounds;
+                float nx = (b.size.width > 0)
+                    ? (float)(location.x / b.size.width) : 0;
+                float ny = (b.size.height > 0)
+                    ? (float)(location.y / b.size.height) : 0;
+                float altitude = (float)recognizer.altitudeAngle;
+                float azimuth = (float)[recognizer azimuthAngleInView:self];
+                pencilVsockSend(kPencilEventHover, 0, nx, ny,
+                                altitude, azimuth);
+            }
+        }
         break;
     case UIGestureRecognizerStateEnded:
     case UIGestureRecognizerStateCancelled:
@@ -1750,6 +1765,19 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         // stuck-button cleanup instead.
         gUIKitHoverActive = NO;
         gHostPointerLocationValid = NO;
+        // Notify the guest that the Pencil left hover range.
+        // If the pen touched the screen (hover → touch transition),
+        // pencil-probe's state machine handles the brief leave/enter.
+        if (_vzPencilHoverActive) {
+            _vzPencilHoverActive = NO;
+            CGRect b = self.bounds;
+            float nx = (b.size.width > 0)
+                ? (float)(location.x / b.size.width) : 0;
+            float ny = (b.size.height > 0)
+                ? (float)(location.y / b.size.height) : 0;
+            pencilVsockSend(kPencilEventHoverEnd, 0, nx, ny,
+                            (float)M_PI_2, 0);
+        }
         break;
     default:
         break;
@@ -2175,6 +2203,8 @@ enum { kPencilPacketSize = 21 };
 static const uint8_t kPencilEventPoint = 0;
 static const uint8_t kPencilEventProximityEnter = 1;
 static const uint8_t kPencilEventProximityLeave = 2;
+static const uint8_t kPencilEventHover = 3;
+static const uint8_t kPencilEventHoverEnd = 4;
 
 // Wire protocol byte offsets. Must match PencilPacket offsets in pencil-probe.
 enum {
@@ -2451,9 +2481,9 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     if (_vzPencilRelayStrokeClaimed) for (UITouch *t in touches) {
         if (t.type == UITouchTypeStylus) {
             CGRect b = self.bounds;
-            // coalescedTouchesForTouch: が返す中間タッチをすべて送信し、
-            // iPad の 240Hz サンプリングに近い描画解像度を得る。
-            // nil の場合は現タッチ 1 つだけ送信（フォールバック）。
+            // Send all intermediate touches from coalescedTouchesForTouch:
+            // to approach the iPad's 240Hz sampling resolution.
+            // Falls back to the current touch alone when nil.
             NSArray<UITouch *> *coalesced = [event coalescedTouchesForTouch:t];
             if (!coalesced) coalesced = @[t];
             for (UITouch *ct in coalesced) {
