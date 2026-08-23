@@ -2450,18 +2450,26 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     // type=0 (point) for continuous drag events.
     if (_vzPencilRelayStrokeClaimed) for (UITouch *t in touches) {
         if (t.type == UITouchTypeStylus) {
-            CGPoint p = [t locationInView:self];
             CGRect b = self.bounds;
-            float pressure = (t.maximumPossibleForce > 0)
-                ? (float)(t.force / t.maximumPossibleForce) : 0;
-            float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
-            float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
-            float altitude = (float)t.altitudeAngle;
-            float azimuth = (float)[t azimuthAngleInView:self];
-            if (_vzPencilRelayStrokeConnected)
-                _vzPencilRelayStrokeConnected = pencilVsockSend(
-                    kPencilEventPoint, pressure, nx, ny,
-                    altitude, azimuth);
+            // coalescedTouchesForTouch: が返す中間タッチをすべて送信し、
+            // iPad の 240Hz サンプリングに近い描画解像度を得る。
+            // nil の場合は現タッチ 1 つだけ送信（フォールバック）。
+            NSArray<UITouch *> *coalesced = [event coalescedTouchesForTouch:t];
+            if (!coalesced) coalesced = @[t];
+            for (UITouch *ct in coalesced) {
+                CGPoint p = [ct locationInView:self];
+                float pressure = (ct.maximumPossibleForce > 0)
+                    ? (float)(ct.force / ct.maximumPossibleForce) : 0;
+                float nx = (b.size.width > 0) ? (float)(p.x / b.size.width) : 0;
+                float ny = (b.size.height > 0) ? (float)(p.y / b.size.height) : 0;
+                float altitude = (float)ct.altitudeAngle;
+                float azimuth = (float)[ct azimuthAngleInView:self];
+                if (_vzPencilRelayStrokeConnected)
+                    _vzPencilRelayStrokeConnected = pencilVsockSend(
+                        kPencilEventPoint, pressure, nx, ny,
+                        altitude, azimuth);
+                if (!_vzPencilRelayStrokeConnected) break;
+            }
             return;
         }
     }
