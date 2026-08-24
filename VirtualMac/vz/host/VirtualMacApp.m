@@ -1739,9 +1739,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
         gUIKitHoverActive = YES;
         sendIndirectPointerLocation(location, self.bounds);
         // Apple Pencil hover: zOffset > 0 distinguishes Pencil from
-        // trackpad. Send hover position + tilt to the guest VM so
-        // drawing apps can show brush previews before the pen touches.
-        if (@available(iOS 16.4, *)) {
+        // trackpad. Send hover position to the guest VM so drawing
+        // apps can show brush previews before the pen touches.
+        // Tilt (altitudeAngle/azimuthAngle) on UIHoverGestureRecognizer
+        // requires iOS 16.4+, which exceeds the Hypervisor-based upper
+        // bound (iPadOS 16.3.1), so we send zeros for tilt fields.
+        if (@available(iOS 16.1, *)) {
             if (pencilRelayEnabled() && recognizer.zOffset > 0) {
                 _vzPencilHoverActive = YES;
                 CGRect b = self.bounds;
@@ -1749,10 +1752,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
                     ? (float)(location.x / b.size.width) : 0;
                 float ny = (b.size.height > 0)
                     ? (float)(location.y / b.size.height) : 0;
-                float altitude = (float)recognizer.altitudeAngle;
-                float azimuth = (float)[recognizer azimuthAngleInView:self];
-                pencilVsockSend(kPencilEventHover, 0, nx, ny,
-                                altitude, azimuth);
+                pencilVsockSend(kPencilEventHover, 0, nx, ny, 0, 0);
             }
         }
         break;
