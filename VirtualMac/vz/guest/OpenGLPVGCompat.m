@@ -31,6 +31,21 @@ static BOOL DebugEnabled(void) {
     return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
 }
 
+static BOOL ProcessUsesUnsupportedOpenGLPath(void) {
+    static BOOL excluded;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *executable = NSProcessInfo.processInfo.processName.lowercaseString;
+        // Sublime Text and Sublime Merge use a custom OpenGL compositor whose
+        // partial redraw path is corrupted by GLDRendererMetal over Ventura
+        // PVG. Keep the global environment injection, but leave these two
+        // processes on macOS's stock software OpenGL renderer.
+        excluded = [executable isEqualToString:@"sublime_text"] ||
+            [executable isEqualToString:@"sublime_merge"];
+    });
+    return excluded;
+}
+
 static BOOL ProcessIsTranslated(void) {
     static BOOL translated;
     static dispatch_once_t once;
@@ -344,7 +359,7 @@ static CFTypeRef PVGSearchRegistryProperty(
 static CFTypeRef PVGCreateRegistryProperty(
     io_registry_entry_t entry, CFStringRef key, CFAllocatorRef allocator,
     IOOptionBits options) {
-    if (IsParavirtualGPU(entry) &&
+    if (!ProcessUsesUnsupportedOpenGLPath() && IsParavirtualGPU(entry) &&
         CFEqual(key, CFSTR("IOGLBundleName"))) {
         for (id<MTLDevice> device in MTLCopyAllDevices())
             EnablePVGOpenGL(device);

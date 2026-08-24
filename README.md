@@ -37,6 +37,10 @@ Magic Keyboard is not required because you can also use the touchscreen and virt
 
 Supporting iPadOS 16.4 or later presents additional challenges because [Hypervisor support was removed from the iPadOS XNU kernel](https://x.com/UTMapp/status/1708907045314035986). Contributions are welcome!
 
+### Does Virtual Mac on iPad work on iPhone?
+
+Even though iPad is the primary supported platform, Virtual Mac on iPad also works on iPhone 14 Pro and iPhone 14 Pro Max running iOS 16 up to iOS 16.3.1.
+
 ### What kind of performance does Virtual Mac on iPad offer?
 
 Virtual Mac on iPad uses hardware CPU virtualization and supports paravirtualized graphics acceleration, providing excellent performance for everyday tasks. Because it uses an extracted and modified version of Apple's macOS virtualization stack, it provides roughly the same class of CPU and Metal performance as VirtualBuddy or UTM virtualizing macOS on an M1 or M2 Mac.

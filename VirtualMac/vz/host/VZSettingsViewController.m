@@ -17,7 +17,9 @@
 {
     if (!(self = [super initWithFrame:CGRectZero])) return nil;
     self.urlString = url;
-    self.backgroundColor = UIColor.clearColor;
+    self.backgroundColor = UIColor.tertiarySystemFillColor;
+    self.layer.cornerRadius = 20.0;
+    self.layer.cornerCurve = kCACornerCurveContinuous;
     NSString *path = [NSBundle.mainBundle pathForResource:
         imageName.stringByDeletingPathExtension ofType:imageName.pathExtension
         inDirectory:@"Developers"];
@@ -43,8 +45,8 @@
     stack.userInteractionEnabled = NO;
     [self addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:9],
+        [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-9],
         [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:6],
         [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-6],
     ]];
@@ -55,9 +57,102 @@
 - (void)dealloc { [_urlString release]; [super dealloc]; }
 @end
 
+@interface VZContributorFlowView : UIView
+@property(nonatomic, retain) NSArray<UIView *> *chips;
+- (instancetype)initWithChips:(NSArray<UIView *> *)chips;
+- (CGFloat)preferredHeightForWidth:(CGFloat)width;
+@end
+
+@implementation VZContributorFlowView {
+    CGFloat _measuredHeight;
+}
+- (instancetype)initWithChips:(NSArray<UIView *> *)chips
+{
+    if (!(self = [super initWithFrame:CGRectZero])) return nil;
+    self.chips = chips;
+    for (UIView *chip in chips) [self addSubview:chip];
+    return self;
+}
+- (CGSize)intrinsicContentSize
+{
+    return CGSizeMake(UIViewNoIntrinsicMetric, MAX(_measuredHeight, 40));
+}
+- (CGFloat)preferredHeightForWidth:(CGFloat)width
+{
+    const CGFloat horizontalSpacing = 10;
+    const CGFloat verticalSpacing = 6;
+    CGFloat x = 0, y = 0, rowHeight = 0;
+    for (UIView *chip in self.chips) {
+        CGSize size = [chip systemLayoutSizeFittingSize:
+            UILayoutFittingCompressedSize];
+        size.width = MIN(size.width, width);
+        if (x > 0 && x + size.width > width) {
+            x = 0;
+            y += rowHeight + verticalSpacing;
+            rowHeight = 0;
+        }
+        x += size.width + horizontalSpacing;
+        rowHeight = MAX(rowHeight, size.height);
+    }
+    return MAX(y + rowHeight, 40);
+}
+- (void)layoutSubviews
+{
+    [super layoutSubviews];
+    const CGFloat horizontalSpacing = 10;
+    const CGFloat verticalSpacing = 6;
+    CGFloat x = 0, y = 0, rowHeight = 0;
+    CGFloat width = CGRectGetWidth(self.bounds);
+    for (UIView *chip in self.chips) {
+        CGSize size = [chip systemLayoutSizeFittingSize:
+            UILayoutFittingCompressedSize];
+        size.width = MIN(size.width, width);
+        if (x > 0 && x + size.width > width) {
+            x = 0;
+            y += rowHeight + verticalSpacing;
+            rowHeight = 0;
+        }
+        chip.frame = CGRectMake(x, y, size.width, size.height);
+        x += size.width + horizontalSpacing;
+        rowHeight = MAX(rowHeight, size.height);
+    }
+    CGFloat measured = y + rowHeight;
+    if (ABS(measured - _measuredHeight) > 0.5) {
+        _measuredHeight = measured;
+        [self invalidateIntrinsicContentSize];
+    }
+}
+- (void)dealloc
+{
+    [_chips release];
+    [super dealloc];
+}
+@end
+
 @interface VZSettingsViewController ()
 @property(nonatomic, retain) NSArray<NSDictionary *> *machines;
+@property(nonatomic) CGFloat lastLayoutWidth;
+@property(nonatomic) NSUInteger versionTapCount;
 @end
+
+static CGFloat VZSettingsContentWidth(UITableView *tableView)
+{
+    CGFloat width = CGRectGetWidth(tableView.bounds);
+    // Inset-grouped cells and their content margins consume approximately
+    // 40 points per side at regular width and 32 points per side when narrow.
+    return MAX(width - 80.0, 120.0);
+}
+
+static NSString *VZSettingsFittingTitle(UITableView *tableView,
+                                        NSString *fullTitle,
+                                        NSString *compactTitle,
+                                        CGFloat accessoryWidth)
+{
+    CGFloat available = VZSettingsContentWidth(tableView) - accessoryWidth;
+    UIFont *font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    CGFloat needed = [fullTitle sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    return needed <= available ? fullTitle : compactTitle;
+}
 
 @implementation VZSettingsViewController
 
@@ -95,6 +190,17 @@
         name:VZSettingsDidChangeNotification object:nil];
 }
 
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+    CGFloat width = CGRectGetWidth(self.tableView.bounds);
+    BOOL changed = self.lastLayoutWidth > 0 &&
+        ABS(width - self.lastLayoutWidth) > 0.5;
+    self.lastLayoutWidth = width;
+    if (changed)
+        [self.tableView reloadData];
+}
+
 - (void)settingsChanged:(NSNotification *)notification
 {
     (void)notification;
@@ -127,7 +233,7 @@
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
     (void)tableView;
-    return section == 0 ? 4 : section == 1 ? 5 : section == 2 ? 4 :
+    return section == 0 ? 4 : section == 1 ? 6 : section == 2 ? 4 :
         section == 3 ? 3 : section == 4 ? 3 : section == 5 ? 2 :
         section == 6 ? 1 : 4;
 }
@@ -146,7 +252,9 @@
     if (section == 4)
         return [NSString stringWithFormat:VZL(@"Virtual Mac devices are stored in %@."), VZVMLibraryPath()];
     if (section == 2)
-        return VZL(@"These options affect iPadOS only while Virtual Mac is frontmost and a Virtual Mac is running.");
+        return VZDeviceString(
+            VZL(@"These options affect iPadOS only while Virtual Mac is frontmost and a Virtual Mac is running."),
+            VZL(@"These options affect iOS only while Virtual Mac is frontmost and a Virtual Mac is running."));
     if (section == 3)
         return VZL(@"Debug Logging takes effect the next time a Virtual Mac starts.");
     return nil;
@@ -177,7 +285,8 @@
             @{@"name": @"nfzerox", @"url": @"https://github.com/nfzerox", @"image": @"nfzerox.png"},
             @{@"name": @"qwqVictor", @"url": @"https://github.com/qwqVictor", @"image": @"qwqVictor.jpg"},
             @{@"name": @"jamesy0ung", @"url": @"https://github.com/jamesy0ung", @"image": @"jamesy0ung.jpg"},
-            @{@"name": @"ma-syu", @"url": @"https://github.com/ma-syu", @"image": @"ma-syu.jpg"}
+            @{@"name": @"ma-syu", @"url": @"https://github.com/ma-syu", @"image": @"ma-syu.jpg"},
+            @{@"name": @"LemomQ", @"url": @"https://github.com/LemomQ", @"image": @"LemomQ.png"}
         ];
         cell = [self baseCellForTableView:tableView identifier:@"contributors"];
         for (UIView *view in cell.contentView.subviews)
@@ -189,18 +298,19 @@
                 url:person[@"url"]] autorelease];
             [chips addObject:chip];
         }
-        UIStackView *stack = [[[UIStackView alloc]
-            initWithArrangedSubviews:chips] autorelease];
-        stack.tag = 1101;
-        stack.translatesAutoresizingMaskIntoConstraints = NO;
-        stack.spacing = 12;
-        stack.distribution = UIStackViewDistributionFill;
-        [cell.contentView addSubview:stack];
+        VZContributorFlowView *flow = [[[VZContributorFlowView alloc]
+            initWithChips:chips] autorelease];
+        flow.tag = 1101;
+        flow.translatesAutoresizingMaskIntoConstraints = NO;
+        [cell.contentView addSubview:flow];
+        CGFloat flowWidth = VZSettingsContentWidth(tableView);
+        [flow.heightAnchor constraintEqualToConstant:
+            [flow preferredHeightForWidth:flowWidth]].active = YES;
         [NSLayoutConstraint activateConstraints:@[
-            [stack.leadingAnchor constraintEqualToAnchor:cell.contentView.layoutMarginsGuide.leadingAnchor],
-            [stack.trailingAnchor constraintLessThanOrEqualToAnchor:cell.contentView.layoutMarginsGuide.trailingAnchor],
-            [stack.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:8],
-            [stack.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-8],
+            [flow.leadingAnchor constraintEqualToAnchor:cell.contentView.layoutMarginsGuide.leadingAnchor],
+            [flow.trailingAnchor constraintEqualToAnchor:cell.contentView.layoutMarginsGuide.trailingAnchor],
+            [flow.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:8],
+            [flow.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-8],
         ]];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         return cell;
@@ -229,7 +339,8 @@
         cell.detailTextLabel.text = names[visibility] ?: VZL(@"On");
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (indexPath.section == 0) {
-        cell.textLabel.text = VZL(@"Virtual Mac Controls Opacity");
+        cell.textLabel.text = VZSettingsFittingTitle(tableView,
+            VZL(@"Virtual Mac Controls Opacity"), VZL(@"Controls Opacity"), 196.0);
         UISlider *slider = [[[UISlider alloc] initWithFrame:
             CGRectMake(0, 0, 180, 32)] autorelease];
         slider.minimumValue = 0.0;
@@ -239,12 +350,18 @@
             forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = slider;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else if (indexPath.section == 1 && indexPath.row < 4) {
-        NSArray *titles = @[VZL(@"Scroll with Two Fingers"),
+    } else if (indexPath.section == 1 && indexPath.row < 5) {
+        NSArray *titles = @[VZL(@"Show Cursor When Using Touch"),
+                            VZL(@"Scroll with Two Fingers"),
                             VZL(@"Accommodate Double Tap"),
-                            VZL(@"Two Finger Tap to Secondary Click"),
-                            VZL(@"Touch and Hold to Secondary Click")];
-        NSArray *keys = @[VZTouchTwoFingerScrollingKey,
+                            VZSettingsFittingTitle(tableView,
+                                VZL(@"Two Finger Tap to Secondary Click"),
+                                VZL(@"Two Finger Tap Right Click"), 67.0),
+                            VZSettingsFittingTitle(tableView,
+                                VZL(@"Touch and Hold to Secondary Click"),
+                                VZL(@"Touch and Hold Right Click"), 67.0)];
+        NSArray *keys = @[VZShowCursorWhenUsingTouchKey,
+                          VZTouchTwoFingerScrollingKey,
                           VZTouchDoubleTapAccommodationKey,
                           VZTouchTwoFingerRightClickKey,
                           VZTouchLongPressRightClickKey];
@@ -278,9 +395,19 @@
         cell.accessoryView = toggle;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
     } else if (indexPath.section == 2) {
-        NSArray *titles = @[VZL(@"Suppress iPadOS System Edge Gestures"),
-                            VZL(@"Suppress iPadOS Multitasking Gestures"),
-                            VZL(@"Suppress iPadOS Home Indicator")];
+        NSArray *titles = @[
+            VZSettingsFittingTitle(tableView,
+                VZDeviceString(VZL(@"Suppress iPadOS System Edge Gestures"),
+                               VZL(@"Suppress iOS System Edge Gestures")),
+                VZL(@"Suppress System Edge Gestures"), 67.0),
+            VZSettingsFittingTitle(tableView,
+                VZDeviceString(VZL(@"Suppress iPadOS Multitasking Gestures"),
+                               VZL(@"Suppress iOS Multitasking Gestures")),
+                VZL(@"Suppress Multitasking Gestures"), 67.0),
+            VZSettingsFittingTitle(tableView,
+                VZDeviceString(VZL(@"Suppress iPadOS Home Indicator"),
+                               VZL(@"Suppress iOS Home Indicator")),
+                VZL(@"Suppress Home Indicator"), 67.0)];
         NSArray *keys = @[VZSystemGestureSuppressionKey,
                           VZMultitaskingGestureSuppressionKey,
                           VZHomeIndicatorSuppressionKey];
@@ -317,7 +444,9 @@
         cell.accessoryView = toggle;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
     } else if (indexPath.section == 4 && indexPath.row == 0) {
-        cell.textLabel.text = VZL(@"Delete IPSW After Successful Installation");
+        cell.textLabel.text = VZSettingsFittingTitle(tableView,
+            VZL(@"Delete IPSW After Successful Installation"),
+            VZL(@"Delete IPSW After Installation"), 67.0);
         UISwitch *toggle = [[[UISwitch alloc] init] autorelease];
         toggle.on = [settings boolForKey:VZAutoDeleteRestoreImageKey];
         [toggle addTarget:self action:@selector(autoDeleteToggleChanged:)
@@ -359,7 +488,8 @@
 
 - (void)inputToggleChanged:(UISwitch *)sender
 {
-    NSArray *touchKeys = @[VZTouchTwoFingerScrollingKey,
+    NSArray *touchKeys = @[VZShowCursorWhenUsingTouchKey,
+                           VZTouchTwoFingerScrollingKey,
                            VZTouchDoubleTapAccommodationKey,
                            VZTouchTwoFingerRightClickKey,
                            VZTouchLongPressRightClickKey];
@@ -574,6 +704,22 @@
 {
     UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == 5 && indexPath.row == 0) {
+        self.versionTapCount++;
+        if (self.versionTapCount >= 5) {
+            self.versionTapCount = 0;
+            NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+            BOOL alternate = [defaults boolForKey:@"VZSimulateAlternateUI"];
+            [defaults setBool:!alternate forKey:@"VZSimulateAlternateUI"];
+            [defaults synchronize];
+            [self.tableView reloadData];
+            UINotificationFeedbackGenerator *feedback =
+                [[[UINotificationFeedbackGenerator alloc] init] autorelease];
+            [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
+        }
+        return;
+    }
+    self.versionTapCount = 0;
     if (indexPath.section == 0 && indexPath.row == 0)
         [self chooseAutoBootFrom:cell];
     else if (indexPath.section == 0 && indexPath.row == 1)

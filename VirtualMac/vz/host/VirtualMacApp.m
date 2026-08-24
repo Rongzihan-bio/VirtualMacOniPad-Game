@@ -16,6 +16,7 @@
 #import "VZSupport.h"
 #import "VZGuestTools.h"
 #import "VZGuestRuntimePolicy.h"
+#import "VZTrackpadScrollBridge.h"
 #include <dlfcn.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
@@ -24,6 +25,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -106,10 +108,9 @@ static uint64_t gPointerEventCount;
 static uint64_t gPointerButtonEventCount;
 static uint64_t gScrollEventCount;
 static uint64_t gKeyEventCount;
-// Scroll diagnostics: 1s-window event-rate tracking written in
-// sendScrollWheel and read by the health monitor, plus per-health-tick
-// phase counters and count deltas used to separate input flooding from
-// display stalls. All writers/readers run on the main thread.
+static uint8_t gShiftPressedMask;
+// Debug-only scroll diagnostics. Keep the timing and histogram work out of
+// the normal input path; all writers/readers run on the main thread.
 static uint64_t gScrollRateWindowEvents;
 static double gScrollRateWindowStart;
 static double gScrollRateLastWindow;
@@ -123,15 +124,11 @@ static uint64_t gLastHealthKeyCount;
 static double gLastHealthSampleTime;
 // Scroll coalescing state: gesture lifecycle + accumulated deltas flushed at
 // most once per display frame by queueScrollWheel/flushPendingScroll.
-// gScrollEndPending/gScrollEndDeadline delay the ended phase so consecutive
-// wheel notches merge into one continuous gesture.
 static uint64_t gScrollReceivedEventCount;
 static BOOL gScrollGestureActive;
 static BOOL gScrollBeganDelivered;
 static BOOL gScrollEndPending;
-static double gScrollEndDeadline;
 static NSUInteger gScrollEndPhase;
-static NSUInteger gPendingScrollMomentumPhase;
 static CGVector gPendingScrollRaw;
 static CGVector gPendingScrollAccelerated;
 static BOOL gPendingScrollDirectionInverted;
@@ -141,9 +138,13 @@ static uint64_t gLastHealthReceivedCount;
 static BOOL gDebugLogging;
 static BOOL gFixExternalDisplayScrollDirection;
 static CGFloat gScrollingSpeed = 0.25;
+static BOOL gShowCursorWhenUsingTouch = YES;
+static BOOL gLastInputWasDirectTouch;
+static BOOL gCursorSuppressedForDirectTouch;
 static BOOL gRootHideInformationVisible;
 static BOOL gRootHidePivotalActionApproved;
 static BOOL gVideoMemoryAlertPresented;
+static BOOL gCompatibilityNoticePresented;
 static NSMutableArray *gRootHideInformationCompletions;
 // Globe-held state, tracked from the Darwin relay (the tweak reports the
 // globe's raw HID press, which is reliable and prompt). The tweak translates
@@ -182,9 +183,11 @@ static void setObj(id object, const char *selector, id value);
 static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed);
 static void sendPointer(CGPoint point, CGRect bounds, NSUInteger pressedButtons);
 static void updateExternalCursorForNormalizedLocation(CGPoint location);
+static void notePointerInputSource(BOOL directTouch);
 static void setStatus(NSString *status);
 static void flushPendingScroll(void);
 static void resetScrollCoalescing(void);
+static void resetScrollDiagnostics(void);
 // External display (Keynote-style: UIWindow.screen = externalScreen)
 static UIWindow *gExternalWindow;
 static UIView *gExternalMirrorView;
@@ -200,6 +203,8 @@ static void disconnectExternalDisplay(void);
 static void startVirtualMachine(UIView *container, id delegate,
                                 NSString *bundlePath,
                                 NSDictionary *options);
+static UIViewController *VZTopPresentedController(
+    UIViewController *controller);
 
 static NSString *VZInstallationFailureExplanation(NSString *failure)
 {
@@ -210,9 +215,94 @@ static NSString *VZInstallationFailureExplanation(NSString *failure)
     }
     if ([failure containsString:@"AMRestorePerformRestoreModeRestoreWithError failed with error: 100"] ||
         [failure containsString:@"error: 100"]) {
-        return VZL(@"Verify your iPad has sufficient free storage and try again.");
+        return VZDeviceString(
+            VZL(@"Verify your iPad has sufficient free storage and try again."),
+            VZL(@"Verify your iPhone has sufficient free storage and try again."));
     }
     return nil;
+}
+
+static NSString *VZHostHardwareIdentifier(void)
+{
+    size_t length = 0;
+    if (sysctlbyname("hw.machine", NULL, &length, NULL, 0) != 0 ||
+        length < 2)
+        return @"";
+    char *bytes = calloc(1, length);
+    if (!bytes)
+        return @"";
+    NSString *identifier = @"";
+    if (sysctlbyname("hw.machine", bytes, &length, NULL, 0) == 0)
+        identifier = [NSString stringWithUTF8String:bytes] ?: @"";
+    free(bytes);
+    return identifier;
+}
+
+static BOOL VZHostOSVersionSupported(BOOL phone)
+{
+    NSOperatingSystemVersion version =
+        NSProcessInfo.processInfo.operatingSystemVersion;
+    if (phone) {
+        if (version.majorVersion != 16)
+            return NO;
+    } else if (version.majorVersion < 14 || version.majorVersion > 16) {
+        return NO;
+    }
+    if (version.majorVersion < 16)
+        return YES;
+    return version.minorVersion < 3 ||
+        (version.minorVersion == 3 && version.patchVersion <= 1);
+}
+
+static BOOL VZHostHardwareSupported(BOOL phone, NSString *identifier)
+{
+    if (phone)
+        return [@[@"iPhone15,2", @"iPhone15,3"]
+            containsObject:identifier];
+    static NSSet<NSString *> *supportedIPads;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // M1 iPad Pro (11-inch 3rd generation and 12.9-inch 5th
+        // generation), M1 iPad Air (5th generation), and M2 iPad Pro
+        // (11-inch 4th generation and 12.9-inch 6th generation), including
+        // every Wi-Fi and cellular board identifier.
+        supportedIPads = [[NSSet alloc] initWithArray:@[
+            @"iPad13,4", @"iPad13,5", @"iPad13,6", @"iPad13,7",
+            @"iPad13,8", @"iPad13,9", @"iPad13,10", @"iPad13,11",
+            @"iPad13,16", @"iPad13,17",
+            @"iPad14,3", @"iPad14,4", @"iPad14,5", @"iPad14,6"
+        ]];
+    });
+    return [supportedIPads containsObject:identifier];
+}
+
+static void VZPresentCompatibilityNotice(UIViewController *controller)
+{
+    if (gCompatibilityNoticePresented)
+        return;
+    // UI simulation must never make real hardware fail compatibility checks.
+    BOOL phone = VZHostIsPhoneDevice();
+    NSString *identifier = VZHostHardwareIdentifier();
+    if (VZHostHardwareSupported(phone, identifier) &&
+        VZHostOSVersionSupported(phone))
+        return;
+    gCompatibilityNoticePresented = YES;
+    NSString *title = VZDeviceString(
+        VZL(@"This iPad is incompatible with Virtual Mac"),
+        VZL(@"This iPhone is incompatible with Virtual Mac"));
+    NSString *message = phone
+        ? VZL(@"Virtual Mac requires iPhone 14 Pro and iPhone 14 Pro Max running iOS 16 up to 16.3.1, or iPad Pro (M1, M2) and iPad Air (M1) running iPadOS 14 up to 16.3.1.")
+        : VZL(@"Virtual Mac requires iPad Pro (M1, M2) or iPad Air (M1) running iPadOS 14 up to 16.3.1, or iPhone 14 Pro and iPhone 14 Pro Max running iOS 16 up to 16.3.1.");
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:title message:message
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:VZL(@"OK")
+        style:UIAlertActionStyleDefault handler:nil]];
+    [VZTopPresentedController(controller)
+        presentViewController:alert animated:YES completion:nil];
+    printf("[VirtualMac] compatibility notice idiom=%s hardware=%s os=%s\n",
+           phone ? "phone" : "pad", identifier.UTF8String,
+           NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String);
 }
 
 static UIViewController *VZTopPresentedController(UIViewController *controller)
@@ -359,6 +449,22 @@ static NSUInteger activePointerButtons(void) {
     return gHardwareMouseButtons | gTouchButtons;
 }
 
+static void notePointerInputSource(BOOL directTouch) {
+    gLastInputWasDirectTouch = directTouch;
+    BOOL suppress = directTouch && !gShowCursorWhenUsingTouch;
+    if (gCursorSuppressedForDirectTouch == suppress)
+        return;
+    gCursorSuppressedForDirectTouch = suppress;
+    BOOL show = !suppress && gCursorView.image && gInputView &&
+        !gInputView.hidden;
+    gCursorView.hidden = !show;
+    if (gExternalCursorView) {
+        gExternalCursorView.hidden = !show;
+        if (show)
+            updateExternalCursorForNormalizedLocation(gLastPointerLocation);
+    }
+}
+
 static BOOL shouldShowStatusLabel(void) {
     NSProcessInfo *processInfo = NSProcessInfo.processInfo;
     if ([processInfo.arguments containsObject:@"--show-status-label"])
@@ -370,6 +476,8 @@ static void resetPointerSession(BOOL releaseButtons) {
     gHostPointerLocationValid = NO;
     gUIKitHoverActive = NO;
     resetScrollCoalescing();
+    VZTrackpadScrollBridgeReset();
+    notePointerInputSource(NO);
     if (releaseButtons && (gTouchButtons || gHardwareMouseButtons)) {
         gTouchButtons = 0;
         gHardwareMouseButtons = 0;
@@ -410,15 +518,10 @@ static void startHealthMonitor(void) {
         uint64_t receivedInTick = received - gLastHealthReceivedCount;
         uint64_t pointerInTick = pointer - gLastHealthPointerCount;
         uint64_t keysInTick = keys - gLastHealthKeyCount;
-        if (scrollInTick || pointerInTick || keysInTick) {
-            // Always printed while input flows, independent of Debug
-            // Logging: injected scroll events/sec (scroll=), raw UIKit
-            // deliveries/sec (received=, which the coalescer folds down to
-            // at most one injected event per frame), the last 1s window and
-            // its session peak, the phase mix, and the other input rates.
-            // High received= next to a display stall means event flooding;
-            // low scroll= with a stall means the guest or the renderer is
-            // the bottleneck.
+        if (gDebugLogging &&
+            (scrollInTick || pointerInTick || keysInTick)) {
+            // Debug logging distinguishes raw UIKit delivery from the
+            // coalesced events injected into the guest.
             printf("[VirtualMac] input-rate scroll=%.0f/s received=%.0f/s "
                    "window=%.0f/s peak=%.0f/s began=%llu changed=%llu "
                    "ended=%llu pointer=%.0f/s keys=%.0f/s\n",
@@ -559,6 +662,7 @@ static void sendPointer(CGPoint point, CGRect bounds,
 static void sendIndirectPointerLocation(CGPoint hostPoint, CGRect bounds) {
     // Trackpad coordinates are already absolute in the input view. Prefer reliable native absolute tracking; 
     // after touching the screen, the next trackpad movement/click simply uses its own location.
+    notePointerInputSource(NO);
     sendPointer(hostPoint, bounds, activePointerButtons());
 }
 
@@ -609,6 +713,7 @@ static void sendSmartMagnification(void) {
 
 static void sendMouseDelta(float deltaX, float deltaY) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        notePointerInputSource(NO);
         CGRect bounds = gInputView.bounds;
         gMouseLocation.x =
             fmin(CGRectGetMaxX(bounds), fmax(CGRectGetMinX(bounds),
@@ -622,6 +727,7 @@ static void sendMouseDelta(float deltaX, float deltaY) {
 
 static void sendMouseButton(NSUInteger mask, BOOL pressed) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        notePointerInputSource(NO);
         if (pressed)
             gHardwareMouseButtons |= mask;
         else
@@ -631,19 +737,32 @@ static void sendMouseButton(NSUInteger mask, BOOL pressed) {
     });
 }
 
+// UIScrollEvent exposes momentum as a sequential private enum. VZ accepts
+// NSEvent-compatible phase bits and converts those to its wire enum.
+static NSUInteger hidMomentumPhaseFromUIKitPhase(NSUInteger phase) {
+    switch (phase) {
+    case 0x01: return 1;
+    case 0x02: return 4;
+    case 0x03: return 8;
+    case 0x04: return 16;
+    default: return 0;
+    }
+}
+
 // Immediate injection of one scroll event into the guest pointing device.
 // Applies the device transforms, builds _VZScrollWheelEvent, and maintains
 // the scroll diagnostics counters. Main thread only.
 static void sendScrollWheelEvent(CGVector rawDelta, CGVector acceleratedDelta,
                                  BOOL directionInvertedFromDevice,
                                  NSUInteger deviceCategory,
-                                 NSUInteger phase, NSUInteger momentumPhase) {
+                                 NSUInteger phase,
+                                 NSUInteger momentumPhase) {
     if (!gPointingDevice)
         return;
     UIScreen *inputScreen = gInputView.window.screen;
     BOOL externalStageManager = inputScreen &&
         inputScreen != UIScreen.mainScreen;
-    BOOL correctedExternalAxes = deviceCategory == 0 &&
+    BOOL correctedExternalAxes = deviceCategory == 2 &&
         gFixExternalDisplayScrollDirection && externalStageManager;
     if (correctedExternalAxes) {
         // Stage Manager on an external display transposes the hardware
@@ -653,11 +772,13 @@ static void sendScrollWheelEvent(CGVector rawDelta, CGVector acceleratedDelta,
         acceleratedDelta = CGVectorMake(-acceleratedDelta.dy,
                                         acceleratedDelta.dx);
     }
-    if (deviceCategory == 1) {
-        rawDelta.dx *= gScrollingSpeed;
-        rawDelta.dy *= gScrollingSpeed;
-        acceleratedDelta.dx *= gScrollingSpeed;
-        acceleratedDelta.dy *= gScrollingSpeed;
+    if (deviceCategory == 0 && gShiftPressedMask) {
+        // VZ's private wheel event does not carry modifier flags. Reproduce
+        // AppKit's Shift+wheel convention while the separately forwarded
+        // guest Shift key remains down.
+        rawDelta = CGVectorMake(rawDelta.dy, -rawDelta.dx);
+        acceleratedDelta = CGVectorMake(acceleratedDelta.dy,
+                                        -acceleratedDelta.dx);
     }
     id event = ((id(*)(id, SEL, double, double, double, double,
                        NSUInteger, NSUInteger))objc_msgSend)(
@@ -673,28 +794,28 @@ static void sendScrollWheelEvent(CGVector rawDelta, CGVector acceleratedDelta,
         gPointingDevice, S("sendScrollWheelEvents:"), @[event]);
     [event release];
     uint64_t count = __sync_add_and_fetch(&gScrollEventCount, 1);
-    // Bucket scroll events into 1s windows so the health monitor can expose
-    // input flooding (high events/sec) separately from display stalls.
-    double now = CACurrentMediaTime();
-    if (now - gScrollRateWindowStart >= 1.0) {
-        double rate = gScrollRateWindowEvents /
-            MAX(now - gScrollRateWindowStart, 1e-3);
-        gScrollRateLastWindow = rate;
-        if (rate > gScrollRatePeak)
-            gScrollRatePeak = rate;
-        gScrollRateWindowEvents = 0;
-        gScrollRateWindowStart = now;
+    if (gDebugLogging) {
+        // Bucket events into 1s windows only when diagnostics are requested.
+        double now = CACurrentMediaTime();
+        if (now - gScrollRateWindowStart >= 1.0) {
+            double rate = gScrollRateWindowEvents /
+                MAX(now - gScrollRateWindowStart, 1e-3);
+            gScrollRateLastWindow = rate;
+            if (rate > gScrollRatePeak)
+                gScrollRatePeak = rate;
+            gScrollRateWindowEvents = 0;
+            gScrollRateWindowStart = now;
+        }
+        gScrollRateWindowEvents++;
+        if (momentumPhase == 0 && phase == 1)
+            gHealthScrollBeganEvents++;
+        else if (momentumPhase == 0 && phase == 4)
+            gHealthScrollChangedEvents++;
+        else if (momentumPhase == 0 && phase == 8)
+            gHealthScrollEndedEvents++;
     }
-    gScrollRateWindowEvents++;
-    // Per-health-tick phase histogram. A scroll stream that never emits
-    // ended(8) cannot drive guest momentum scrolling, which reads as stutter.
-    if (phase == 1)
-        gHealthScrollBeganEvents++;
-    else if (phase == 4)
-        gHealthScrollChangedEvents++;
-    else if (phase == 8)
-        gHealthScrollEndedEvents++;
-    if (count <= 12 || (gDebugLogging && phase != 4))
+    if (count <= 12 || (gDebugLogging &&
+                        (phase != 4 || momentumPhase != 4)))
         printf("[VirtualMac] input scroll=%llu raw=%.3f,%.3f "
                "accelerated=%.3f,%.3f inverted=%d device=%lu "
                "phase=0x%lx momentum=0x%lx external-axis-fix=%d\n",
@@ -703,6 +824,38 @@ static void sendScrollWheelEvent(CGVector rawDelta, CGVector acceleratedDelta,
                directionInvertedFromDevice, (unsigned long)deviceCategory,
                (unsigned long)phase, (unsigned long)momentumPhase,
                correctedExternalAxes);
+}
+
+static BOOL gTrackpadDirectionInverted;
+static BOOL gSurfaceMouseDirectionInverted;
+
+static void emitTrackpadScroll(CGVector rawDelta,
+                               CGVector acceleratedDelta,
+                               NSUInteger phase,
+                               NSUInteger momentumPhase,
+                               __unused void *context) {
+    sendScrollWheelEvent(rawDelta, acceleratedDelta,
+                         gTrackpadDirectionInverted, 2, phase,
+                         momentumPhase);
+}
+
+static void emitTouchScroll(CGVector rawDelta,
+                            CGVector acceleratedDelta,
+                            NSUInteger phase,
+                            NSUInteger momentumPhase,
+                            __unused void *context) {
+    sendScrollWheelEvent(rawDelta, acceleratedDelta, YES, 1, phase,
+                         momentumPhase);
+}
+
+static void emitSurfaceMouseScroll(CGVector rawDelta,
+                                   CGVector acceleratedDelta,
+                                   NSUInteger phase,
+                                   NSUInteger momentumPhase,
+                                   __unused void *context) {
+    sendScrollWheelEvent(rawDelta, acceleratedDelta,
+                         gSurfaceMouseDirectionInverted, 1, phase,
+                         momentumPhase);
 }
 
 // Immediate single-event path kept for the scripted input command; the
@@ -756,30 +909,11 @@ static void resumeScrollFlush(void) {
 // instead slice each burst into per-frame chunks of at most this many points
 // so the guest sees a continuous, smooth stream (like macOS wheel delivery).
 static const double kScrollMaxDeltaPerEvent = 40.0;
-// UIKit delivers one wheel notch as its own began...ended mini-gesture.
-// Delay the ended by this window: a notch arriving inside the window extends
-// the gesture, so a fast wheel merges into one continuous scroll and the
-// guest only sees an ended once the wheel has been quiet.
-static const double kScrollGestureMergeWindow = 0.08;
 
 static void flushPendingScroll(void) {
     gScrollDisplayLink.paused = YES;
     if (!gPointingDevice) {
         resetScrollCoalescing();
-        return;
-    }
-    if (gPendingScrollMomentumPhase) {
-        // Device-supplied momentum (e.g. a Magic Mouse): carry the phase in
-        // the momentumPhase field with no gesture scrollPhase, matching how
-        // the guest expects momentum events.
-        NSUInteger momentum = gPendingScrollMomentumPhase;
-        sendScrollWheelEvent(gPendingScrollRaw, gPendingScrollAccelerated,
-                             gPendingScrollDirectionInverted,
-                             gPendingScrollDeviceCategory, 0, momentum);
-        gPendingScrollRaw = CGVectorMake(0, 0);
-        gPendingScrollAccelerated = CGVectorMake(0, 0);
-        if (momentum == 8 || momentum == 16)
-            gPendingScrollMomentumPhase = 0;
         return;
     }
     BOOL sendBegan = gScrollGestureActive && !gScrollBeganDelivered;
@@ -797,7 +931,8 @@ static void flushPendingScroll(void) {
                           fabs(gPendingScrollAccelerated.dy));
     CGVector deltaRaw = gPendingScrollRaw;
     CGVector deltaAccel = gPendingScrollAccelerated;
-    if (maxDelta > kScrollMaxDeltaPerEvent) {
+    if (gPendingScrollDeviceCategory == 0 &&
+        maxDelta > kScrollMaxDeltaPerEvent) {
         double ratio = kScrollMaxDeltaPerEvent / maxDelta;
         deltaRaw = CGVectorMake(gPendingScrollRaw.dx * ratio,
                                 gPendingScrollRaw.dy * ratio);
@@ -813,24 +948,22 @@ static void flushPendingScroll(void) {
     BOOL drained = gPendingScrollRaw.dx == 0 && gPendingScrollRaw.dy == 0 &&
         gPendingScrollAccelerated.dx == 0 &&
         gPendingScrollAccelerated.dy == 0;
-    BOOL mergeElapsed = CACurrentMediaTime() >= gScrollEndDeadline;
-
     if (sendBegan || deltaRaw.dx != 0 || deltaRaw.dy != 0 ||
         deltaAccel.dx != 0 || deltaAccel.dy != 0) {
-        // Wheel input is delivered phase-less (NSEventPhaseNone), matching
-        // how a real Mac delivers mouse wheel events; only the two-finger
-        // pan carries the began/changed gesture lifecycle.
-        NSUInteger eventPhase = gPendingScrollDeviceCategory == 1
-            ? (sendBegan ? 1 : 4) : 0;
+        // Mouse wheels are phase-less on a real Mac. Trackpad and direct
+        // touch input retain their began/changed lifecycle so AppKit can
+        // rubber-band and finalize the gesture normally.
+        NSUInteger eventPhase = gPendingScrollDeviceCategory == 0
+            ? 0 : (sendBegan ? 1 : 4);
         sendScrollWheelEvent(deltaRaw, deltaAccel,
                              gPendingScrollDirectionInverted,
                              gPendingScrollDeviceCategory,
                              eventPhase, 0);
         gScrollBeganDelivered = YES;
     }
-    if (drained && gScrollEndPending && mergeElapsed) {
-        // The wheel went quiet: close the continuous gesture with the phase
-        // the recognizer reported so the guest finalizes scrolling.
+    if (drained && gScrollEndPending) {
+        // Close a direct two-finger touch gesture only after all coalesced
+        // deltas have been delivered. Hardware wheels are phase-less below.
         sendScrollWheelEvent(CGVectorMake(0, 0), CGVectorMake(0, 0),
                              gPendingScrollDirectionInverted,
                              gPendingScrollDeviceCategory,
@@ -841,41 +974,27 @@ static void flushPendingScroll(void) {
         gScrollBeganDelivered = NO;
     }
 
-    // Keep the link alive while delta remains to stream or the merge window
-    // is still open; otherwise go idle.
-    if (!drained || (gScrollEndPending && !mergeElapsed))
+    // Keep the link alive only while delta remains to stream.
+    if (!drained)
         gScrollDisplayLink.paused = NO;
 }
 
 static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
                              BOOL directionInvertedFromDevice,
                              NSUInteger deviceCategory,
-                             NSUInteger phase, NSUInteger momentumPhase) {
-    gScrollReceivedEventCount++;
-    if (momentumPhase) {
-        // Momentum events bypass the gesture state machine; the phase lives
-        // in the momentumPhase field and the deltas still get coalesced.
-        gPendingScrollMomentumPhase = momentumPhase;
-        gPendingScrollRaw = CGVectorMake(
-            gPendingScrollRaw.dx + rawDelta.dx,
-            gPendingScrollRaw.dy + rawDelta.dy);
-        gPendingScrollAccelerated = CGVectorMake(
-            gPendingScrollAccelerated.dx + acceleratedDelta.dx,
-            gPendingScrollAccelerated.dy + acceleratedDelta.dy);
-        gPendingScrollDirectionInverted = directionInvertedFromDevice;
-        gPendingScrollDeviceCategory = deviceCategory;
-        resumeScrollFlush();
-        return;
-    }
+                             NSUInteger phase) {
+    if (gDebugLogging)
+        gScrollReceivedEventCount++;
     BOOL eventHasDelta = rawDelta.dx != 0 || rawDelta.dy != 0 ||
         acceleratedDelta.dx != 0 || acceleratedDelta.dy != 0;
     // Hardware wheel input (deviceCategory 0) is discrete wheel semantics:
     // the guest receives phase-less scroll events, exactly like a real Mac
     // mouse wheel, so AppKit scroll views apply each delta directly. The
-    // began/changed/ended gesture lifecycle and the merge window only apply
-    // to the two-finger touch pan (deviceCategory 1), which is a real
-    // gesture. WebKit applies deltas regardless of phase, which is why
-    // browsers felt smooth while AppKit scroll views stuttered.
+    // began/changed/ended gesture lifecycle applies to the direct two-finger
+    // touch pan (deviceCategory 1) and high-resolution trackpad input
+    // (deviceCategory 2), which are real gestures.
+    // WebKit applies deltas regardless of phase, which is why browsers felt
+    // smooth while AppKit scroll views stuttered.
     if (deviceCategory == 0) {
         gPendingScrollRaw = CGVectorMake(
             gPendingScrollRaw.dx + rawDelta.dx,
@@ -893,22 +1012,25 @@ static void queueScrollWheel(CGVector rawDelta, CGVector acceleratedDelta,
     case 1: // began
         gScrollGestureActive = YES;
         gScrollBeganDelivered = NO;
-        // A new notch continues the stream: cancel any pending end so the
-        // gesture stays continuous across notches.
         gScrollEndPending = NO;
         gScrollEndPhase = 0;
         break;
     case 8: // ended
         gScrollEndPhase = 8;
         gScrollEndPending = YES;
-        gScrollEndDeadline =
-            CACurrentMediaTime() + kScrollGestureMergeWindow;
+        // UIKit repeats the last non-accelerated sample in the recognizer's
+        // terminal callback. A real Mac sends a zero-delta phase-ended event;
+        // accumulating the stale sample makes content jump on finger release.
+        rawDelta = CGVectorMake(0, 0);
+        acceleratedDelta = CGVectorMake(0, 0);
+        eventHasDelta = NO;
         break;
     case 16: // cancelled / failed
         gScrollEndPhase = 16;
         gScrollEndPending = YES;
-        gScrollEndDeadline =
-            CACurrentMediaTime() + kScrollGestureMergeWindow;
+        rawDelta = CGVectorMake(0, 0);
+        acceleratedDelta = CGVectorMake(0, 0);
+        eventHasDelta = NO;
         break;
     case 4: // changed
         if (!gScrollGestureActive) {
@@ -943,15 +1065,31 @@ static void resetScrollCoalescing(void) {
     gScrollGestureActive = NO;
     gScrollBeganDelivered = NO;
     gScrollEndPending = NO;
-    gScrollEndDeadline = 0;
     gScrollEndPhase = 0;
-    gPendingScrollMomentumPhase = 0;
     gPendingScrollRaw = CGVectorMake(0, 0);
     gPendingScrollAccelerated = CGVectorMake(0, 0);
     gPendingScrollDirectionInverted = NO;
     gPendingScrollDeviceCategory = 0;
     if (gScrollDisplayLink)
         gScrollDisplayLink.paused = YES;
+}
+
+static void resetScrollDiagnostics(void) {
+    gScrollRateWindowEvents = 0;
+    gScrollRateWindowStart = CACurrentMediaTime();
+    gScrollRateLastWindow = 0;
+    gScrollRatePeak = 0;
+    gHealthScrollBeganEvents = 0;
+    gHealthScrollChangedEvents = 0;
+    gHealthScrollEndedEvents = 0;
+    gLastHealthScrollCount = __atomic_load_n(
+        &gScrollEventCount, __ATOMIC_RELAXED);
+    gLastHealthReceivedCount = gScrollReceivedEventCount;
+    gLastHealthPointerCount = __atomic_load_n(
+        &gPointerEventCount, __ATOMIC_RELAXED);
+    gLastHealthKeyCount = __atomic_load_n(
+        &gKeyEventCount, __ATOMIC_RELAXED);
+    gLastHealthSampleTime = CACurrentMediaTime();
 }
 
 static void installGCMouse(void) {
@@ -1082,6 +1220,23 @@ static void pollInputCommand(void) {
                    [tokens[0] isEqualToString:@"smartmagnify"]) {
             printf("[VirtualMac] input command smart magnify\n");
             sendSmartMagnification();
+        } else if (tokens.count == 1 &&
+                   [tokens[0] isEqualToString:@"screenshot"]) {
+            // Development-only host-side capture. This captures the iPad
+            // app's own view hierarchy rather than using macOS screencapture,
+            // which is gated by guest Screen Recording TCC.
+            UIView *captureView = gInputView.window ?: gInputView;
+            UIGraphicsBeginImageContextWithOptions(
+                captureView.bounds.size, NO, UIScreen.mainScreen.scale);
+            BOOL drew = [captureView drawViewHierarchyInRect:captureView.bounds
+                                          afterScreenUpdates:YES];
+            UIImage *hostImage = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            NSData *png = hostImage ? UIImagePNGRepresentation(hostImage) : nil;
+            BOOL saved = [png writeToFile:@"/tmp/VirtualMac-host.png"
+                               atomically:YES];
+            printf("[VirtualMac] input command screenshot drew=%d saved=%d "
+                   "bytes=%lu\n", drew, saved, (unsigned long)png.length);
         } else {
             printf("[VirtualMac] invalid input command: %s\n",
                    command.UTF8String);
@@ -1089,27 +1244,6 @@ static void pollInputCommand(void) {
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{ pollInputCommand(); });
-}
-
-static void scheduleRecoveryDialogDismissal(void) {
-    if (unlink("/tmp/vz-dismiss-restart-alert") != 0)
-        return;
-    printf("[VirtualMac] recovery dialog auto-dismiss armed\n");
-    for (int attempt = 0; attempt < 10; attempt++) {
-        dispatch_after(
-            dispatch_time(DISPATCH_TIME_NOW,
-                          (4 + attempt) * NSEC_PER_SEC),
-            dispatch_get_main_queue(), ^{
-            printf("[VirtualMac] recovery dialog Return attempt=%d\n",
-                   attempt + 1);
-            sendKey((UIKeyboardHIDUsage)0x28, YES);
-            dispatch_after(
-                dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
-                dispatch_get_main_queue(), ^{
-                sendKey((UIKeyboardHIDUsage)0x28, NO);
-            });
-        });
-    }
 }
 
 static BOOL gForceStopPending;
@@ -1277,6 +1411,13 @@ static NSInteger macVirtualKeyCode(UIKeyboardHIDUsage usage) {
 }
 
 static void sendKey(UIKeyboardHIDUsage usage, BOOL pressed) {
+    if (usage == 0xe1) {
+        if (pressed) gShiftPressedMask |= 1;
+        else gShiftPressedMask &= ~1;
+    } else if (usage == 0xe5) {
+        if (pressed) gShiftPressedMask |= 2;
+        else gShiftPressedMask &= ~2;
+    }
     if (!gKeyboard)
         return;
     NSInteger keyCode = macVirtualKeyCode(usage);
@@ -1448,43 +1589,166 @@ static void installVideoMemoryWarningRelay(void) {
 - (CGVector)nonAcceleratedDelta;
 - (CGVector)acceleratedDelta;
 - (BOOL)directionInvertedFromDevice;
+- (NSUInteger)_scrollDeviceCategory;
 - (NSUInteger)momentumPhase;
+- (id)_hidEvent;
 @end
+
+static void VZDescribeRawScrollHIDEvent(id event)
+{
+    static NSUInteger sampleCount;
+    if (!gDebugLogging || sampleCount++ >= 24 ||
+        ![event respondsToSelector:@selector(_hidEvent)])
+        return;
+    id hidEvent = [event _hidEvent];
+    if (!hidEvent) {
+        printf("[VirtualMac] scroll HID event unavailable class=%s\n",
+               object_getClassName(event));
+        return;
+    }
+    CFStringRef description = CFCopyDescription((__bridge CFTypeRef)hidEvent);
+    printf("[VirtualMac] scroll HID class=%s description=%s\n",
+           object_getClassName(hidEvent),
+           description ? [(__bridge NSString *)description UTF8String] : "(none)");
+    if (description)
+        CFRelease(description);
+}
 
 @interface UIPanGestureRecognizer (VZScrollEventSPI)
 - (void)_scrollingChangedWithEvent:(id)event;
 @end
 
+// Pencil relay declarations are needed by VZInputView's hover handler. Keep
+// the wire values in one enum so the handler cannot accidentally depend on a
+// later file-scope definition. These values match pencil-probe's
+// PencilEventType raw values.
+enum {
+    kPencilEventPoint = 0,
+    kPencilEventProximityEnter = 1,
+    kPencilEventProximityLeave = 2,
+    kPencilEventHover = 3,
+    kPencilEventHoverEnd = 4,
+};
+static BOOL pencilRelayEnabled(void);
+static bool pencilVsockSend(uint8_t type, float pressure,
+                            float nx, float ny,
+                            float altitude, float azimuth);
+
 @interface VZRawScrollRecognizer : UIPanGestureRecognizer {
     CGVector _vzRawDelta;
     CGVector _vzAcceleratedDelta;
     BOOL _vzDirectionInverted;
+    NSUInteger _vzUIKitDeviceCategory;
     NSUInteger _vzMomentumPhase;
+    NSUInteger _vzHIDPhase;
+    NSTimeInterval _vzEventTimestamp;
+    uint64_t _vzLastHIDTimestamp;
+    BOOL _vzForwardedRawHID;
 }
 - (CGVector)vzRawDelta;
 - (CGVector)vzAcceleratedDelta;
 - (BOOL)vzDirectionInverted;
+- (NSUInteger)vzUIKitDeviceCategory;
 - (NSUInteger)vzMomentumPhase;
+- (NSUInteger)vzHIDPhase;
+- (BOOL)vzForwardedRawHID;
+- (NSTimeInterval)vzEventTimestamp;
 @end
 
 @implementation VZRawScrollRecognizer
 
 - (void)_scrollingChangedWithEvent:(id)event
 {
+    VZDescribeRawScrollHIDEvent(event);
     _vzRawDelta = [event nonAcceleratedDelta];
     _vzAcceleratedDelta = [event acceleratedDelta];
     _vzDirectionInverted = [event directionInvertedFromDevice];
-    // momentumPhase is delivered for momentum scrolling (e.g. a Magic
-    // Mouse); guard the SPI in case a given iPadOS version lacks it.
+    // UIScrollEvent identifies iPad trackpad input as category 2 on the
+    // supported iPadOS 14-16 UIKit implementations. This is the distinction
+    // the public gesture recognizer API omits: both a wheel and trackpad
+    // otherwise arrive through the same UIPanGestureRecognizer path.
+    _vzUIKitDeviceCategory =
+        [event respondsToSelector:@selector(_scrollDeviceCategory)]
+        ? [event _scrollDeviceCategory] : 0;
     _vzMomentumPhase = [event respondsToSelector:@selector(momentumPhase)]
         ? [event momentumPhase] : 0;
+    _vzEventTimestamp = [event timestamp];
+    id hidEvent = [event respondsToSelector:@selector(_hidEvent)]
+        ? [event _hidEvent] : nil;
+    static uint64_t (*getTimestamp)(CFTypeRef);
+    static uint32_t (*getFlags)(CFTypeRef);
+    static dispatch_once_t hidOnce;
+    dispatch_once(&hidOnce, ^{
+        getTimestamp = dlsym(RTLD_DEFAULT, "IOHIDEventGetTimeStamp");
+        getFlags = dlsym(RTLD_DEFAULT, "IOHIDEventGetEventFlags");
+    });
+    uint64_t hidTimestamp = hidEvent && getTimestamp
+        ? getTimestamp((__bridge CFTypeRef)hidEvent) : 0;
+    uint32_t hidFlags = hidEvent && getFlags
+        ? getFlags((__bridge CFTypeRef)hidEvent) : 0;
+    NSUInteger hidPhaseBits = (hidFlags >> 24) & 0xff;
+    _vzHIDPhase = ((hidPhaseBits & 0x01) ? 0x01 : 0) |
+                  ((hidPhaseBits & 0x02) ? 0x04 : 0) |
+                  ((hidPhaseBits & 0x04) ? 0x08 : 0) |
+                  ((hidPhaseBits & 0x08) ? 0x10 : 0) |
+                  ((hidPhaseBits & 0x80) ? 0x20 : 0);
+    // UIKit may offer one HID packet to the recognizer twice. Forward at the
+    // HID boundary exactly once; duplicate terminal events confuse AppKit's
+    // scroll sequence state and are especially visible on direction changes.
+    _vzForwardedRawHID = hidEvent && getFlags;
+    if (_vzForwardedRawHID &&
+        (hidTimestamp == 0 || hidTimestamp != _vzLastHIDTimestamp)) {
+        _vzLastHIDTimestamp = hidTimestamp;
+        NSUInteger category = _vzUIKitDeviceCategory;
+        if (category == 2) {
+            // The HID root contains physical trackpad mickeys and reliable
+            // contact phases. Its accelerated child is tuned for iPadOS, not
+            // AppKit/VZ, so run only the root through Ventura's Mac curve.
+            // Ignore iPadOS momentum packets: the Mac bridge produces the
+            // corresponding 60 Hz stream and a MayBegin packet cancels it.
+            gTrackpadDirectionInverted = _vzDirectionInverted;
+            if (_vzMomentumPhase == 0)
+                VZTrackpadScrollBridgeHandle(_vzRawDelta, _vzHIDPhase,
+                                             _vzEventTimestamp);
+        } else if (category == 3) {
+            // Magic Mouse surface reports have contact phases but no native
+            // macOS momentum on supported iPadOS. Reconstruct that stage in
+            // an independent pipeline; a conventional wheel remains below.
+            gSurfaceMouseDirectionInverted = _vzDirectionInverted;
+            if (_vzMomentumPhase == 0)
+                VZSurfaceMouseScrollBridgeHandle(
+                    _vzRawDelta, _vzHIDPhase, _vzEventTimestamp);
+            else
+                sendScrollWheelEvent(
+                    _vzRawDelta, _vzAcceleratedDelta,
+                    _vzDirectionInverted, 1, 0,
+                    hidMomentumPhaseFromUIKitPhase(_vzMomentumPhase));
+        } else {
+            // A wheel has no contact phase. Preserve the proven display-rate
+            // coalescing for high-report-rate mice; Magic Mouse momentum is
+            // already generated by the host HID stack and remains immediate.
+            queueScrollWheel(_vzRawDelta, _vzAcceleratedDelta,
+                             _vzDirectionInverted, 0, 0);
+        }
+    }
+    static NSUInteger sourceSamples;
+    if (gDebugLogging && sourceSamples++ < 8)
+        printf("[VirtualMac] UIKit scroll source class=%s category=%lu "
+               "event-phase=%lu\n",
+               object_getClassName(event),
+               (unsigned long)_vzUIKitDeviceCategory,
+               (unsigned long)[event phase]);
     [super _scrollingChangedWithEvent:event];
 }
 
 - (CGVector)vzRawDelta { return _vzRawDelta; }
 - (CGVector)vzAcceleratedDelta { return _vzAcceleratedDelta; }
 - (BOOL)vzDirectionInverted { return _vzDirectionInverted; }
+- (NSUInteger)vzUIKitDeviceCategory { return _vzUIKitDeviceCategory; }
 - (NSUInteger)vzMomentumPhase { return _vzMomentumPhase; }
+- (NSUInteger)vzHIDPhase { return _vzHIDPhase; }
+- (BOOL)vzForwardedRawHID { return _vzForwardedRawHID; }
+- (NSTimeInterval)vzEventTimestamp { return _vzEventTimestamp; }
 
 @end
 
@@ -1736,14 +2000,14 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     switch (recognizer.state) {
     case UIGestureRecognizerStateBegan:
     case UIGestureRecognizerStateChanged:
+        notePointerInputSource(NO);
         gUIKitHoverActive = YES;
         sendIndirectPointerLocation(location, self.bounds);
-        // Apple Pencil hover: zOffset > 0 distinguishes Pencil from
-        // trackpad. Send hover position to the guest VM so drawing
-        // apps can show brush previews before the pen touches.
-        // Tilt (altitudeAngle/azimuthAngle) on UIHoverGestureRecognizer
-        // requires iOS 16.4+, which exceeds the Hypervisor-based upper
-        // bound (iPadOS 16.3.1), so we send zeros for tilt fields.
+        // Apple Pencil hover: zOffset is available from iPadOS 16.1 and is
+        // zero for devices without hover support, including trackpads. The
+        // supported M2 iPad can therefore relay position on 16.1-16.3.1.
+        // UIKit added hover tilt only in 16.4, so older hosts send neutral
+        // tilt while preserving the useful position/proximity lifecycle.
         if (@available(iOS 16.1, *)) {
             if (pencilRelayEnabled() && recognizer.zOffset > 0) {
                 _vzPencilHoverActive = YES;
@@ -1752,7 +2016,15 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
                     ? (float)(location.x / b.size.width) : 0;
                 float ny = (b.size.height > 0)
                     ? (float)(location.y / b.size.height) : 0;
-                pencilVsockSend(kPencilEventHover, 0, nx, ny, 0, 0);
+                float altitude = (float)M_PI_2;
+                float azimuth = 0;
+                if (@available(iOS 16.4, *)) {
+                    altitude = (float)recognizer.altitudeAngle;
+                    azimuth =
+                        (float)[recognizer azimuthAngleInView:self];
+                }
+                pencilVsockSend(kPencilEventHover, 0, nx, ny,
+                                altitude, azimuth);
             }
         }
         break;
@@ -1839,6 +2111,12 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 
 - (void)handleScroll:(VZRawScrollRecognizer *)recognizer
 {
+    // Hardware scroll packets are forwarded directly from
+    // -_scrollingChangedWithEvent: before UIPanGestureRecognizer alters their
+    // phase or coalescing. This target remains installed solely so UIKit keeps
+    // the private scrolling recognizer active.
+    if (recognizer.vzForwardedRawHID)
+        return;
     // NSEventPhase and the private VZ event use the same bit values:
     // began=1, changed=4, ended=8, cancelled=16. The recognizer captures the
     // incremental hardware deltas before UIKit builds cumulative translation.
@@ -1860,12 +2138,40 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     default:
         return;
     }
-    queueScrollWheel(recognizer.vzRawDelta,
-                     recognizer.vzAcceleratedDelta,
-                     recognizer.vzDirectionInverted,
-                     0,
-                     phase,
-                     recognizer.vzMomentumPhase);
+    // The real Ventura VMM receives phase-less events from a mouse and
+    // began/changed/ended events from a trackpad. UIKit category 2 is the
+    // trackpad source on iPadOS 14-16; all other indirect sources keep mouse
+    // wheel semantics. Direct touch uses the separate category 1 path.
+    NSUInteger deviceCategory = recognizer.vzUIKitDeviceCategory;
+    if (deviceCategory == 2) {
+        // UIKit exposes the iPad trackpad's nonaccelerated stream but omits
+        // the Mac driver's acceleration and momentum stages. The bridge ports
+        // Ventura's MultitouchHID/IOHID behavior, normalizes UIKit's fractional
+        // post-pause jitter, and discards UIKit's repeated terminal sample.
+        if (gDebugLogging)
+            gScrollReceivedEventCount++;
+        gTrackpadDirectionInverted = recognizer.vzDirectionInverted;
+        VZTrackpadScrollBridgeHandle(recognizer.vzRawDelta, phase,
+                                     recognizer.vzEventTimestamp);
+    } else if (deviceCategory == 3) {
+        gSurfaceMouseDirectionInverted = recognizer.vzDirectionInverted;
+        if (recognizer.vzMomentumPhase == 0)
+            VZSurfaceMouseScrollBridgeHandle(
+                recognizer.vzRawDelta, phase,
+                recognizer.vzEventTimestamp);
+        else
+            sendScrollWheelEvent(
+                recognizer.vzRawDelta, recognizer.vzAcceleratedDelta,
+                recognizer.vzDirectionInverted, 1, 0,
+                hidMomentumPhaseFromUIKitPhase(
+                    recognizer.vzMomentumPhase));
+    } else {
+        queueScrollWheel(recognizer.vzRawDelta,
+                         recognizer.vzAcceleratedDelta,
+                         recognizer.vzDirectionInverted,
+                         deviceCategory,
+                         phase);
+    }
 }
 
 - (void)handleTouchScroll:(UIPanGestureRecognizer *)recognizer
@@ -1891,12 +2197,14 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     default:
         return;
     }
+    notePointerInputSource(YES);
     // A direct two-finger pan follows the content under the fingers (natural
     // scrolling), while captured hardware-wheel deltas describe wheel
     // rotation. Rotate and invert the UIKit translation before entering the
     // shared VZ event mapping. This intentionally affects direct touch only.
-    CGVector raw = CGVectorMake(-delta.y, delta.x);
-    queueScrollWheel(raw, raw, YES, 1, phase, 0);
+    CGVector translation = CGVectorMake(-delta.y, delta.x);
+    VZTouchScrollBridgeHandle(translation, phase, CACurrentMediaTime(),
+                              gScrollingSpeed);
 }
 
 - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
@@ -2199,13 +2507,6 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
 static const uint32_t kPencilVsockPort = 9949;
 enum { kPencilPacketSize = 21 };
 
-// Wire protocol event types. Must match PencilEventType in pencil-probe.
-static const uint8_t kPencilEventPoint = 0;
-static const uint8_t kPencilEventProximityEnter = 1;
-static const uint8_t kPencilEventProximityLeave = 2;
-static const uint8_t kPencilEventHover = 3;
-static const uint8_t kPencilEventHoverEnd = 4;
-
 // Wire protocol byte offsets. Must match PencilPacket offsets in pencil-probe.
 enum {
     kPencilOffsetPressure = 1,
@@ -2393,6 +2694,8 @@ static bool pencilVsockSend(uint8_t type, float pressure,
            withEvent:(UIEvent *)event
 {
     UITouch *touch = [touches anyObject];
+    if (touch)
+        notePointerInputSource(touch.type == UITouchTypeDirect);
     if (touch.type == UITouchTypeDirect && [self usesDeferredDirectTouchClicks]) {
         [self beginDeferredDirectTouches:touches withEvent:event];
         return;
@@ -2789,6 +3092,9 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     gScrollingSpeed = MAX(0.1, MIN(1.0,
         [[VZAppSettings.sharedSettings stringForKey:VZScrollingSpeedKey]
             doubleValue]));
+    gShowCursorWhenUsingTouch = [VZAppSettings.sharedSettings
+        boolForKey:VZShowCursorWhenUsingTouchKey];
+    notePointerInputSource(gLastInputWasDirectTouch);
     printf("[VirtualMac] scroll settings speed=%.2f\n", gScrollingSpeed);
     if (gStatusLabel)
         gStatusLabel.hidden = !shouldShowStatusLabel();
@@ -3300,7 +3606,8 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         animations:^{
             self.libraryNavigationController.view.hidden = YES;
             gInputView.hidden = NO;
-            if (gCursorView.image) gCursorView.hidden = NO;
+            if (gCursorView.image)
+                gCursorView.hidden = gCursorSuppressedForDirectTouch;
         } completion:nil];
     [self activateVMDisplay:YES];
     if (GCKeyboard.coalescedKeyboard)
@@ -3454,7 +3761,9 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         initWithTitle:VZL(@"Installing macOS")] autorelease];
     self.installationController.statusText = VZL(@"Preparing installation…");
     self.installationController.detailText =
-        VZL(@"Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake.");
+        VZDeviceString(
+            VZL(@"Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPad will remain awake."),
+            VZL(@"Installation progress may pause for several minutes while the Virtual Mac starts the installation environment. Your iPhone will remain awake."));
     self.installationController.consoleText = VZL(@"Waiting for installation output…");
     self.installationController.indeterminate = YES;
     self.installationController.cancellationHandler = ^{
@@ -3622,14 +3931,18 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
             if (fraction <= 0.0) {
                 self.installationController.indeterminate = YES;
                 self.installationController.statusText = VZL(@"Starting installation environment…");
-                self.installationController.detailText = VZL(@"The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake.");
+                self.installationController.detailText = VZDeviceString(
+                    VZL(@"The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPad will remain awake."),
+                    VZL(@"The first progress value can take several minutes while the Virtual Mac changes from DFU to RestoreOS. Your iPhone will remain awake."));
                 return;
             }
             self.installationController.indeterminate = NO;
             self.installationController.progress = MAX(0, MIN(1, fraction));
             self.installationController.statusText = [NSString stringWithFormat:
                 VZL(@"%.0f%% complete"), fraction * 100.0];
-            self.installationController.detailText = VZL(@"Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake.");
+            self.installationController.detailText = VZDeviceString(
+                VZL(@"Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPad will remain awake."),
+                VZL(@"Installation progress may remain unchanged while macOS prepares the next installation stage. Your iPhone will remain awake."));
         } else if ([log containsString:@"INSTALL_BEGIN"]) {
             self.installationController.statusText = VZL(@"Starting installation…");
         } else if ([log containsString:@"RESTORE_LOAD_OK"]) {
@@ -3709,9 +4022,11 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
     gVideoMemoryAlertPresented = NO;
     gVirtualMachineDelegate = nil;
     gKeyboard = nil;
+    gShiftPressedMask = 0;
     gGlobeDown = NO;
     gPointingDevice = nil;
     resetScrollCoalescing();
+    VZTrackpadScrollBridgeReset();
     gTouchButtons = 0;
     gHardwareMouseButtons = 0;
     gLastPointerButtons = NSUIntegerMax;
@@ -3918,7 +4233,10 @@ static void updateCursorOverlay(VZFrameUpdateSharedPtr update) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (imageChanged) {
             gCursorView.image = image;
-            gCursorView.hidden = image == nil;
+            gCursorView.hidden = image == nil ||
+                gCursorSuppressedForDirectTouch;
+            if (gExternalCursorView && gCursorView.hidden)
+                gExternalCursorView.hidden = YES;
             gCursorPixelSize = image
                 ? CGSizeMake(width, height) : CGSizeZero;
             gCursorHotspot = image
@@ -4674,7 +4992,6 @@ static void activateFramebuffer(void) {
            inputFocused, [gInputView isFirstResponder], gInputView.window);
     scheduleInputSelfTest();
     pollInputCommand();
-    scheduleRecoveryDialogDismissal();
     logFramebufferState(view, framebuffer, "activated");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
@@ -4713,6 +5030,7 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
                                       NSString *bundlePath,
                                       NSDictionary *options) {
     setVMJetsamProtection(YES);
+    gShiftPressedMask = 0;
     pencilVsockReset();
     VZGuestToolsReset();
     __atomic_store_n(&gPencilRelayEnabled,
@@ -4730,6 +5048,7 @@ static void startVirtualMachineWorker(UIView *container, id delegate,
     // Consume the one-shot mode at the actual boot boundary. The current boot
     // keeps the captured value while Settings immediately returns to Off.
     gDebugLogging = VZConsumeDebugLoggingForBoot();
+    resetScrollDiagnostics();
     setenv("VZ_DEBUG_LOGGING", gDebugLogging ? "1" : "0", 1);
     setenv("VMMHOOK_TRACE_VCPU_LIMIT", gDebugLogging ? "256" : "8", 1);
     setenv("VMMHOOK_TRACE_XPC_LIMIT", gDebugLogging ? "200" : "8", 1);
@@ -5186,6 +5505,9 @@ static void disconnectExternalDisplay(void) {
     installKeyboardRenderingFix();
     installShellShortcutRelay();
     installVideoMemoryWarningRelay();
+    VZTrackpadScrollBridgeConfigure(emitTrackpadScroll, NULL);
+    VZSurfaceMouseScrollBridgeConfigure(emitSurfaceMouseScroll, NULL);
+    VZTouchScrollBridgeConfigure(emitTouchScroll, NULL);
     gFixExternalDisplayScrollDirection = [VZAppSettings.sharedSettings
         boolForKey:VZExternalDisplayScrollFixKey];
     gScrollingSpeed = MAX(0.1, MIN(1.0,
@@ -5304,6 +5626,11 @@ static void disconnectExternalDisplay(void) {
 
     [self.window makeKeyAndVisible];
     VZContinueAfterRootHideInformation(controller, nil);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(0.75 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        VZPresentCompatibilityNotice(controller);
+    });
     UIApplicationShortcutIcon *libraryIcon = [UIApplicationShortcutIcon
         iconWithSystemImageName:@"square.grid.2x2"];
     UIApplicationShortcutIcon *controlsIcon = [UIApplicationShortcutIcon
@@ -5319,6 +5646,10 @@ static void disconnectExternalDisplay(void) {
     unlink("/tmp/virtual-mac-vm-active");
     gMouseLocation = CGPointMake(CGRectGetMidX(inputView.bounds),
                                  CGRectGetMidY(inputView.bounds));
+    gShowCursorWhenUsingTouch = [VZAppSettings.sharedSettings
+        boolForKey:VZShowCursorWhenUsingTouchKey];
+    gLastInputWasDirectTouch = NO;
+    gCursorSuppressedForDirectTouch = NO;
     installGCMouse();
     startHealthMonitor();
     startControlMonitor();

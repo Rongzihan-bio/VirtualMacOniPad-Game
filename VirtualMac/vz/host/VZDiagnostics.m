@@ -512,7 +512,7 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
     NSString *manifest = [NSString stringWithFormat:
         @"Virtual Mac diagnostics\n"
          "Created: %@\nApp version: %@ (%@)\nDevice: %s\n"
-         "iPadOS: %@ (%@)\nPhysical memory: %llu\nFree storage: %@\n"
+         "%@: %@ (%@)\nPhysical memory: %llu\nFree storage: %@\n"
          "Total storage: %@\nUptime: %.0f seconds\nThermal state: %ld\n"
          "Low Power Mode: %@\nProtected data available: %@\n"
          "Application state: %ld\nScreen bounds: %@\nNative bounds: %@\n"
@@ -520,6 +520,8 @@ static void VZEnumerateDiagnosticEntries(VZDiagnosticEntryHandler handler)
          "Executable path: %@\nRootHide jailbreak root: %@\n",
         NSDate.date, bundleInfo[@"CFBundleShortVersionString"] ?: @"unknown",
         bundleInfo[@"CFBundleVersion"] ?: @"unknown", systemInfo.machine,
+        UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone
+            ? @"iOS" : @"iPadOS",
         NSProcessInfo.processInfo.operatingSystemVersionString, osBuild,
         (unsigned long long)NSProcessInfo.processInfo.physicalMemory,
         fileSystem[NSFileSystemFreeSize] ?: @"unknown",

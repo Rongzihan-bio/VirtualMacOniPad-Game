@@ -18,6 +18,7 @@ NSString * const VZTouchDoubleTapAccommodationKey = @"TouchDoubleTapAccommodatio
 NSString * const VZTouchTwoFingerScrollingKey = @"TouchTwoFingerScrolling";
 NSString * const VZTouchTwoFingerRightClickKey = @"TouchTwoFingerRightClick";
 NSString * const VZTouchLongPressRightClickKey = @"TouchLongPressRightClick";
+NSString * const VZShowCursorWhenUsingTouchKey = @"ShowCursorWhenUsingTouch";
 NSString * const VZKeyboardCrashWorkaroundKey = @"KeyboardCrashWorkaround";
 NSString * const VZExternalDisplayScrollFixKey = @"ExternalDisplayScrollFix";
 NSString * const VZScrollingSpeedKey = @"ScrollingSpeed";
@@ -100,6 +101,7 @@ BOOL VZIsRootHideEnvironment(void)
         VZTouchTwoFingerScrollingKey: @YES,
         VZTouchTwoFingerRightClickKey: @YES,
         VZTouchLongPressRightClickKey: @NO,
+        VZShowCursorWhenUsingTouchKey: @YES,
         VZKeyboardCrashWorkaroundKey: @YES,
         VZExternalDisplayScrollFixKey: @YES,
         VZScrollingSpeedKey: @"0.25",

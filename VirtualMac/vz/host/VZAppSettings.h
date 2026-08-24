@@ -20,6 +20,7 @@ FOUNDATION_EXPORT NSString * const VZTouchDoubleTapAccommodationKey;
 FOUNDATION_EXPORT NSString * const VZTouchTwoFingerScrollingKey;
 FOUNDATION_EXPORT NSString * const VZTouchTwoFingerRightClickKey;
 FOUNDATION_EXPORT NSString * const VZTouchLongPressRightClickKey;
+FOUNDATION_EXPORT NSString * const VZShowCursorWhenUsingTouchKey;
 FOUNDATION_EXPORT NSString * const VZKeyboardCrashWorkaroundKey;
 FOUNDATION_EXPORT NSString * const VZExternalDisplayScrollFixKey;
 FOUNDATION_EXPORT NSString * const VZScrollingSpeedKey;
