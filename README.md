@@ -32,6 +32,7 @@ Magic Keyboard is not required because you can also use the touchscreen and virt
 - To access the virtual keyboard, tap the keyboard icon. If the virtual keyboard gets in the way, press and hold the bottom-right icon to switch to Floating mode.
 - If the HUD gets in the way, move it to a different corner or hide it from the More menu. To show it again, press and hold the Virtual Mac icon on the iPad Home Screen, then tap Show Virtual Mac Controls.
 - To automatically start up your virtual Mac, enable System Settings > Users & Groups > Automatically log in, and set System Settings > Lock Screen to Never. Then in Virtual Mac's in-app Settings, change Start on Launch from Show Library to the name of your virtual Mac. To show library again, press and hold the Virtual Mac icon on the iPad Home Screen, then tap Show Library.
+- If your Magic Keyboard doesn't have a hardware Escape key, press Command + Period (⌘ + .) instead. You can also map another key to Escape in Settings > General > Keyboard > Hardware Keyboard > Modifier Keys.
 
 ### Is it possible to support newer versions of iPadOS?
 
@@ -51,6 +52,7 @@ With the latest update, Virtual Mac on iPad also goes beyond what VirtualBuddy a
 
 First, open Sileo and update to the latest version of Virtual Mac. If the issue remains, try these fixes for common issues:
 - Virtual Mac does not support the Dopamine-roothide environment. To use Virtual Mac, remove the roothide jailbreak from Dopamine-roothide > Settings > Remove Jailbreak, then [switch to the official version of Dopamine](https://ios.cfw.guide/installing-dopamine-trollstore/).
+- If your iPad has 8 GB of RAM, use the recommended 4 GB memory allocation during initial Virtual Mac creation. You can increase the assigned memory after installation.
 - If you see "[install-launcher failed: Permission denied](https://github.com/nfzerox/VirtualMacOniPad/issues/10)", update to the latest version of Virtual Mac. If the issue remains, open Filza and [follow this screenshot](VirtualMac/screenshots/troubleshooting/troubleshooting-permission.png), changing access permissions of `/var/root` to "Read, Execute" for "Others".
 - If you see "[Unexpected device state 'DFU' expected 'RestoreOS' (Probably forced into DFU mode externally)](https://github.com/nfzerox/VirtualMacOniPad/issues/11)", update to the latest version of Virtual Mac. If the issue remains, open Sileo > Packages, search for usbmuxd and [temporarily uninstall it](VirtualMac/screenshots/troubleshooting/troubleshooting-usbmuxd.png).
 - If you see "launcher cannot become root: Operation not permitted" or "Internal Virtualization error. The virtual machine failed to start", and have Choicy installed, open Settings > Choicy > Applications > Virtual Mac, and turn off "Disable Tweak Injection". You can also uninstall Choicy.
