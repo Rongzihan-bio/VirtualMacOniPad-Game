@@ -3672,11 +3672,15 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
         [self presentViewController:exists animated:YES completion:nil];
         return;
     }
-    NSString *cpu = [options[@"CPUCount"] stringValue];
-    uint64_t runtimeMemory = [options[@"MemorySize"] unsignedLongLongValue];
-    uint64_t restoreMemory = VZRestoreImageUsesMontereyProfile(url.path)
-        ? MIN(runtimeMemory, 4ULL << 30) : runtimeMemory;
-    NSString *memory = [@(restoreMemory) stringValue];
+    // Restoring macOS temporarily runs both the installation service and a
+    // VMM.  Passing a large runtime configuration through here can exhaust an
+    // 8 GB iPad before RestoreOS starts.  Use the installer's stock 4-core,
+    // 4-GiB configuration for every restore; the selected runtime values stay
+    // in installationOptions and are written to the completed bundle below.
+    static const NSUInteger restoreCPUCount = 4;
+    static const uint64_t restoreMemorySize = 4ULL << 30;
+    NSString *cpu = [@(restoreCPUCount) stringValue];
+    NSString *memory = [@(restoreMemorySize) stringValue];
     NSString *storage = [options[@"StorageSize"] stringValue];
     const char *launcher =
         "/var/root/VirtualMac/install/install-launcher";
@@ -3746,9 +3750,11 @@ static void VZWriteInstallationAttempt(NSString *attemptPath, NSString *state,
             VZWriteInstallationAttempt(attemptPath, @"failed", @{@"Failure": failure});
         }
     });
-    if (restoreMemory != runtimeMemory)
-        printf("[VirtualMac] Monterey restore memory=%lluMiB runtime-memory=%lluMiB\n",
-               restoreMemory >> 20, runtimeMemory >> 20);
+    printf("[VirtualMac] restore resources cpu=%lu memory=%lluMiB; "
+           "runtime resources cpu=%llu memory=%lluMiB\n",
+           (unsigned long)restoreCPUCount, restoreMemorySize >> 20,
+           [options[@"CPUCount"] unsignedLongLongValue],
+           [options[@"MemorySize"] unsignedLongLongValue] >> 20);
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     self.installationAttemptPath = attemptPath;
     self.installationRestoreImagePath = url.path;
