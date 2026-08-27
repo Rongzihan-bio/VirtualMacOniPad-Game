@@ -185,12 +185,25 @@ BOOL VZIsRootHideEnvironment(void)
 
 BOOL VZConsumeDebugLoggingForBoot(void)
 {
-    VZAppSettings *settings = VZAppSettings.sharedSettings;
-    NSString *mode = [settings stringForKey:VZDebugLoggingKey];
-    BOOL enabled = [mode isEqualToString:VZDebugLoggingModeAlways] ||
-        [mode isEqualToString:VZDebugLoggingModeNextBoot];
-    if ([mode isEqualToString:VZDebugLoggingModeNextBoot])
-        [settings setString:VZDebugLoggingModeOff forKey:VZDebugLoggingKey];
+    __block BOOL enabled = NO;
+    void (^consume)(void) = ^{
+        VZAppSettings *settings = VZAppSettings.sharedSettings;
+        NSString *mode = [settings stringForKey:VZDebugLoggingKey];
+        enabled = [mode isEqualToString:VZDebugLoggingModeAlways] ||
+            [mode isEqualToString:VZDebugLoggingModeNextBoot];
+        if ([mode isEqualToString:VZDebugLoggingModeNextBoot])
+            [settings setString:VZDebugLoggingModeOff
+                         forKey:VZDebugLoggingKey];
+    };
+    // VM construction runs on a worker queue. Consuming the one-shot setting
+    // posts VZSettingsDidChangeNotification, whose observers update UIKit and
+    // FrontBoard scene state. iPadOS 14 aborts if that notification is sent
+    // from the worker. Keep settings mutation and notification delivery on
+    // the main thread; later VMM construction remains off-main.
+    if (NSThread.isMainThread)
+        consume();
+    else
+        dispatch_sync(dispatch_get_main_queue(), consume);
     return enabled;
 }
 

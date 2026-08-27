@@ -232,6 +232,7 @@
 "Starting installation…" = "インストールを開始中…";
 "Starting Virtual Mac…" = "仮想Macを起動中…";
 "Storage" = "ストレージ";
+"Storage size can’t be changed later. If you need additional storage in the future, set a larger size now." = "ストレージ容量は後から変更できません。将来さらにストレージが必要な場合は、今のうちに大きめの容量を設定してください。";
 "Support" = "サポート";
 "Support for %@ is experimental" = "%@は試験的サポートです";
 "Suppress Home Indicator" = "ホームインジケータを非表示";
@@ -310,8 +311,9 @@
 "Width" = "幅";
 "Window Size" = "ウインドウサイズ";
 "You can also copy an existing Virtual Mac bundle to /var/mobile/Media/VirtualMac using an app such as iMazing or Filza." = "iMazingやFilzaなどのアプリを使って、既存の仮想Macバンドルを/var/mobile/Media/VirtualMacにコピーすることもできます。";
-"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing.\n\nAssigning more memory than the recommendation does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "この仮想Macには%llu〜%llu GBのメモリを割り当てることができます。推奨値は%llu GBです。残りのメモリはグラフィックス処理に使用されます。\n\n推奨値を超えるメモリを割り当ててもVirtual Macの性能が向上するとは限らず、グラフィックス性能やシステムの安定性が低下する場合があります。";
-"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks." = "この仮想Macには%llu〜%llu個のプロセッサコアを割り当てることができます。推奨値は%lu個です。\n\n推奨値を超えるプロセッサコアを割り当ててもVirtual Macの性能が向上するとは限りません。iOSも内部タスクの処理にプロセッサ性能を必要とします。";
-"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks." = "この仮想Macには%llu〜%llu個のプロセッサコアを割り当てることができます。推奨値は%lu個です。\n\n推奨値を超えるプロセッサコアを割り当ててもVirtual Macの性能が向上するとは限りません。iPadOSも内部タスクの処理にプロセッサ性能を必要とします。";
+"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "この仮想Macには%llu〜%lluGBのメモリを割り当てられます。推奨値は%lluGBです。残りのメモリはグラフィックス処理とiOSに使用されます。\n\nメモリを最大まで割り当てても仮想Macの性能が向上するとは限らず、グラフィックス性能やシステムの安定性が低下する場合があります。";
+"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iPadOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "この仮想Macには%llu〜%lluGBのメモリを割り当てられます。推奨値は%lluGBです。残りのメモリはグラフィックス処理とiPadOSに使用されます。\n\nメモリを最大まで割り当てても仮想Macの性能が向上するとは限らず、グラフィックス性能やシステムの安定性が低下する場合があります。";
+"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks." = "この仮想Macには%llu〜%llu個のプロセッサコアを割り当てられます。推奨値は%lu個です。\n\nプロセッサコアを最大数まで割り当てても仮想Macの性能が向上するとは限りません。iOSもシステムタスクの処理にプロセッサ性能を必要とします。";
+"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks." = "この仮想Macには%llu〜%llu個のプロセッサコアを割り当てられます。推奨値は%lu個です。\n\nプロセッサコアを最大数まで割り当てても仮想Macの性能が向上するとは限りません。iPadOSもシステムタスクの処理にプロセッサ性能を必要とします。";
 "Your changes to this Virtual Mac will not be saved." = "この仮想Macへの変更は保存されません。";
 "“%@” and all files stored in it will be permanently deleted." = "「%@」とその中に保存されているすべてのファイルは完全に削除されます。";

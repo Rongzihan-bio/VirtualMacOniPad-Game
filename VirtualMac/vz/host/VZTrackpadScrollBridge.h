@@ -18,6 +18,11 @@ void VZTrackpadScrollBridgeConfigure(VZTrackpadScrollEmitter emitter,
 void VZTrackpadScrollBridgeHandle(CGVector rawDelta,
                                   NSUInteger phase,
                                   CFTimeInterval timestamp);
+// Stop only an in-flight hardware-trackpad momentum sequence. UIKit's
+// private scroll-deceleration interrupter invokes this on light finger
+// contact, before an ordinary UITouch/click exists.
+void VZTrackpadScrollBridgeInterruptMomentum(void);
+BOOL VZTrackpadScrollBridgeHasMomentum(void);
 // Magic Mouse surface input has a trackpad-like contact lifecycle on iPadOS,
 // but it does not receive macOS momentum from the host. Keep it in a separate
 // pipeline so its acceleration and momentum history cannot affect a trackpad.
@@ -26,6 +31,8 @@ void VZSurfaceMouseScrollBridgeConfigure(VZTrackpadScrollEmitter emitter,
 void VZSurfaceMouseScrollBridgeHandle(CGVector rawDelta,
                                       NSUInteger phase,
                                       CFTimeInterval timestamp);
+void VZSurfaceMouseScrollBridgeInterruptMomentum(void);
+BOOL VZSurfaceMouseScrollBridgeHasMomentum(void);
 // Direct touch does not provide macOS trackpad mickeys or momentum packets.
 // Run it through an independent copy of the same state machine so touch and
 // hardware-trackpad gestures cannot contaminate one another's history.
@@ -35,6 +42,8 @@ void VZTouchScrollBridgeHandle(CGVector translationDelta,
                                NSUInteger phase,
                                CFTimeInterval timestamp,
                                CGFloat speed);
+void VZTouchScrollBridgeInterruptMomentum(void);
+BOOL VZTouchScrollBridgeHasMomentum(void);
 void VZTrackpadScrollBridgeReset(void);
 
 NS_ASSUME_NONNULL_END

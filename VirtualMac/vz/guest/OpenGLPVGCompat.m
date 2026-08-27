@@ -35,13 +35,20 @@ static BOOL ProcessUsesUnsupportedOpenGLPath(void) {
     static BOOL excluded;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        NSString *executable = NSProcessInfo.processInfo.processName.lowercaseString;
-        // Sublime Text and Sublime Merge use a custom OpenGL compositor whose
-        // partial redraw path is corrupted by GLDRendererMetal over Ventura
-        // PVG. Keep the global environment injection, but leave these two
-        // processes on macOS's stock software OpenGL renderer.
-        excluded = [executable isEqualToString:@"sublime_text"] ||
-            [executable isEqualToString:@"sublime_merge"];
+        // Resolve the executable names from the corresponding app bundles,
+        // rather than relying on where users install the apps. Firefox does
+        // its relevant compositing in its GPU helper and plugin-container,
+        // not the main executable. Keep global environment injection, but
+        // leave only these exact helper/Sublime executables on macOS's stock
+        // renderer.
+        NSString *executable = NSProcessInfo.processInfo.processName;
+        excluded = [executable isEqualToString:@"firefox"] ||
+            [executable isEqualToString:@"Firefox GPU Helper"] ||
+            [executable isEqualToString:
+                @"Firefox Developer Edition GPU Helper"] ||
+            [executable isEqualToString:@"plugin-container"] ||
+            [executable isEqualToString:@"sublime_merge"] ||
+            [executable isEqualToString:@"sublime_text"];
     });
     return excluded;
 }

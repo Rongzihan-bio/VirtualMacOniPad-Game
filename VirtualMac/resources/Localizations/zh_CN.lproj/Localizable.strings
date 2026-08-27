@@ -232,6 +232,7 @@
 "Starting installation…" = "正在开始安装…";
 "Starting Virtual Mac…" = "正在启动虚拟Mac…";
 "Storage" = "存储";
+"Storage size can’t be changed later. If you need additional storage in the future, set a larger size now." = "存储空间大小以后无法更改。如果将来需要更多存储空间，请现在设置更大的容量。";
 "Support" = "支持";
 "Support for %@ is experimental" = "%@支持尚处于实验阶段";
 "Suppress Home Indicator" = "隐藏主屏幕指示条";
@@ -310,8 +311,9 @@
 "Width" = "宽度";
 "Window Size" = "窗口大小";
 "You can also copy an existing Virtual Mac bundle to /var/mobile/Media/VirtualMac using an app such as iMazing or Filza." = "你也可以使用iMazing或Filza等app，将现有虚拟Mac包复制到/var/mobile/Media/VirtualMac。";
-"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing.\n\nAssigning more memory than the recommendation does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "你可以为此虚拟Mac分配%llu至%llu GB内存，建议分配%llu GB。其余内存将用于图形处理。\n\n分配超出建议值的内存并不一定能提升虚拟Mac的性能，还可能降低图形性能和系统稳定性。";
-"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks." = "你可以为此虚拟Mac分配%llu至%llu个处理器核心，建议分配%lu个。\n\n分配超出建议值的处理器核心并不一定能提升虚拟Mac的性能，因为iOS也需要处理器性能来协调底层任务。";
-"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks." = "你可以为此虚拟Mac分配%llu至%llu个处理器核心，建议分配%lu个。\n\n分配超出建议值的处理器核心并不一定能提升虚拟Mac的性能，因为iPadOS也需要处理器性能来协调底层任务。";
+"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "你可以为此虚拟Mac分配%llu至%lluGB内存，建议分配%lluGB。剩余内存将用于图形处理和iOS。\n\n将内存分配至上限并不一定能提升虚拟Mac的性能，反而可能降低图形性能和系统稳定性。";
+"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iPadOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "你可以为此虚拟Mac分配%llu至%lluGB内存，建议分配%lluGB。剩余内存将用于图形处理和iPadOS。\n\n将内存分配至上限并不一定能提升虚拟Mac的性能，反而可能降低图形性能和系统稳定性。";
+"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks." = "你可以为此虚拟Mac分配%llu至%llu个处理器核心，建议分配%lu个。\n\n将处理器核心数设为上限并不一定能提升虚拟Mac的性能，因为iOS也需要处理器资源来处理系统任务。";
+"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks." = "你可以为此虚拟Mac分配%llu至%llu个处理器核心，建议分配%lu个。\n\n将处理器核心数设为上限并不一定能提升虚拟Mac的性能，因为iPadOS也需要处理器资源来处理系统任务。";
 "Your changes to this Virtual Mac will not be saved." = "你对此虚拟Mac所做的更改不会被保存。";
 "“%@” and all files stored in it will be permanently deleted." = "“%@”及其中存储的所有文件将被永久删除。";

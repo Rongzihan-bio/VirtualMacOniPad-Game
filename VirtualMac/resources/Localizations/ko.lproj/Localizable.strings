@@ -232,6 +232,7 @@
 "Starting installation…" = "설치 시작 중…";
 "Starting Virtual Mac…" = "가상 Mac 시작 중…";
 "Storage" = "저장 공간";
+"Storage size can’t be changed later. If you need additional storage in the future, set a larger size now." = "저장 공간 크기는 나중에 변경할 수 없습니다. 향후 저장 공간이 더 필요하다면 지금 더 큰 크기로 설정하십시오.";
 "Support" = "지원";
 "Support for %@ is experimental" = "%@ 지원은 실험적입니다";
 "Suppress Home Indicator" = "홈 표시기 가리기";
@@ -310,8 +311,9 @@
 "Width" = "너비";
 "Window Size" = "윈도우 크기";
 "You can also copy an existing Virtual Mac bundle to /var/mobile/Media/VirtualMac using an app such as iMazing or Filza." = "iMazing 또는 Filza와 같은 앱을 사용하여 기존 가상 Mac 번들을 /var/mobile/Media/VirtualMac에 복사할 수도 있습니다.";
-"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing.\n\nAssigning more memory than the recommendation does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "이 가상 Mac에는 %llu~%lluGB의 메모리를 할당할 수 있으며, 권장 메모리는 %lluGB입니다. 나머지 메모리는 그래픽 처리에 사용됩니다.\n\n권장량보다 많은 메모리를 할당해도 Virtual Mac의 성능 향상이 보장되지 않으며 그래픽 성능과 시스템 안정성이 저하될 수 있습니다.";
-"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks." = "이 가상 Mac에는 %llu~%llu개의 프로세서 코어를 할당할 수 있으며, 권장 코어 수는 %lu개입니다.\n\n권장량보다 많은 프로세서 코어를 할당해도 Virtual Mac의 성능 향상이 보장되지 않습니다. iOS에도 기반 작업을 조정하기 위한 처리 성능이 필요합니다.";
-"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks." = "이 가상 Mac에는 %llu~%llu개의 프로세서 코어를 할당할 수 있으며, 권장 코어 수는 %lu개입니다.\n\n권장량보다 많은 프로세서 코어를 할당해도 Virtual Mac의 성능 향상이 보장되지 않습니다. iPadOS에도 기반 작업을 조정하기 위한 처리 성능이 필요합니다.";
+"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "이 가상Mac에는 %llu~%lluGB의 메모리를 할당할 수 있으며, 권장 메모리는 %lluGB입니다. 나머지 메모리는 그래픽 처리 및 iOS용으로 사용됩니다.\n\n메모리를 최대로 할당해도 가상Mac의 성능 향상이 보장되지 않으며, 그래픽 성능과 시스템 안정성이 저하될 수 있습니다.";
+"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iPadOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability." = "이 가상Mac에는 %llu~%lluGB의 메모리를 할당할 수 있으며, 권장 메모리는 %lluGB입니다. 나머지 메모리는 그래픽 처리 및 iPadOS용으로 사용됩니다.\n\n메모리를 최대로 할당해도 가상Mac의 성능 향상이 보장되지 않으며, 그래픽 성능과 시스템 안정성이 저하될 수 있습니다.";
+"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks." = "이 가상Mac에는 %llu~%llu개의 프로세서 코어를 할당할 수 있으며, 권장 코어 수는 %lu개입니다.\n\n프로세서 코어를 최대로 할당해도 가상Mac의 성능 향상이 보장되지 않습니다. iOS에도 시스템 작업을 처리할 프로세서 성능이 필요합니다.";
+"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks." = "이 가상Mac에는 %llu~%llu개의 프로세서 코어를 할당할 수 있으며, 권장 코어 수는 %lu개입니다.\n\n프로세서 코어를 최대로 할당해도 가상Mac의 성능 향상이 보장되지 않습니다. iPadOS에도 시스템 작업을 처리할 프로세서 성능이 필요합니다.";
 "Your changes to this Virtual Mac will not be saved." = "이 가상 Mac의 변경사항이 저장되지 않습니다.";
 "“%@” and all files stored in it will be permanently deleted." = "“%@” 및 그 안에 저장된 모든 파일이 영구적으로 삭제됩니다.";

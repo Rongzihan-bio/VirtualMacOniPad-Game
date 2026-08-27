@@ -48,6 +48,60 @@ static void testSurfaceMouseFlickStartsMomentum(void)
     NSCAssert(sawMomentum, @"Magic Mouse flick did not start momentum");
 }
 
+static void testSurfaceMouseContactStopsMomentum(void)
+{
+    testSurfaceMouseFlickStartsMomentum();
+    NSCAssert(VZSurfaceMouseScrollBridgeHasMomentum(),
+              @"Magic Mouse momentum was not active before contact");
+    VZSurfaceMouseScrollBridgeInterruptMomentum();
+    NSUInteger afterContact = eventCount;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.05];
+    while ([deadline timeIntervalSinceNow] > 0)
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                               beforeDate:deadline];
+    NSCAssert(eventCount == afterContact,
+              @"Magic Mouse momentum continued after surface contact");
+    NSCAssert(afterContact > 0 &&
+              events[afterContact - 1].momentumPhase == 8,
+              @"Magic Mouse contact omitted momentum end");
+}
+
+static void testTouchContactStopsMomentum(void)
+{
+    resetCapture();
+    double t = CACurrentMediaTime();
+    VZTouchScrollBridgeHandle(CGVectorMake(20, 0), 1, t, 0.25);
+    VZTouchScrollBridgeHandle(CGVectorMake(60, 0), 4, t + 0.008, 0.25);
+    VZTouchScrollBridgeHandle(CGVectorMake(80, 0), 4, t + 0.016, 0.25);
+    VZTouchScrollBridgeHandle(CGVectorMake(0, 0), 8, t + 0.024, 0.25);
+    NSDate *started = [NSDate dateWithTimeIntervalSinceNow:0.1];
+    BOOL sawMomentum = NO;
+    while ([started timeIntervalSinceNow] > 0 && !sawMomentum) {
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                               beforeDate:started];
+        for (NSUInteger index = 0; index < eventCount; index++)
+            sawMomentum |= events[index].momentumPhase != 0;
+    }
+    NSCAssert(sawMomentum, @"touch flick did not emit momentum");
+    NSCAssert(VZTouchScrollBridgeHasMomentum(),
+              @"touch momentum was not active before contact");
+    VZTouchScrollBridgeInterruptMomentum();
+    NSUInteger afterContact = eventCount;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.05];
+    while ([deadline timeIntervalSinceNow] > 0)
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                               beforeDate:deadline];
+    NSCAssert(eventCount == afterContact,
+              @"touch momentum continued after direct contact");
+    NSCAssert(afterContact > 0 &&
+              events[afterContact - 1].phase == 32 &&
+              events[afterContact - 1].momentumPhase == 0,
+              @"direct touch omitted guest-visible MayBegin interruption");
+    NSCAssert(afterContact > 1 &&
+              events[afterContact - 2].momentumPhase == 8,
+              @"direct touch omitted momentum end before interruption");
+}
+
 static void testFractionalPauseAndReverse(void)
 {
     resetCapture();
@@ -105,6 +159,22 @@ static void testContactStopsMomentum(void)
               @"momentum continued after two-finger contact");
 }
 
+static void testLightContactStopsMomentum(void)
+{
+    testFlickStartsMomentum();
+    VZTrackpadScrollBridgeInterruptMomentum();
+    NSUInteger afterContact = eventCount;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.05];
+    while ([deadline timeIntervalSinceNow] > 0)
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                               beforeDate:deadline];
+    NSCAssert(eventCount == afterContact,
+              @"momentum continued after light trackpad contact");
+    NSCAssert(afterContact > 0 &&
+              events[afterContact - 1].momentumPhase == 8,
+              @"light trackpad contact omitted momentum end");
+}
+
 static void testDuplicateContactIsSuppressed(void)
 {
     resetCapture();
@@ -150,13 +220,17 @@ int main(void)
     @autoreleasepool {
         VZTrackpadScrollBridgeConfigure(capture, NULL);
         VZSurfaceMouseScrollBridgeConfigure(capture, NULL);
+        VZTouchScrollBridgeConfigure(capture, NULL);
         testPauseAndReverse();
         testFractionalPauseAndReverse();
         testSlowReleaseHasNoMomentum();
         testFlickStartsMomentum();
         testContactStopsMomentum();
+        testLightContactStopsMomentum();
         testDuplicateContactIsSuppressed();
         testSurfaceMouseFlickStartsMomentum();
+        testSurfaceMouseContactStopsMomentum();
+        testTouchContactStopsMomentum();
         VZTrackpadScrollBridgeReset();
         puts("scroll bridge tests passed");
     }

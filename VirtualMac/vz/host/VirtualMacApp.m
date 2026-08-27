@@ -171,6 +171,13 @@ static CGFloat gLastRotation;
 // their union so either source releasing first cannot break a drag.
 static NSUInteger gHardwareMouseButtons;
 static NSUInteger gTouchButtons;
+// A light trackpad or Magic Mouse surface tap stops synthesized momentum in
+// VirtualMacApplication before UIKit dispatches the event. With iPadOS Tap to
+// Click enabled, the same contact can subsequently arrive as both an indirect
+// UITouch button and a GameController button. Suppress only that contact's
+// synthetic click; a later deliberate click must continue to reach the guest.
+static CFTimeInterval gSuppressSurfaceClickUntil;
+static NSUInteger gSuppressedHardwareMouseButtons;
 static CGPoint gLastPointerLocation = {NAN, NAN};
 static NSUInteger gLastPointerButtons = NSUIntegerMax;
 static CGSize gDisplayPixelSize = {1920, 1440};
@@ -475,6 +482,8 @@ static BOOL shouldShowStatusLabel(void) {
 static void resetPointerSession(BOOL releaseButtons) {
     gHostPointerLocationValid = NO;
     gUIKitHoverActive = NO;
+    gSuppressSurfaceClickUntil = 0;
+    gSuppressedHardwareMouseButtons = 0;
     resetScrollCoalescing();
     VZTrackpadScrollBridgeReset();
     notePointerInputSource(NO);
@@ -537,7 +546,7 @@ static void startHealthMonitor(void) {
             gHealthScrollChangedEvents = 0;
             gHealthScrollEndedEvents = 0;
         }
-        if (gDebugLogging) {
+        if (gDebugLogging && state >= 0) {
             printf("[VirtualMac] health state=%ld frames=%llu cursors=%llu "
                    "pointer=%llu scroll=%llu keys=%llu\n",
                    (long)state,
@@ -728,6 +737,20 @@ static void sendMouseDelta(float deltaX, float deltaY) {
 static void sendMouseButton(NSUInteger mask, BOOL pressed) {
     dispatch_async(dispatch_get_main_queue(), ^{
         notePointerInputSource(NO);
+        if (pressed && CACurrentMediaTime() <= gSuppressSurfaceClickUntil) {
+            gSuppressedHardwareMouseButtons |= mask;
+            gHardwareMouseButtons &= ~mask;
+            if (gDebugLogging)
+                printf("[VirtualMac] suppressed momentum-interrupt "
+                       "hardware click button=0x%lx\n",
+                       (unsigned long)mask);
+            return;
+        }
+        if (!pressed && (gSuppressedHardwareMouseButtons & mask)) {
+            gSuppressedHardwareMouseButtons &= ~mask;
+            gHardwareMouseButtons &= ~mask;
+            return;
+        }
         if (pressed)
             gHardwareMouseButtons |= mask;
         else
@@ -1618,6 +1641,88 @@ static void VZDescribeRawScrollHIDEvent(id event)
 - (void)_scrollingChangedWithEvent:(id)event;
 @end
 
+@interface NSObject (VZHoverEventSPI)
+- (NSInteger)_trackpadFingerDownCount;
+@end
+
+// UIScrollView uses _UIInterruptScrollDecelerationGestureRecognizer to watch
+// UIHoverEvent's trackpad finger count at the event-environment boundary. A
+// normal UIHoverGestureRecognizer receives cursor movement, but not every
+// stationary light contact. Observe the same UIEvent before UIKit dispatches
+// it instead: this adds no recognizer, recognition delay, or touch handling.
+@interface VirtualMacApplication : UIApplication {
+    BOOL _vzTrackpadInterruptionArmed;
+    BOOL _vzSurfaceMouseInterruptionArmed;
+}
+@end
+
+@implementation VirtualMacApplication
+
+- (void)sendEvent:(UIEvent *)event
+{
+    // Do no private event inspection in the ordinary UIKit input path. While
+    // one of our two synthesized momentum pipelines is active, however, a
+    // light contact on either a trackpad or Magic Mouse must stop it just as
+    // it stops UIScrollView deceleration. At this dispatch boundary the
+    // scroll-ended event is observed before it starts momentum, so a nonzero
+    // count here is a subsequent physical contact rather than the old lift.
+    BOOL trackpadMomentum = VZTrackpadScrollBridgeHasMomentum();
+    BOOL surfaceMouseMomentum = VZSurfaceMouseScrollBridgeHasMomentum();
+    BOOL touchMomentum = VZTouchScrollBridgeHasMomentum();
+    if (!trackpadMomentum)
+        _vzTrackpadInterruptionArmed = NO;
+    if (!surfaceMouseMomentum)
+        _vzSurfaceMouseInterruptionArmed = NO;
+    if ((trackpadMomentum || surfaceMouseMomentum) &&
+        [event respondsToSelector:@selector(_trackpadFingerDownCount)]) {
+        NSInteger contactCount = [event _trackpadFingerDownCount];
+        // UIKit may deliver one final nonzero hover packet after the scroll-
+        // ended packet has started our timer. Do not mistake those same
+        // fingers for a new touch. A zero-contact packet arms interruption;
+        // only a later physical contact can stop the active momentum.
+        if (contactCount == 0) {
+            _vzTrackpadInterruptionArmed |= trackpadMomentum;
+            _vzSurfaceMouseInterruptionArmed |= surfaceMouseMomentum;
+        } else {
+            BOOL stopTrackpad = trackpadMomentum &&
+                _vzTrackpadInterruptionArmed;
+            BOOL stopSurfaceMouse = surfaceMouseMomentum &&
+                _vzSurfaceMouseInterruptionArmed;
+            if ((stopTrackpad || stopSurfaceMouse) && gDebugLogging)
+                printf("[VirtualMac] new surface contact interrupted %s "
+                       "momentum\n",
+                       stopTrackpad && stopSurfaceMouse ? "input" :
+                       stopTrackpad ? "trackpad" : "Magic Mouse");
+            if (stopTrackpad)
+                VZTrackpadScrollBridgeInterruptMomentum();
+            if (stopSurfaceMouse)
+                VZSurfaceMouseScrollBridgeInterruptMomentum();
+            if (stopTrackpad || stopSurfaceMouse) {
+                // Tap-to-click is synthesized at contact release and may be
+                // delivered through UIKit, GameController, or both. Keep the
+                // interruption contact click-free without poisoning the next
+                // independently initiated click.
+                gSuppressSurfaceClickUntil = CACurrentMediaTime() + 0.40;
+            }
+        }
+    }
+    if (touchMomentum && event.type == UIEventTypeTouches) {
+        for (UITouch *touch in event.allTouches) {
+            if (touch.type == UITouchTypeDirect &&
+                touch.phase == UITouchPhaseBegan) {
+                if (gDebugLogging)
+                    printf("[VirtualMac] new direct touch interrupted touch "
+                           "momentum\n");
+                VZTouchScrollBridgeInterruptMomentum();
+                break;
+            }
+        }
+    }
+    [super sendEvent:event];
+}
+
+@end
+
 // Pencil relay declarations are needed by VZInputView's hover handler. Keep
 // the wire values in one enum so the handler cannot accidentally depend on a
 // later file-scope definition. These values match pencil-probe's
@@ -1700,16 +1805,24 @@ static bool pencilVsockSend(uint8_t type, float pressure,
         (hidTimestamp == 0 || hidTimestamp != _vzLastHIDTimestamp)) {
         _vzLastHIDTimestamp = hidTimestamp;
         NSUInteger category = _vzUIKitDeviceCategory;
-        if (category == 2) {
+        if (category == 1 || category == 2) {
+            // Ghidra analysis of iPadOS 16.3.1 UIKitCore
+            // -[UIScrollEvent _scrollDeviceCategory] shows that source 0x0c
+            // digitizers are split into categories 1 and 2 by surface height.
+            // The official iPad Magic Keyboard is category 1; other tested
+            // trackpads are category 2. Both carry the same HID contact
+            // lifecycle and belong on the Mac trackpad path. Source 0x0b
+            // wheel/surface mice remain UIKit categories 3-5 below.
             // The HID root contains physical trackpad mickeys and reliable
             // contact phases. Its accelerated child is tuned for iPadOS, not
             // AppKit/VZ, so run only the root through Ventura's Mac curve.
             // Ignore iPadOS momentum packets: the Mac bridge produces the
             // corresponding 60 Hz stream and a MayBegin packet cancels it.
             gTrackpadDirectionInverted = _vzDirectionInverted;
-            if (_vzMomentumPhase == 0)
+            if (_vzMomentumPhase == 0) {
                 VZTrackpadScrollBridgeHandle(_vzRawDelta, _vzHIDPhase,
                                              _vzEventTimestamp);
+            }
         } else if (category == 3) {
             // Magic Mouse surface reports have contact phases but no native
             // macOS momentum on supported iPadOS. Reconstruct that stage in
@@ -1775,6 +1888,7 @@ static void sendSoftwareKey(UIKeyboardHIDUsage usage, BOOL shifted);
     BOOL _vzPencilRelayStrokeClaimed;
     BOOL _vzPencilRelayStrokeConnected;
     BOOL _vzPencilHoverActive;
+    BOOL _vzSuppressIndirectPointerClick;
 }
 @end
 
@@ -2143,7 +2257,7 @@ static void sendSoftwareChord(UIKeyboardHIDUsage usage, BOOL shifted,
     // trackpad source on iPadOS 14-16; all other indirect sources keep mouse
     // wheel semantics. Direct touch uses the separate category 1 path.
     NSUInteger deviceCategory = recognizer.vzUIKitDeviceCategory;
-    if (deviceCategory == 2) {
+    if (deviceCategory == 1 || deviceCategory == 2) {
         // UIKit exposes the iPad trackpad's nonaccelerated stream but omits
         // the Mac driver's acceleration and momentum stages. The bridge ports
         // Ventura's MultitouchHID/IOHID behavior, normalizes UIKit's fractional
@@ -2737,7 +2851,14 @@ static bool pencilVsockSend(uint8_t type, float pressure,
         // turning every such click into a primary click. A direct finger
         // touch has no button mask and remains a primary click.
         NSUInteger eventButtons = (NSUInteger)event.buttonMask & 0x7U;
-        gTouchButtons = eventButtons ?: 1U;
+        _vzSuppressIndirectPointerClick =
+            touch.type == UITouchTypeIndirectPointer && eventButtons != 0 &&
+            CACurrentMediaTime() <= gSuppressSurfaceClickUntil;
+        gTouchButtons = _vzSuppressIndirectPointerClick
+            ? 0 : (eventButtons ?: 1U);
+        if (_vzSuppressIndirectPointerClick && gDebugLogging)
+            printf("[VirtualMac] suppressed momentum-interrupt UIKit "
+                   "click buttons=0x%lx\n", (unsigned long)eventButtons);
         // UIKit suspends hover updates while a trackpad button is held, but
         // the indirect UITouch continues to report every live drag position.
         // Treat it as authoritative or the guest only sees the final point.
@@ -2808,7 +2929,7 @@ static bool pencilVsockSend(uint8_t type, float pressure,
     }
     if (touch) {
         NSUInteger eventButtons = (NSUInteger)event.buttonMask & 0x7U;
-        if (eventButtons)
+        if (eventButtons && !_vzSuppressIndirectPointerClick)
             gTouchButtons = eventButtons;
         CGPoint point = [touch locationInView:self];
         if (touch.type == UITouchTypeDirect && _vzDirectTouchActive &&
@@ -2872,6 +2993,8 @@ static bool pencilVsockSend(uint8_t type, float pressure,
         }
         sendPointer(point, self.bounds,
                     activePointerButtons());
+        if (touch.type == UITouchTypeIndirectPointer)
+            _vzSuppressIndirectPointerClick = NO;
     }
 }
 
@@ -5836,7 +5959,7 @@ static void disconnectExternalDisplay(void) {
 int main(int argc, char **argv) {
     @autoreleasepool {
         return UIApplicationMain(argc, argv,
-                                 nil,
+                                 NSStringFromClass([VirtualMacApplication class]),
                                  NSStringFromClass([VirtualMacAppDelegate class]));
     }
 }

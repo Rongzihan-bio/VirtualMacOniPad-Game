@@ -161,7 +161,17 @@ static uint64_t VZDefaultStorageSize(void)
     NSDictionary *attributes = [NSFileManager.defaultManager
         attributesOfFileSystemForPath:VZVMLibraryPath() error:nil];
     uint64_t total = [attributes[NSFileSystemSize] unsignedLongLongValue];
-    return total && total <= GiB(64) ? GiB(32) : GiB(64);
+    uint64_t available =
+        [attributes[NSFileSystemFreeSize] unsignedLongLongValue];
+
+    // Disk.img is sparse, so its logical capacity is not allocated up front.
+    // Still require enough real headroom for an IPSW, restore working files,
+    // and meaningful guest growth before offering a larger default.
+    if (total >= GiB(512) && available >= GiB(160))
+        return GiB(256);
+    if (total >= GiB(256) && available >= GiB(96))
+        return GiB(128);
+    return GiB(64);
 }
 
 static uint64_t VZAvailableStorageSize(void)
@@ -852,6 +862,15 @@ void VZRemovePaths(NSArray<NSString *> *paths)
              VZL(@"Audio and Acceleration")][section];
 }
 
+- (NSString *)tableView:(UITableView *)tableView
+ titleForFooterInSection:(NSInteger)section
+{
+    (void)tableView;
+    if (section == 0 && !self.bundlePath)
+        return VZL(@"Storage size can’t be changed later. If you need additional storage in the future, set a larger size now.");
+    return nil;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
@@ -1135,13 +1154,14 @@ void VZRemovePaths(NSArray<NSString *> *paths)
     if ([key isEqualToString:VZCPUCountKey]) {
         NSUInteger recommendation = MIN((uint64_t)4, maximum);
         range = [NSString stringWithFormat:VZDeviceString(
-            VZL(@"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks."),
-            VZL(@"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nAssigning more processor cores does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks.")),
+            VZL(@"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iPadOS also needs processor power to coordinate underlying tasks."),
+            VZL(@"You can assign between %llu and %llu processor cores to this Virtual Mac, with %lu processor cores as the recommendation.\n\nMaxing out processor core assignment does not guarantee improved performance in Virtual Mac, as iOS also needs processor power to coordinate underlying tasks.")),
             minimum, maximum, (unsigned long)recommendation];
     } else if ([key isEqualToString:VZMemorySizeKey]) {
         uint64_t recommendation = MIN(VZDefaultMemorySize(), maximum) >> 30;
-        range = [NSString stringWithFormat:
-            VZL(@"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing.\n\nAssigning more memory than the recommendation does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability."),
+        range = [NSString stringWithFormat:VZDeviceString(
+            VZL(@"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iPadOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability."),
+            VZL(@"You can assign between %llu and %llu GB of memory to this Virtual Mac, with %llu GB as the recommendation. The remaining memory is used for graphics processing and iOS.\n\nMaxing out memory assignment does not guarantee improved performance in Virtual Mac, and may degrade graphics performance and system stability.")),
             minimum >> 30, maximum >> 30, recommendation];
     } else {
         range = maximum
